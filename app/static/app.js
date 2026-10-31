@@ -643,21 +643,27 @@ function inspectAt(latlng) {
 }
 
 let profLine = null, profAt = null;
-async function showProfile(sid, latlng) {
+/** Profil von Station sid zu einem Punkt oder (opts.rxStationId) zu einer anderen Station.
+ *  opts.rx: feste Empfängerwerte {h, g, c, label} (z. B. Repeater aus dem Abgleich). */
+async function showProfile(sid, latlng, opts = {}) {
   const st = byId(sid);
-  profAt = { sid, latlng };
+  const rxSt = opts.rxStationId ? byId(opts.rxStationId) : null;
+  if (rxSt) latlng = L.latLng(rxSt.lat, rxSt.lon);
+  if (opts.rx) { $("profRxH").value = opts.rx.h; $("profRxG").value = opts.rx.g; }
+  profAt = { sid, latlng, opts };
   closeSide(); map.closePopup();
   document.body.classList.add("profile-open");
   if ($("profRxH").value === "") $("profRxH").value = project.settings.rx_height_m;
   if ($("profRxG").value === "") $("profRxG").value = project.settings.rx_gain_dbi;
   $("profile").classList.remove("hidden");
-  $("profTitle").textContent = `Profil ${st.name} → Punkt`;
+  $("profRxBox").classList.toggle("hidden", !!rxSt);
+  $("profTitle").textContent = rxSt ? `Strecke ${st.name} → ${rxSt.name}` : opts.rx?.label ? `Strecke ${st.name} → ${opts.rx.label}` : `Profil ${st.name} → Punkt`;
   $("profMeta").textContent = "rechne …";
   if (profLine) map.removeLayer(profLine);
   profLine = L.polyline([[st.lat, st.lon], [latlng.lat, latlng.lng]], { color: st.color, dashArray: "6 4", weight: 2 }).addTo(map);
   try {
     const p = await api("/api/profile", { method: "POST", body: { ...(isAdmin ? { project } : { project_id: project.id }), station_id: sid, lat: latlng.lat, lon: latlng.lng,
-      rx_height_m: +$("profRxH").value, rx_gain_dbi: +$("profRxG").value } });
+      ...(rxSt ? { rx_station_id: rxSt.id } : { rx_height_m: +$("profRxH").value, rx_gain_dbi: +$("profRxG").value, rx_cable_db: opts.rx?.c }) } });
     $("profMeta").textContent = `${fmt(p.distance_m / 1000, 2)} km · Azimut ${fmt(p.azimuth_deg, 0)}° · Elevation ${fmt(p.elevation_deg, 2)}° · ` +
       ["keine Sichtlinie", "Sichtlinie, Fresnelzone verletzt", "Fresnelzone ≥ 60 % frei"][p.los_class] +
       (p.worst_at_m != null ? ` · engste Stelle bei ${fmt(p.worst_at_m / 1000, 2)} km (Freiraum ${fmt(p.worst_clearance_ratio * 100, 0)} % F1)` : "");
@@ -671,7 +677,7 @@ async function showProfile(sid, latlng) {
       ["Bodenreflexion", `−${fmt(b.reflection_db)} dB`],
       [`Hindernisse durchquert (${fmt(b.obstacle_len_m, 0)} m)`, `−${fmt(b.obstacle_db)} dB`],
       [`Clutter Rx (R ${fmt(b.clutter_height_m, 0)} m)`, `−${fmt(b.clutter_db)} dB`],
-      ["Antenne Rx", `${fmt(b.rx_gain_dbi)} dBi`],
+      [b.rx_station ? `Antenne Rx ${esc(b.rx_station)} (Richtung, ${fmt(b.rx_height_m, 1)} m)` : "Antenne Rx", `${fmt(b.rx_gain_dbi)} dBi`],
       ["Kabel + Zusatz Rx", `−${fmt(b.rx_cable_db + b.rx_extra_db)} dB`],
     ].map(([a, v]) => `<tr><td>${a}</td><td>${v}</td></tr>`).join("") +
       `<tr class="sum"><td>Gesamtdämpfung Pfad</td><td>${fmt(b.total_loss_db)} dB</td></tr>
@@ -1018,29 +1024,41 @@ function csNearby(st, maxKm = 3, max = 15) {
 
 async function csCalibrate(st) {
   activateTab("net");
-  $("calOut").innerHTML = `<div class="note">rechne Strecken für „${esc(st.name)}“ …</div>`;
-  if (st.corescope_pk !== csSelPk) csSelect(st.corescope_pk, { fromStation: true });
+  $("calOut").innerHTML = `<div class="note cs-wait">rechne Strecken für „${esc(st.name)}“ …</div>`;
+  if (csSelPk !== st.corescope_pk || !csLinks) await csSelect(st.corescope_pk, { fromStation: true });
+  if (!csLinks) { $("calOut").innerHTML = `<div class="warn">Nachbarn konnten nicht geladen werden.</div>`; return; }
+  const partners = csVisibleLinks().filter((l) => l.snr != null).map((l) => l.pk);
+  status(`Abgleich: rechne ${partners.length} Strecken …`, "busy");
   try {
     const r = await api("/api/corescope/calibrate", { method: "POST", body: {
-      ...(isAdmin ? { project } : { project_id: project.id }), station_id: st.id,
+      ...(isAdmin ? { project } : { project_id: project.id }), station_id: st.id, partners,
       rx_height_m: +$("calH").value, rx_gain_dbi: +$("calG").value, rx_cable_db: +$("calC").value } });
     const s = r.stats;
     let hint = "";
     if (s) {
       const m = s.mean_db;
       hint = Math.abs(m) < 2 ? "Modell und Messung passen im Mittel gut zusammen."
-        : m < 0 ? `Das Modell ist im Mittel um ${fmt(-m)} dB zu optimistisch. Mögliche Ursachen: Antennenhöhe/-gewinn der Station zu hoch angesetzt, mehr Rauschen vor Ort (Einstellung „Rauschanhebung“) oder Hindernisse, die das Oberflächenmodell nicht kennt.`
-        : `Das Modell ist im Mittel um ${fmt(m)} dB zu pessimistisch. Prüfe, ob die Station höher sitzt oder mehr Gewinn hat als eingetragen.`;
+        : m < 0 ? `Das Modell ist im Mittel um ${fmt(-m)} dB zu optimistisch. Mögliche Ursachen: Antennenhöhe/-gewinn zu hoch angesetzt (bei der Station oder den Partnern), mehr Rauschen vor Ort (Einstellung „Rauschanhebung“) oder Hindernisse, die das Oberflächenmodell nicht kennt.`
+        : `Das Modell ist im Mittel um ${fmt(m)} dB zu pessimistisch. Prüfe, ob Station oder Partner höher sitzen oder mehr Gewinn haben als eingetragen.`;
       if (s.n < 5) hint += " Nur wenige Messpunkte – mit Vorsicht deuten.";
     }
-    $("calOut").innerHTML = `<div class="note">Rauschboden ${fmt(r.noise_dbm)} dBm · Partner ${fmt(r.rx_height_m, 0)} m, ${fmt(r.rx_gain_dbi)} dBi · Fenster ${r.window_days ?? "?"} Tage</div>
-      <table class="mini"><tr><th>Partner</th><th>km</th><th title="Sichtlinie">LOS</th><th>gem.</th><th>Modell</th><th>Δ</th></tr>
-      ${r.rows.map((x) => x.error ? `<tr><td>${esc(x.name)}</td><td colspan="5" class="warn">${esc(x.error)}</td></tr>`
-        : `<tr${x.saturated ? ' class="dim" title="SNR ≥ ' + r.sat_db + ' dB: LoRa-Meldungen sind nach oben begrenzt, nicht in der Statistik"' : ""}><td>${esc(x.name || "")}</td><td>${fmt(x.distance_km, 1)}</td><td>${["–", "~", "✓"][x.los_class]}</td>
+    const src = { station: ["📍", "Werte der Station im Projekt"], angabe: ["✎", "eigene Angabe zum Repeater"], standard: ["", "Standardwerte oben"] };
+    $("calOut").innerHTML = `<div class="note">Rauschboden ${fmt(r.noise_dbm)} dBm · ${r.rows.length} gemessene Partner nach Filter · Fenster ${r.window_days ?? "?"} Tage. Zeile anklicken zeigt die Strecke.</div>
+      <table class="mini cs-nb"><tr><th>Partner</th><th title="Antennenhöhe der Gegenstelle">Höhe</th><th>km</th><th title="Sichtlinie">LOS</th><th>gem.</th><th>Modell</th><th>Δ</th></tr>
+      ${r.rows.map((x, i) => x.error ? `<tr><td>${esc(x.name)}</td><td colspan="6" class="warn">${esc(x.error)}</td></tr>`
+        : `<tr data-i="${i}"${x.saturated ? ' class="dim" title="SNR ≥ ' + r.sat_db + ' dB: LoRa-Meldungen sind nach oben begrenzt, nicht in der Statistik"' : ""}>
+          <td>${esc(x.name || "")} <span title="${src[x.rx_src][1]}">${src[x.rx_src][0]}</span></td><td>${fmt(x.rx_height_m, 0)} m</td><td>${fmt(x.distance_km, 1)}</td><td>${["–", "~", "✓"][x.los_class]}</td>
           <td>${fmt(x.measured_snr, 1)}</td><td>${fmt(x.predicted_snr, 1)}</td><td style="color:${Math.abs(x.delta_db) < 3 ? "var(--go)" : Math.abs(x.delta_db) < 8 ? "#b45309" : "var(--bad)"}">${x.delta_db > 0 ? "+" : ""}${fmt(x.delta_db, 1)}</td></tr>`).join("")}</table>
+      <p class="note">📍 Werte der Station im Projekt (Höhe, Antenne in Richtung, Kabel) · ✎ eigene Angabe zum Repeater · sonst die Standardwerte oben.</p>
       ${s ? `<div class="calc">Δ = gemessen − Modell: Mittel <b>${s.mean_db > 0 ? "+" : ""}${fmt(s.mean_db)} dB</b> · Median ${fmt(s.median_db)} · Streuung ${fmt(s.std_db)} dB · n = ${s.n}</div><p class="note">${hint}</p>
         <p class="note">Gemessene Mittelwerte enthalten nur Pakete, die angekommen sind. An der Reichweitengrenze liegen sie deshalb eher zu hoch.</p>` : `<p class="note">Keine auswertbaren Messpunkte.</p>`}`;
-  } catch (e) { $("calOut").innerHTML = `<div class="warn">Fehler: ${esc(e.message)}</div>`; }
+    $("calOut").querySelectorAll("tr[data-i]").forEach((tr) => tr.onclick = () => {
+      const x = r.rows[+tr.dataset.i];
+      if (x.rx_station_id) showProfile(st.id, null, { rxStationId: x.rx_station_id });
+      else showProfile(st.id, L.latLng(x.lat, x.lon), { rx: { h: x.rx_height_m, g: x.rx_gain_dbi, c: x.rx_cable_db, label: x.name } });
+    });
+    status(`Abgleich fertig: ${r.rows.length} Strecken.`);
+  } catch (e) { $("calOut").innerHTML = `<div class="warn">Fehler: ${esc(e.message)}</div>`; status("Abgleich: " + e.message, "err"); }
 }
 
 async function csInit() {
@@ -1106,7 +1124,7 @@ function wire() {
     document.body.classList.remove("profile-open"); lastProfile = null;
     $("profRxH").value = ""; $("profRxG").value = ""; profAt = null;  // nächstes Profil startet mit den Projektwerten
   };
-  const reProfile = () => { if (profAt && byId(profAt.sid)) showProfile(profAt.sid, profAt.latlng); };
+  const reProfile = () => { if (profAt && byId(profAt.sid)) showProfile(profAt.sid, profAt.latlng, { ...profAt.opts, rx: profAt.opts?.rx ? { ...profAt.opts.rx, h: +$("profRxH").value, g: +$("profRxG").value } : undefined }); };
   $("profRxH").onchange = reProfile; $("profRxG").onchange = reProfile;
   $("profReset").onclick = () => { $("profRxH").value = project.settings.rx_height_m; $("profRxG").value = project.settings.rx_gain_dbi; reProfile(); };
   $("projName").onchange = () => { project.name = $("projName").value; setDirty(); };

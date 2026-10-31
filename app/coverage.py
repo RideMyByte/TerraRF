@@ -397,13 +397,28 @@ def load_station(key):
     return res
 
 
-def profile(project, station_id, lat, lon, rx_height=None, rx_gain=None):
+def profile(project, station_id, lat, lon, rx_height=None, rx_gain=None, rx_station_id=None, rx_cable=None):
+    """Geländeprofil und Linkbudget Station -> Punkt.
+    rx_station_id: Gegenstelle ist eine Station des Projekts -> deren Höhe, Antenne (Richtdiagramm zur
+    Sendestation) und Kabelverlust statt der Client-Werte (Richtfunk/Repeater-Strecken)."""
     s = merged_settings(project)
     if rx_gain not in (None, ""):
         s = {**s, "rx_gain_dbi": float(rx_gain)}
+    if rx_cable not in (None, ""):
+        s = {**s, "rx_cable_db": float(rx_cable)}
     st = next((x for x in project.get("stations") or [] if x["id"] == station_id), None)
     if st is None:
         raise KeyError("Station nicht gefunden")
+    rx_st = None
+    if rx_station_id:
+        rx_st = next((x for x in project.get("stations") or [] if x["id"] == rx_station_id), None)
+        if rx_st is None:
+            raise KeyError("Gegenstation nicht gefunden")
+        if rx_st["id"] == st["id"]:
+            raise ValueError("Gegenstelle ist dieselbe Station")
+        lat, lon = float(rx_st["lat"]), float(rx_st["lon"])
+        rx_height = float(rx_st.get("height_m", 10))
+        s = {**s, "rx_cable_db": float(rx_st.get("cable_loss_db", 0) or 0), "rx_extra_loss_db": 0.0}
     cs = project_cs(project, s)
     lat0, lon0 = float(st["lat"]), float(st["lon"])
     x0, y0 = lonlat_to_merc(lon0, lat0)
@@ -433,6 +448,8 @@ def profile(project, station_id, lat, lon, rx_height=None, rx_gain=None):
     base = surf[0] if st.get("height_ref") == "surface" else ground[0]
     ztx = base + float(st.get("height_m", 10))
     rxh = float(s["rx_height_m"] if rx_height is None else rx_height)
+    if rx_st is not None and rx_st.get("height_ref") == "surface":
+        rxh += float(surf[-1] - ground[-1])  # Höhe über Dach -> über Grund umrechnen
     zrx = ground[-1] + rxh
     # for the loss computation: earth curvature relative to the tx tangent
     curv = d * d / (2 * re)
@@ -454,6 +471,9 @@ def profile(project, station_id, lat, lon, rx_height=None, rx_gain=None):
     elev = math.degrees(math.atan2(dz, D))
     az = (math.degrees(math.atan2(x1 - x0, y1 - y0)) + 360) % 360
     gtx = float(prop.antenna_gain(np.array([az]), np.array([elev]), st.get("antenna") or {})[0])
+    if rx_st is not None:  # Gewinn der Gegenstelle in Richtung Sendestation (Rückrichtung, Elevation umgekehrt)
+        grx = float(prop.antenna_gain(np.array([(az + 180.0) % 360.0]), np.array([-elev]), rx_st.get("antenna") or {})[0])
+        s = {**s, "rx_gain_dbi": grx}
     fspl = float(prop.fspl_db(np.array([d3]), f_mhz)[0])
     extra = float(s.get("rx_extra_loss_db", 0.0))
     total_loss = fspl + loss_diff + lclut + lpe + lveg
@@ -490,7 +510,8 @@ def profile(project, station_id, lat, lon, rx_height=None, rx_gain=None):
             "reflection_db": round(float(lpe), 1), "clutter_db": round(float(lclut), 1),
             "obstacle_db": round(float(lveg), 1), "obstacle_len_m": round(float(dveg), 0),
             "clutter_height_m": round(float(R_cl), 1),
-            "rx_gain_dbi": float(s["rx_gain_dbi"]), "rx_cable_db": float(s["rx_cable_db"]), "rx_extra_db": extra,
+            "rx_gain_dbi": round(float(s["rx_gain_dbi"]), 2), "rx_cable_db": float(s["rx_cable_db"]), "rx_extra_db": extra,
+            "rx_station": rx_st.get("name") if rx_st is not None else None, "rx_height_m": round(rxh, 1),
             "total_loss_db": round(total_loss, 1),
             "prx_dbm": round(prx, 1), "sensitivity_dbm": round(sens, 1), "margin_db": round(prx - sens, 1),
             "required_margin_db": float(s["min_margin_db"]),
@@ -518,29 +539,41 @@ __all__ = ["run_coverage", "station_png", "profile", "point_elevation", "DEFAULT
 SNR_SAT_DB = 10.0  # LoRa-SNR-Meldungen sind nach oben begrenzt; darüber nicht für die Statistik nutzen
 
 
-def calibrate(project, station_id, points, rx_height=10.0, rx_gain=3.0, rx_cable=1.0):
-    """Gemessenes SNR (Station -> Partner) gegen das Modell. points: [{pk,name,lat,lon,snr,snr_n}]."""
+def calibrate(project, station_id, points, rx_height=10.0, rx_gain=3.0, rx_cable=1.0, overrides=None):
+    """Gemessenes SNR (Station -> Partner) gegen das Modell. points: [{pk,name,lat,lon,snr,snr_n}].
+    Werte der Gegenstelle, in dieser Reihenfolge: als Station im Projekt eingetragen (Höhe, Antenne mit
+    Richtdiagramm, Kabel) -> eigene Angaben je Repeater -> die allgemeinen Standardwerte."""
+    overrides = overrides or {}
     s = dict(merged_settings(project))
-    s.update(rx_gain_dbi=float(rx_gain), rx_cable_db=float(rx_cable), rx_extra_loss_db=0.0)
-    proj = {**project, "settings": s}
     st = next((x for x in project.get("stations") or [] if x["id"] == station_id), None)
     if st is None:
         raise KeyError("Station nicht gefunden")
+    by_pk = {x.get("corescope_pk"): x for x in project.get("stations") or [] if x.get("corescope_pk")}
     noise = -174.0 + 10.0 * math.log10(float(st.get("bw_khz", 125.0)) * 1000.0) + float(st.get("nf_db", 6.0)) \
         + float(s.get("noise_rise_db", 0.0))
+    proj = {**project, "settings": {**s, "rx_extra_loss_db": 0.0}}
     rows = []
     for p in points:
         r = {"pk": p.get("pk"), "name": p.get("name"), "lat": p["lat"], "lon": p["lon"],
              "measured_snr": float(p["snr"]), "n": int(p.get("snr_n") or 0)}
+        ps, ov = by_pk.get(p.get("pk")), overrides.get(p.get("pk")) or {}
         try:
-            pr = profile(proj, station_id, float(p["lat"]), float(p["lon"]), rx_height=float(rx_height))
-        except (ValueError, terrain.SourceError) as e:
+            if ps is not None and ps["id"] != station_id:
+                r.update(rx_src="station", rx_station_id=ps["id"])
+                pr = profile(proj, station_id, 0, 0, rx_station_id=ps["id"])
+            else:
+                h, g, c = ov.get("height_m", rx_height), ov.get("gain_dbi", rx_gain), ov.get("cable_db", rx_cable)
+                r.update(rx_src="angabe" if ov else "standard")
+                pr = profile(proj, station_id, float(p["lat"]), float(p["lon"]), rx_height=float(h), rx_gain=float(g),
+                             rx_cable=float(c))
+        except (ValueError, KeyError, terrain.SourceError) as e:
             r["error"] = str(e)
             rows.append(r)
             continue
         b = pr["budget"]
         pred = b["prx_dbm"] - noise
         r.update(distance_km=round(pr["distance_m"] / 1000, 2), los_class=pr["los_class"], prx_dbm=b["prx_dbm"],
+                 rx_height_m=b["rx_height_m"], rx_gain_dbi=b["rx_gain_dbi"], rx_cable_db=b["rx_cable_db"],
                  predicted_snr=round(pred, 1), delta_db=round(r["measured_snr"] - pred, 1),
                  saturated=r["measured_snr"] >= SNR_SAT_DB)
         rows.append(r)

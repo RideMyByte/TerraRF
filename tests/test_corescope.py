@@ -102,3 +102,41 @@ def test_links_have_avg_snr_and_overrides(mocked):
         assert c.put(f"/api/corescope/overrides/{PK}", json={"height_m": 9999}).status_code == 400
         assert c.put(f"/api/corescope/overrides/{PK}", json={}).status_code == 200
         assert PK not in c.get("/api/corescope/overrides").json()
+
+
+def test_calibrate_uses_partner_station_and_override_and_filter(mocked, project, station):
+    with TestClient(app) as c:
+        c.post("/api/login", json={"user": "admin", "password": "test-pw"})
+        st = project["stations"][0]
+        st["corescope_pk"] = PK
+        L = corescope.links(PK)
+        meas = [l for l in L["links"] if l["snr"] is not None][:3]
+        for i, l in enumerate(meas):
+            l["lat"], l["lon"] = 51.575 + 0.01 * i, 7.06  # Partner 0 genau östlich der Station
+        json.dump(L, open(corescope._links_path(PK), "w"))
+        # Partner 0 ist als Station eingetragen (Richtantenne zurück), Partner 1 hat eine eigene Höhe
+        project["stations"].append({**station, "id": "p0", "name": "P0", "lat": meas[0]["lat"], "lon": meas[0]["lon"],
+                                    "height_m": 25, "corescope_pk": meas[0]["pk"],
+                                    "antenna": {"type": "directional", "gain_dbi": 14, "hbw_deg": 30, "azimuth_deg": 270}})
+        c.put(f"/api/corescope/overrides/{meas[1]['pk']}", json={"height_m": 40})
+        r = c.post("/api/corescope/calibrate", json={"project": project, "station_id": "a",
+                                                     "partners": [m["pk"] for m in meas[:2]]}).json()
+        rows = {x["pk"]: x for x in r["rows"]}
+        assert set(rows) == {meas[0]["pk"], meas[1]["pk"]}          # Filter greift
+        assert rows[meas[0]["pk"]]["rx_src"] == "station" and rows[meas[0]["pk"]]["rx_gain_dbi"] > 10
+        assert rows[meas[1]["pk"]]["rx_src"] == "angabe" and rows[meas[1]["pk"]]["rx_height_m"] == 40
+        c.put(f"/api/corescope/overrides/{meas[1]['pk']}", json={})
+
+
+def test_profile_to_station_uses_far_end_antenna(project, station):
+    with TestClient(app) as c:
+        c.post("/api/login", json={"user": "admin", "password": "test-pw"})
+        b = {**station, "id": "b", "name": "B", "lat": 51.575, "lon": 7.07, "height_m": 20,
+             "antenna": {"type": "directional", "gain_dbi": 18, "hbw_deg": 20, "azimuth_deg": 270}}
+        project["stations"].append(b)
+        towards = c.post("/api/profile", json={"project": project, "station_id": "a", "rx_station_id": "b"}).json()
+        b["antenna"]["azimuth_deg"] = 90  # Gegenstelle schaut weg
+        away = c.post("/api/profile", json={"project": project, "station_id": "a", "rx_station_id": "b"}).json()
+        assert towards["budget"]["rx_station"] == "B" and towards["budget"]["rx_gain_dbi"] > 17
+        assert away["budget"]["rx_gain_dbi"] < 0
+        assert towards["budget"]["prx_dbm"] - away["budget"]["prx_dbm"] > 15

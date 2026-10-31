@@ -248,8 +248,9 @@ def station_png(key: str, factor: int):
 async def profile(request: Request, body: dict = Body(...)):
     project = _project_for(request, body)
     try:
-        return await run_in_threadpool(cov.profile, project, body["station_id"], float(body["lat"]),
-                                       float(body["lon"]), body.get("rx_height_m"), body.get("rx_gain_dbi"))
+        return await run_in_threadpool(cov.profile, project, body["station_id"], float(body.get("lat") or 0),
+                                       float(body.get("lon") or 0), body.get("rx_height_m"), body.get("rx_gain_dbi"),
+                                       body.get("rx_station_id"), body.get("rx_cable_db"))
     except (ValueError, terrain.SourceError, KeyError) as e:
         _err(e)
 
@@ -311,8 +312,12 @@ async def cs_calibrate(request: Request, body: dict = Body(...)):
     def work():
         L = corescope.links(str(st["corescope_pk"]).lower())
         pts = [x for x in L["links"] if x.get("snr") is not None]
+        want = body.get("partners")  # nur die Partner, die mit den aktuellen Filtern auch auf der Karte stehen
+        if want is not None:
+            want = {str(x).lower() for x in want}
+            pts = [x for x in pts if x["pk"] in want]
         res = cov.calibrate(project, st["id"], pts, float(body.get("rx_height_m", 10)), float(body.get("rx_gain_dbi", 3)),
-                            float(body.get("rx_cable_db", 1)))
+                            float(body.get("rx_cable_db", 1)), corescope.overrides())
         res["window_days"] = L.get("window_days")
         return res
     try:
