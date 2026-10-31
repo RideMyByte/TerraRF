@@ -1,6 +1,6 @@
 name: Docker-Image
 
-# main            -> ghcr.io/<owner>/rfplanner:edge  (+ :sha-…)
+# main            -> ghcr.io/<owner>/terrarf:edge  (+ :sha-…)
 # Release v1.2.3  -> :1.2.3, :1.2, :latest           (über release.yml)
 # Pull Request    -> nur bauen (amd64), nichts veröffentlichen
 on:
@@ -20,7 +20,7 @@ permissions:
   packages: write
 
 env:
-  IMAGE: ghcr.io/${{ github.repository_owner }}/rfplanner
+  IMAGE: ghcr.io/${{ github.repository_owner }}/terrarf
 
 jobs:
   build:

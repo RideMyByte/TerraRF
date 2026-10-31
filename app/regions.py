@@ -21,7 +21,7 @@ from rasterio.warp import transform_bounds
 
 from . import terrain
 
-log = logging.getLogger("rfplanner.regions")
+log = logging.getLogger("terrarf.regions")
 
 NRW_BBOX_25832 = tuple(float(v) for v in os.environ.get(
     "RFP_PRELOAD_BBOX", "278000,5560000,542000,5832000").split(","))

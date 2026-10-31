@@ -20,7 +20,7 @@ from . import regions, terrain
 from .version import VERSION
 
 logging.basicConfig(level=os.environ.get("RFP_LOGLEVEL", "INFO"), format="%(asctime)s %(levelname)s %(name)s: %(message)s")
-log = logging.getLogger("rfplanner")
+log = logging.getLogger("terrarf")
 
 PROJECT_DIR = os.path.join(terrain.DATA_DIR, "projects")
 os.makedirs(PROJECT_DIR, exist_ok=True)
@@ -34,7 +34,7 @@ async def lifespan(_app):
     yield
 
 
-app = FastAPI(title="RF-Planer", version=VERSION, lifespan=lifespan)
+app = FastAPI(title="TerraRF", version=VERSION, lifespan=lifespan)
 
 
 def _err(e: Exception, code=400):

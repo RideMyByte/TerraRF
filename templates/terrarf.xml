@@ -1,19 +1,19 @@
 <?xml version="1.0"?>
 <Container version="2">
-  <Name>rfplanner</Name>
-  <Repository>ghcr.io/OWNER/rfplanner:latest</Repository>
-  <Registry>https://github.com/OWNER/rfplanner/pkgs/container/rfplanner</Registry>
+  <Name>terrarf</Name>
+  <Repository>ghcr.io/OWNER/terrarf:latest</Repository>
+  <Registry>https://github.com/OWNER/terrarf/pkgs/container/terrarf</Registry>
   <Network>bridge</Network>
   <MyIP/>
   <Shell>bash</Shell>
   <Privileged>false</Privileged>
-  <Support>https://github.com/OWNER/rfplanner/issues</Support>
-  <Project>https://github.com/OWNER/rfplanner</Project>
-  <Overview>RF-Planer: Funkabdeckung und Sichtlinien für MeshCore, Meshtastic, LoRa, HAMNET und Amateurfunk planen. Stationen auf der Karte setzen (Sendeleistung, Antenne, Höhe, Frequenz), Abdeckung, Überlappung und Geländeprofile mit Fresnelzone und Linkbudget berechnen. Nutzt die offenen Höhenmodelle von Geobasis NRW (DGM/DOM, lokal gespeichert, beim ersten Start vorgeladen) und weltweit Copernicus GLO-30. Projekte werden in appdata gespeichert.</Overview>
+  <Support>https://github.com/OWNER/terrarf/issues</Support>
+  <Project>https://github.com/OWNER/terrarf</Project>
+  <Overview>TerraRF: Funkabdeckung und Sichtlinien für MeshCore, Meshtastic, LoRa, HAMNET und Amateurfunk planen. Stationen auf der Karte setzen (Sendeleistung, Antenne, Höhe, Frequenz), Abdeckung, Überlappung und Geländeprofile mit Fresnelzone und Linkbudget berechnen. Nutzt die offenen Höhenmodelle von Geobasis NRW (DGM/DOM, lokal gespeichert, beim ersten Start vorgeladen) und weltweit Copernicus GLO-30. Projekte werden in appdata gespeichert.</Overview>
   <Category>Tools:Utilities</Category>
   <WebUI>http://[IP]:[PORT:8080]/</WebUI>
-  <TemplateURL>https://raw.githubusercontent.com/OWNER/rfplanner/main/templates/rfplanner.xml</TemplateURL>
-  <Icon>https://raw.githubusercontent.com/OWNER/rfplanner/main/assets/icon.png</Icon>
+  <TemplateURL>https://raw.githubusercontent.com/OWNER/terrarf/main/templates/terrarf.xml</TemplateURL>
+  <Icon>https://raw.githubusercontent.com/OWNER/terrarf/main/assets/icon.png</Icon>
   <ExtraParams/>
   <PostArgs/>
   <CPUset/>
@@ -22,7 +22,7 @@
   <DonateLink/>
   <Requires>Für ganz NRW werden beim ersten Start mehrere GB Höhendaten in appdata geladen (abschaltbar über RFP_PRELOAD).</Requires>
   <Config Name="WebUI Port" Target="8080" Default="8080" Mode="tcp" Description="Port der Weboberfläche" Type="Port" Display="always" Required="true" Mask="false">8080</Config>
-  <Config Name="Appdata" Target="/data" Default="/mnt/user/appdata/rfplanner" Mode="rw" Description="Projekte, Höhendaten (NRW-Kacheln) und Cache" Type="Path" Display="always" Required="true" Mask="false">/mnt/user/appdata/rfplanner</Config>
+  <Config Name="Appdata" Target="/data" Default="/mnt/user/appdata/terrarf" Mode="rw" Description="Projekte, Höhendaten (NRW-Kacheln) und Cache" Type="Path" Display="always" Required="true" Mask="false">/mnt/user/appdata/terrarf</Config>
   <Config Name="PUID" Target="PUID" Default="99" Mode="" Description="Benutzer-ID für Dateien in appdata (Unraid: 99 = nobody)" Type="Variable" Display="advanced" Required="false" Mask="false">99</Config>
   <Config Name="PGID" Target="PGID" Default="100" Mode="" Description="Gruppen-ID für Dateien in appdata (Unraid: 100 = users)" Type="Variable" Display="advanced" Required="false" Mask="false">100</Config>
   <Config Name="NRW vorladen" Target="RFP_PRELOAD" Default="nrw_dgm,nrw_dom" Mode="" Description="Welche NRW-Modelle beim Start vollständig geladen werden (leer = nur bei Bedarf)" Type="Variable" Display="always" Required="false" Mask="false">nrw_dgm,nrw_dom</Config>

@@ -17,7 +17,7 @@ from PIL import Image
 from . import propagation as prop
 from .terrain import CACHE_DIR, Grid, fill_nans, load_terrain, lonlat_to_merc, merc_to_lonlat
 
-log = logging.getLogger("rfplanner.coverage")
+log = logging.getLogger("terrarf.coverage")
 
 RE_EARTH = 6371000.0
 MAX_COMPOSITE_CELLS = int(os.environ.get("RFP_MAX_COMPOSITE_CELLS", "30000000"))

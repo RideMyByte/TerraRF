@@ -1,8 +1,8 @@
 services:
-  rfplanner:
-    image: ghcr.io/OWNER/rfplanner:latest
+  terrarf:
+    image: ghcr.io/OWNER/terrarf:latest
     # build: .                    # statt image: lokal bauen
-    container_name: rfplanner
+    container_name: terrarf
     ports:
       - "8080:8080"
     volumes:

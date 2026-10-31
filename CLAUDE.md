@@ -1,6 +1,6 @@
 # CLAUDE.md – Arbeitsanleitung für dieses Repository
 
-RF-Planer: selbst gehostete Funkplanung (Abdeckung, Sichtlinie, Linkbudget) mit NRW-Höhendaten.
+TerraRF: selbst gehostete Funkplanung (Abdeckung, Sichtlinie, Linkbudget) mit NRW-Höhendaten.
 Läuft als ein Docker-Container (FastAPI + statisches Leaflet-Frontend), Zielplattform u. a. Unraid.
 
 ## Aufbau
@@ -13,7 +13,7 @@ Läuft als ein Docker-Container (FastAPI + statisches Leaflet-Frontend), Zielpla
   Inspect und Profil. **Bei jeder Modelländerung `MODEL_VERSION` erhöhen**, sonst liefern Caches alte Werte.
 - `app/regions.py` – Download-Jobs und Vorladen von NRW beim Start.
 - `app/main.py` – API. `app/static/` – Frontend (Vanilla JS, keine Build-Tools).
-- `templates/rfplanner.xml`, `ca_profile.xml` – Unraid / Community Applications.
+- `templates/terrarf.xml`, `ca_profile.xml` – Unraid / Community Applications.
 
 ## Regeln
 - Oberfläche und Doku auf Deutsch; Code-Kommentare und Bezeichner englisch.

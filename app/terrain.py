@@ -29,7 +29,7 @@ from rasterio.crs import CRS
 from rasterio.transform import from_origin
 from rasterio.warp import Resampling, reproject, transform_bounds
 
-log = logging.getLogger("rfplanner.terrain")
+log = logging.getLogger("terrarf.terrain")
 
 DATA_DIR = os.environ.get("RFP_DATA", "/data")
 CACHE_DIR = os.path.join(DATA_DIR, "cache")

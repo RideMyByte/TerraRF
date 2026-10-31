@@ -1,4 +1,4 @@
-/* RF-Planer frontend (vanilla JS + Leaflet) */
+/* TerraRF frontend (vanilla JS + Leaflet) */
 (() => {
 "use strict";
 
@@ -685,7 +685,7 @@ function wire() {
 
 async function init() {
   cfg = await api("/api/config");
-  $("ver").textContent = cfg.version ? "v" + cfg.version : "";
+  $("ver").textContent = !cfg.version ? "" : /^\d/.test(cfg.version) ? "v" + cfg.version : cfg.version;
   wire(); bindSettings();
   newProject();
   refreshProjectList().catch(() => {});

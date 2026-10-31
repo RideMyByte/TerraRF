@@ -4,7 +4,10 @@ html, body { margin:0; height:100%; font: 13px/1.35 system-ui, -apple-system, "S
 #app { display:flex; height:100vh; }
 #side { width:380px; min-width:320px; background:var(--bg); border-right:1px solid var(--line); display:flex; flex-direction:column; }
 #side header { padding:10px 12px 6px; border-bottom:1px solid var(--line); position:relative; }
-.brand { font-weight:700; font-size:15px; margin-bottom:6px; }
+.brand { font-weight:800; font-size:17px; margin-bottom:6px; display:flex; align-items:center; gap:6px; letter-spacing:-0.01em; color:#0d2236; }
+.brand .logo { width:26px; height:26px; }
+.brand .rf { color:#1a9641; margin-left:-6px; }
+.brand .note { font-weight:400; letter-spacing:0; }
 .proj { display:flex; align-items:center; gap:6px; margin-bottom:6px; }
 #projName { flex:1; font-weight:600; }
 #dirty { width:9px; height:9px; border-radius:50%; }

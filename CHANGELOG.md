@@ -1,6 +1,7 @@
 # Changelog
 
 ## [Unreleased]
+- Projekt heißt jetzt **TerraRF** (Image `ghcr.io/<owner>/terrarf`, Unraid-Template `terrarf.xml`), neues Logo
 
 ## 0.3.0
 - Lokaler NRW-Kachelspeicher (5 m), Vorladen von ganz NRW beim Start, fortsetzbar

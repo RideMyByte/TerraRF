@@ -1,5 +1,5 @@
 name: Wunsch / neue Funktion
-description: Idee oder Verbesserung für den RF-Planer
+description: Idee oder Verbesserung für den TerraRF
 labels: [wunsch]
 body:
   - type: markdown
@@ -23,4 +23,4 @@ body:
     id: context
     attributes:
       label: Kontext
-      description: Funkstandard (MeshCore, Meshtastic, HAMNET …), Region, Version des RF-Planers.
+      description: Funkstandard (MeshCore, Meshtastic, HAMNET …), Region, Version des TerraRF.

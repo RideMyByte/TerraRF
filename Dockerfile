@@ -1,7 +1,7 @@
 FROM python:3.12-slim
 
 ARG VERSION=dev
-LABEL org.opencontainers.image.title="RF-Planer" \
+LABEL org.opencontainers.image.title="TerraRF" \
       org.opencontainers.image.description="Funk-Abdeckung und Sichtlinien planen (MeshCore, Meshtastic, HAMNET) mit NRW-Höhendaten" \
       org.opencontainers.image.licenses="AGPL-3.0-only" \
       org.opencontainers.image.version="${VERSION}"

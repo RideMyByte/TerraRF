@@ -17,13 +17,13 @@ body:
     id: logs
     attributes:
       label: Logs
-      description: Ausgabe von `docker logs rfplanner` (gekürzt)
+      description: Ausgabe von `docker logs terrarf` (gekürzt)
       render: text
   - type: input
     id: version
     attributes:
       label: Version
-      description: steht oben links neben „RF-Planer“
+      description: steht oben links neben „TerraRF“
   - type: textarea
     id: measured
     attributes:

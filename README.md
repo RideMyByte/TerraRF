@@ -1,6 +1,11 @@
-<p align="center"><img src="assets/icon.svg" width="96" alt="RF-Planer"></p>
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/logo-dark.svg">
+    <img src="assets/logo.svg" alt="TerraRF – Funkplanung über echtem Gelände" width="460">
+  </picture>
+</p>
 
-# RF-Planer
+# TerraRF
 
 Selbst gehostete Funkplanung im Browser: Stationen auf die Karte setzen, Abdeckung,
 Überlappung und Sichtlinien berechnen, Geländeprofile mit Fresnelzone und Linkbudget ansehen.
@@ -8,8 +13,8 @@ Gedacht für **MeshCore, Meshtastic, LoRa, HAMNET und Amateurfunk**, mit besonde
 Höhendaten für **Nordrhein-Westfalen** (Geobasis NRW, 1-m-Laserscan, lokal auf 5 m gespeichert)
 und weltweit Copernicus GLO-30.
 
-[![CI](https://github.com/OWNER/rfplanner/actions/workflows/ci.yml/badge.svg)](https://github.com/OWNER/rfplanner/actions/workflows/ci.yml)
-[![Image](https://github.com/OWNER/rfplanner/actions/workflows/docker.yml/badge.svg)](https://github.com/OWNER/rfplanner/pkgs/container/rfplanner)
+[![CI](https://github.com/OWNER/terrarf/actions/workflows/ci.yml/badge.svg)](https://github.com/OWNER/terrarf/actions/workflows/ci.yml)
+[![Image](https://github.com/OWNER/terrarf/actions/workflows/docker.yml/badge.svg)](https://github.com/OWNER/terrarf/pkgs/container/terrarf)
 [![Lizenz: AGPL-3.0](https://img.shields.io/badge/Lizenz-AGPL--3.0-blue.svg)](LICENSE)
 
 ## Funktionen
@@ -25,21 +30,21 @@ und weltweit Copernicus GLO-30.
 ## Installation
 
 ### Unraid
-**Über Community Applications:** Apps → nach „rfplanner“ suchen → Installieren
+**Über Community Applications:** Apps → nach „terrarf“ suchen → Installieren
 *(sobald die Aufnahme freigeschaltet ist)*.
 
 **Bis dahin manuell:** Docker → *Add Container* → bei *Template* die URL
-`https://raw.githubusercontent.com/OWNER/rfplanner/main/templates/rfplanner.xml` eintragen,
-oder die Datei nach `/boot/config/plugins/dockerMan/templates-user/my-rfplanner.xml` kopieren.
+`https://raw.githubusercontent.com/OWNER/terrarf/main/templates/terrarf.xml` eintragen,
+oder die Datei nach `/boot/config/plugins/dockerMan/templates-user/my-terrarf.xml` kopieren.
 Danach WebUI öffnen (Port 8080).
 
-Beim ersten Start lädt der Container die NRW-Höhendaten in `appdata/rfplanner`
+Beim ersten Start lädt der Container die NRW-Höhendaten in `appdata/terrarf`
 (grob 3–5 GB je Modell bei 5 m, je nach NRW-Server einige Stunden; fortsetzbar).
 Abschalten: Variable `RFP_PRELOAD` leeren, dann wird nur bei Bedarf geladen.
 
 ### Docker / Docker Compose
 ```bash
-docker run -d --name rfplanner -p 8080:8080 -v ./data:/data ghcr.io/OWNER/rfplanner:latest
+docker run -d --name terrarf -p 8080:8080 -v ./data:/data ghcr.io/OWNER/terrarf:latest
 ```
 oder `docker compose up -d` mit der beiliegenden `docker-compose.yml`.
 
