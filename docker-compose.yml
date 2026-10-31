@@ -1,6 +1,6 @@
 services:
   terrarf:
-    image: ghcr.io/OWNER/terrarf:latest
+    image: ghcr.io/ridemybyte/terrarf:latest
     # build: .                    # statt image: lokal bauen
     container_name: terrarf
     ports:

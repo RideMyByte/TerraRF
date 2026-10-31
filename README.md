@@ -13,8 +13,8 @@ Gedacht für **MeshCore, Meshtastic, LoRa, HAMNET und Amateurfunk**, mit besonde
 Höhendaten für **Nordrhein-Westfalen** (Geobasis NRW, 1-m-Laserscan, lokal auf 5 m gespeichert)
 und weltweit Copernicus GLO-30.
 
-[![CI](https://github.com/OWNER/terrarf/actions/workflows/ci.yml/badge.svg)](https://github.com/OWNER/terrarf/actions/workflows/ci.yml)
-[![Image](https://github.com/OWNER/terrarf/actions/workflows/docker.yml/badge.svg)](https://github.com/OWNER/terrarf/pkgs/container/terrarf)
+[![CI](https://github.com/RideMyByte/TerraRF/actions/workflows/ci.yml/badge.svg)](https://github.com/RideMyByte/TerraRF/actions/workflows/ci.yml)
+[![Image](https://github.com/RideMyByte/TerraRF/actions/workflows/docker.yml/badge.svg)](https://github.com/RideMyByte/TerraRF/pkgs/container/terrarf)
 [![Lizenz: AGPL-3.0](https://img.shields.io/badge/Lizenz-AGPL--3.0-blue.svg)](LICENSE)
 
 ## Funktionen
@@ -34,7 +34,7 @@ und weltweit Copernicus GLO-30.
 *(sobald die Aufnahme freigeschaltet ist)*.
 
 **Bis dahin manuell:** Docker → *Add Container* → bei *Template* die URL
-`https://raw.githubusercontent.com/OWNER/terrarf/main/templates/terrarf.xml` eintragen,
+`https://raw.githubusercontent.com/RideMyByte/TerraRF/main/templates/terrarf.xml` eintragen,
 oder die Datei nach `/boot/config/plugins/dockerMan/templates-user/my-terrarf.xml` kopieren.
 Danach WebUI öffnen (Port 8080).
 
@@ -44,7 +44,7 @@ Abschalten: Variable `RFP_PRELOAD` leeren, dann wird nur bei Bedarf geladen.
 
 ### Docker / Docker Compose
 ```bash
-docker run -d --name terrarf -p 8080:8080 -v ./data:/data ghcr.io/OWNER/terrarf:latest
+docker run -d --name terrarf -p 8080:8080 -v ./data:/data ghcr.io/ridemybyte/terrarf:latest
 ```
 oder `docker compose up -d` mit der beiliegenden `docker-compose.yml`.
 

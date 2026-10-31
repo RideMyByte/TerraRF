@@ -1,19 +1,19 @@
 <?xml version="1.0"?>
 <Container version="2">
   <Name>terrarf</Name>
-  <Repository>ghcr.io/OWNER/terrarf:latest</Repository>
-  <Registry>https://github.com/OWNER/terrarf/pkgs/container/terrarf</Registry>
+  <Repository>ghcr.io/ridemybyte/terrarf:latest</Repository>
+  <Registry>https://github.com/RideMyByte/TerraRF/pkgs/container/terrarf</Registry>
   <Network>bridge</Network>
   <MyIP/>
   <Shell>bash</Shell>
   <Privileged>false</Privileged>
-  <Support>https://github.com/OWNER/terrarf/issues</Support>
-  <Project>https://github.com/OWNER/terrarf</Project>
+  <Support>https://github.com/RideMyByte/TerraRF/issues</Support>
+  <Project>https://github.com/RideMyByte/TerraRF</Project>
   <Overview>TerraRF: Funkabdeckung und Sichtlinien für MeshCore, Meshtastic, LoRa, HAMNET und Amateurfunk planen. Stationen auf der Karte setzen (Sendeleistung, Antenne, Höhe, Frequenz), Abdeckung, Überlappung und Geländeprofile mit Fresnelzone und Linkbudget berechnen. Nutzt die offenen Höhenmodelle von Geobasis NRW (DGM/DOM, lokal gespeichert, beim ersten Start vorgeladen) und weltweit Copernicus GLO-30. Projekte werden in appdata gespeichert.</Overview>
   <Category>Tools:Utilities</Category>
   <WebUI>http://[IP]:[PORT:8080]/</WebUI>
-  <TemplateURL>https://raw.githubusercontent.com/OWNER/terrarf/main/templates/terrarf.xml</TemplateURL>
-  <Icon>https://raw.githubusercontent.com/OWNER/terrarf/main/assets/icon.png</Icon>
+  <TemplateURL>https://raw.githubusercontent.com/RideMyByte/TerraRF/main/templates/terrarf.xml</TemplateURL>
+  <Icon>https://raw.githubusercontent.com/RideMyByte/TerraRF/main/assets/icon.png</Icon>
   <ExtraParams/>
   <PostArgs/>
   <CPUset/>
