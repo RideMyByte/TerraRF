@@ -104,6 +104,12 @@ function stationIcon(st) {
   });
 }
 
+function bearing(lat1, lon1, lat2, lon2) {
+  const r = Math.PI / 180, p1 = lat1 * r, p2 = lat2 * r, dl = (lon2 - lon1) * r;
+  const y = Math.sin(dl) * Math.cos(p2), x = Math.cos(p1) * Math.sin(p2) - Math.sin(p1) * Math.cos(p2) * Math.cos(dl);
+  return (Math.atan2(y, x) / r + 360) % 360;
+}
+
 function destPoint(lat, lon, brgDeg, distM) {
   const R = 6371000, b = brgDeg * Math.PI / 180, d = distM / R;
   const la1 = lat * Math.PI / 180, lo1 = lon * Math.PI / 180;
@@ -128,14 +134,32 @@ function drawStation(st) {
   const a = st.antenna || {};
   if (a.type === "directional") {
     const len = Math.min(3000, (st.radius_km || 5) * 1000 * 0.35);
-    const pts = [[st.lat, st.lon], destPoint(st.lat, st.lon, a.azimuth_deg || 0, len)];
-    const hb = (a.hbw_deg || 60) / 2;
-    const wedge = [[st.lat, st.lon], destPoint(st.lat, st.lon, (a.azimuth_deg || 0) - hb, len * 0.8),
-      destPoint(st.lat, st.lon, (a.azimuth_deg || 0) + hb, len * 0.8)];
-    azLines[st.id] = L.layerGroup([
-      L.polygon(wedge, { color: st.color, weight: 1, fillOpacity: 0.12, interactive: false }),
-      L.polyline(pts, { color: st.color, weight: 3, interactive: false }),
-    ]).addTo(map);
+    const geo = (az) => {
+      const hb = (a.hbw_deg || 60) / 2;
+      return { line: [[st.lat, st.lon], destPoint(st.lat, st.lon, az, len)],
+        wedge: [[st.lat, st.lon], destPoint(st.lat, st.lon, az - hb, len * 0.8), destPoint(st.lat, st.lon, az + hb, len * 0.8)] };
+    };
+    const g0 = geo(a.azimuth_deg || 0);
+    const wedge = L.polygon(g0.wedge, { color: st.color, weight: 1, fillOpacity: 0.12, interactive: false });
+    const line = L.polyline(g0.line, { color: st.color, weight: 3, interactive: false });
+    const layers = [wedge, line];
+    if (isAdmin) {
+      // Griff am Ende der Hauptstrahlrichtung: mit der Maus/dem Finger drehen
+      const h = L.marker(g0.line[1], { draggable: true, zIndexOffset: 500, title: "Antenne drehen",
+        icon: L.divIcon({ className: "", iconSize: [18, 18], iconAnchor: [9, 9], html: `<div class="az-handle" style="border-color:${st.color}"></div>` }) });
+      h.bindTooltip("", { direction: "top", offset: [0, -8] });
+      h.on("drag", () => {
+        const ll = h.getLatLng();
+        const az = Math.round(bearing(st.lat, st.lon, ll.lat, ll.lng));
+        a.azimuth_deg = az;
+        const g = geo(az);
+        wedge.setLatLngs(g.wedge); line.setLatLngs(g.line);
+        h.setTooltipContent(`Azimut ${az}°`); h.openTooltip();
+      });
+      h.on("dragend", () => { h.setLatLng(geo(a.azimuth_deg).line[1]); h.closeTooltip(); changed(st); if (selected === st.id) renderEditor(); });
+      layers.push(h);
+    }
+    azLines[st.id] = L.layerGroup(layers).addTo(map);
   }
 }
 
@@ -310,12 +334,18 @@ function renderEditor() {
       ${isAdmin ? `<button id="btnCsUnlink" class="danger" style="border:0;padding:0">Verknüpfung lösen</button>` : ""}</div>`
     : cfg.corescope?.enabled && isAdmin ? `<h4>MeshCore</h4><label>Mit Repeater verknüpfen (Umkreis 3 km)<select id="csLinkSel">
         <option value="">– nicht verknüpft –</option>${csNearby(st).map(({ n, d }) => `<option value="${n.pk}">${esc(n.name)} (${fmt(d * 1000, 0)} m)</option>`).join("")}</select></label>` : ""}
+    ${project.stations.length > 1 ? `<h4>Strecke zu anderer Station</h4>
+    <div class="row tight"><select id="ptpSel">${project.stations.filter((x) => x.id !== st.id).map((x) => `<option value="${x.id}">${esc(x.name)} (${fmt(distKm(st.lat, st.lon, x.lat, x.lon), 1)} km)</option>`).join("")}</select>
+      <button id="btnPtp" title="Profil und Linkbudget mit beiden Antennen (Höhe, Gewinn in Richtung, Kabel)">Strecke zeigen</button></div>
+    ${isAdmin ? `<button id="btnAim" title="Richtantennen beider Stationen auf die jeweils andere drehen und neigen">Richtantennen aufeinander ausrichten</button>` : ""}` : ""}
     <h4>Berechnung</h4>
     <div class="grid2">
       <label>Radius (km)<input type="number" step="0.5" min="0.5" max="80" data-k="radius_km" value="${st.radius_km}"></label>
     </div>
     <label>Notizen<textarea data-k="notes" rows="2" style="width:100%">${esc(st.notes || "")}</textarea></label>`;
 
+  if ($("btnPtp")) $("btnPtp").onclick = () => showProfile(st.id, null, { rxStationId: $("ptpSel").value });
+  if ($("btnAim")) $("btnAim").onclick = () => aimPair(st, byId($("ptpSel").value));
   if ($("csLinkSel")) $("csLinkSel").onchange = (e) => {
     if (!e.target.value) return;
     if (csStationOf(e.target.value)) { status("Dieser Repeater ist schon mit einer anderen Station verknüpft.", "err"); e.target.value = ""; return; }
@@ -350,6 +380,23 @@ function renderEditor() {
       $("elevInfo").innerHTML = `Gelände ${fmt(r.ground_m)} m · Oberfläche ${fmt(r.surface_m)} m (Δ ${fmt(r.surface_m - r.ground_m)} m) → Antenne auf <b>${fmt(base + +st.height_m)} m</b> ü. NHN`;
     } catch (e) { $("elevInfo").textContent = "Fehler: " + e.message; }
   };
+}
+
+/** Richtantennen zweier Stationen aufeinander ausrichten (Azimut, Neigung aus dem Profil). */
+async function aimPair(a, b) {
+  if (!a || !b) return;
+  const da = a.antenna || {}, db = b.antenna || {};
+  if (da.type !== "directional" && db.type !== "directional") { status("Keine der beiden Stationen hat eine Richtantenne.", "err"); return; }
+  let elev = 0;
+  try {
+    const p = await api("/api/profile", { method: "POST", body: { project, station_id: a.id, rx_station_id: b.id } });
+    elev = p.elevation_deg;
+  } catch { /* ohne Höhendaten: nur Azimut */ }
+  if (da.type === "directional") { da.azimuth_deg = Math.round(bearing(a.lat, a.lon, b.lat, b.lon)); da.tilt_deg = +(-elev).toFixed(1); da.preset = da.preset || "custom"; }
+  if (db.type === "directional") { db.azimuth_deg = Math.round(bearing(b.lat, b.lon, a.lat, a.lon)); db.tilt_deg = +(elev).toFixed(1); db.preset = db.preset || "custom"; }
+  drawStation(a); drawStation(b); renderEditor(); changed();
+  status(`Ausgerichtet: ${a.name} ${fmt(da.azimuth_deg ?? 0, 0)}° · ${b.name} ${fmt(db.azimuth_deg ?? 0, 0)}° (Neigung ±${fmt(Math.abs(elev), 1)}°).`);
+  showProfile(a.id, null, { rxStationId: b.id });
 }
 
 function onField(st, inp) {

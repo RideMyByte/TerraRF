@@ -176,3 +176,5 @@ table.mini tr.dim td { color:#9ca3af; }
 .cs-ovr label { margin:0; width:78px; }
 table.cs-nb tr[data-pk] { cursor:pointer; }
 table.cs-nb tr[data-pk]:hover td { background:#eef2ff; }
+.az-handle { width:14px; height:14px; margin:2px; border-radius:50%; background:#fff; border:3px solid; box-shadow:0 1px 4px rgba(0,0,0,.4); cursor:grab; }
+@media (pointer: coarse) { .az-handle { width:22px; height:22px; margin:-2px; } }
