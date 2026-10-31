@@ -109,3 +109,22 @@ def test_admin_reopens_last_project(admin, project):
     assert admin.get("/api/config").json()["last_project"] == "zuletzt"
     with TestClient(app) as anon:
         assert anon.get("/api/config").json()["last_project"] is None
+
+
+def test_status_busy_and_resources(admin, project):
+    import threading
+    from app import sysstat
+    r = admin.get("/api/status").json()
+    assert "busy" in r and "cpu_pct" in r["res"] and r["res"]["mem_used"]
+    with TestClient(app) as anon:
+        assert "res" not in anon.get("/api/status").json()  # Auslastung nur für den Admin
+    ev = threading.Event()
+
+    def work():
+        with sysstat.activity("Test-Rechnung"):
+            ev.wait(2)
+    t = threading.Thread(target=work); t.start()
+    time.sleep(0.1)
+    assert any(x["what"] == "Test-Rechnung" for x in admin.get("/api/status").json()["busy"])
+    ev.set(); t.join()
+    assert not any(x["what"] == "Test-Rechnung" for x in admin.get("/api/status").json()["busy"])

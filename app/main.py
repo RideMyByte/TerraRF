@@ -17,7 +17,7 @@ from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
-from . import auth, corescope, legal, regions, terrain, tiles
+from . import auth, corescope, legal, regions, sysstat, terrain, tiles
 from . import coverage as cov
 from . import propagation as prop
 from .version import VERSION
@@ -60,6 +60,23 @@ def health():
 def me(request: Request):
     return {"admin": auth.is_admin(request), "user": auth.ADMIN_USER if auth.is_admin(request) else None,
             "public_read": auth.PUBLIC_READ}
+
+
+@app.get("/api/status")
+def status(request: Request):
+    """Läuft gerade etwas? Für alle; Auslastung des Containers nur für den Admin."""
+    items = sysstat.busy()
+    for j in regions.list_jobs():
+        if j.get("state") in ("running", "queued"):
+            items.append({"what": f"Höhendaten laden ({j.get('name') or j.get('source')}, {j.get('done', 0)}/{j.get('total', '?')})",
+                          "seconds": j.get("elapsed_s")})
+    cs = corescope.status()
+    if cs.get("syncing"):
+        items.append({"what": f"MeshCore-Sync ({cs.get('progress') or '…'})", "seconds": None})
+    out = {"busy": items}
+    if auth.is_admin(request):
+        out["res"] = sysstat.resources()
+    return out
 
 
 @app.post("/api/login")

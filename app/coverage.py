@@ -15,7 +15,7 @@ import numpy as np
 from PIL import Image
 
 from . import propagation as prop
-from . import terrain
+from . import sysstat, terrain
 from .terrain import CACHE_DIR, Grid, fill_nans, load_terrain, lonlat_to_merc, merc_to_lonlat
 
 log = logging.getLogger("terrarf.coverage")
@@ -276,7 +276,8 @@ def run_coverage(project, station_ids=None, max_dim=None):
     cs = project_cs(project, s)
     t0 = time.time()
     results = []
-    with _compute_lock:  # one heavy computation at a time
+    with sysstat.activity(f"Abdeckung ({len(stations)} Station{'en' if len(stations) != 1 else ''})"), \
+            _compute_lock:  # one heavy computation at a time
         for st in stations:
             r, cached = compute_station(st, s, cs)
             results.append((st, r, cached))
@@ -553,6 +554,12 @@ def calibrate(project, station_id, points, rx_height=10.0, rx_gain=3.0, rx_cable
         + float(s.get("noise_rise_db", 0.0))
     proj = {**project, "settings": {**s, "rx_extra_loss_db": 0.0}}
     rows = []
+    with sysstat.activity(f"Abgleich ({len(points)} Strecken)"):
+        _calibrate_rows(proj, station_id, points, by_pk, overrides, rx_height, rx_gain, rx_cable, noise, rows)
+    return _calibrate_result(st, noise, rx_height, rx_gain, rx_cable, rows)
+
+
+def _calibrate_rows(proj, station_id, points, by_pk, overrides, rx_height, rx_gain, rx_cable, noise, rows):
     for p in points:
         r = {"pk": p.get("pk"), "name": p.get("name"), "lat": p["lat"], "lon": p["lon"],
              "measured_snr": float(p["snr"]), "n": int(p.get("snr_n") or 0)}
@@ -577,6 +584,9 @@ def calibrate(project, station_id, points, rx_height=10.0, rx_gain=3.0, rx_cable
                  predicted_snr=round(pred, 1), delta_db=round(r["measured_snr"] - pred, 1),
                  saturated=r["measured_snr"] >= SNR_SAT_DB)
         rows.append(r)
+
+
+def _calibrate_result(st, noise, rx_height, rx_gain, rx_cable, rows):
     use = [r for r in rows if "delta_db" in r and not r["saturated"]]
     stats = None
     if use:

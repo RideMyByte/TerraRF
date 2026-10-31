@@ -178,3 +178,19 @@ table.cs-nb tr[data-pk] { cursor:pointer; }
 table.cs-nb tr[data-pk]:hover td { background:#eef2ff; }
 .az-handle { width:14px; height:14px; margin:2px; border-radius:50%; background:#fff; border:3px solid; box-shadow:0 1px 4px rgba(0,0,0,.4); cursor:grab; }
 @media (pointer: coarse) { .az-handle { width:22px; height:22px; margin:-2px; } }
+
+/* Server-Status unten links auf der Karte */
+#sysbox { position:absolute; z-index:1000; left:10px; bottom:34px; display:flex; align-items:center; gap:6px; max-width:min(520px, calc(100% - 300px));
+          background:rgba(255,255,255,.92); border-radius:14px; padding:3px 10px 3px 8px; font-size:12px; box-shadow:0 1px 6px rgba(0,0,0,.2); }
+#sysbox .dot { width:9px; height:9px; border-radius:50%; background:#16a34a; flex:none; }
+#sysbox.busy .dot { background:#f59e0b; animation:cspulse2 1s ease-in-out infinite; }
+#sysbox.off .dot { background:#9ca3af; }
+#sysText { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+#sysRes { color:var(--mut); white-space:nowrap; }
+#sysRes:not(:empty)::before { content:"·"; margin-right:6px; }
+@keyframes cspulse2 { 0%,100% { box-shadow:0 0 0 0 rgba(245,158,11,.7); } 50% { box-shadow:0 0 0 6px rgba(245,158,11,0); } }
+@media (max-width: 800px) {
+  #sysbox { left:calc(8px + env(safe-area-inset-left)); bottom:calc(24px + env(safe-area-inset-bottom)); max-width:calc(100vw - 140px); }
+  body.profile-open #sysbox { display:none; }
+  #sysRes { display:none; }
+}

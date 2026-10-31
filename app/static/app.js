@@ -514,6 +514,7 @@ async function compute(auto = false) {
   if (computing) { pending = true; return; }
   computing = true;
   $("btnCompute").disabled = true;
+  setTimeout(pollStatus, 300);
   const known = act.filter((s) => runStations[s.id]).length;
   status(known === act.length ? `Aktualisiere ${act.length} Station(en) …`
     : `Berechne ${act.length - known} neue/geänderte Station(en), übrige aus dem Cache … (beim ersten Mal werden Höhendaten geladen)`, "busy");
@@ -1130,6 +1131,29 @@ async function csInit() {
   };
 }
 
+// ------------------------------------------------------------ Server-Status (rechnet gerade? Auslastung)
+let sysTimer = null;
+const fmtGB = (b) => b == null ? "?" : b >= 1e9 ? `${fmt(b / 1e9, 1)} GB` : `${fmt(b / 1e6, 0)} MB`;
+async function pollStatus() {
+  clearTimeout(sysTimer);
+  if (document.hidden) { sysTimer = setTimeout(pollStatus, 10000); return; }
+  let busy = false;
+  try {
+    const r = await api("/api/status");
+    const items = r.busy || [];
+    if (computing && !items.length) items.push({ what: "warte auf Server …" });
+    busy = items.length > 0;
+    $("sysbox").className = busy ? "busy" : "";
+    $("sysText").textContent = busy ? "rechnet: " + items.map((x) => x.what + (x.seconds != null ? ` ${fmt(x.seconds, 0)} s` : "")).join(" · ") : "bereit";
+    const res = r.res;
+    $("sysRes").textContent = res ? `CPU ${res.cpu_pct == null ? "…" : fmt(res.cpu_pct, 0) + " %"} (${fmt(res.cpus, 0)} Kerne) · RAM ${fmtGB(res.mem_used)} / ${fmtGB(res.mem_limit)}` : "";
+  } catch (e) {
+    $("sysbox").className = "off"; $("sysText").textContent = "Server nicht erreichbar"; $("sysRes").textContent = "";
+  }
+  sysTimer = setTimeout(pollStatus, busy || computing ? 1500 : 4000);
+}
+document.addEventListener("visibilitychange", () => { if (!document.hidden) pollStatus(); });
+
 // ------------------------------------------------------------ ui wiring
 function activateTab(t) {
   document.querySelectorAll(".tabs button").forEach((b) => b.classList.toggle("active", b.dataset.tab === t));
@@ -1261,6 +1285,7 @@ async function init() {
   $("ver").textContent = !cfg.version ? "" : /^\d/.test(cfg.version) ? "v" + cfg.version : cfg.version;
   wire(); applyRole();
   csInit().catch((e) => console.warn("CoreScope", e));
+  pollStatus();
   if (isAdmin) bindSettings();
   newProject();
   if (!isAdmin && !cfg.auth.public_read) { status("Bitte anmelden."); $("loginDlg").showModal(); return; }

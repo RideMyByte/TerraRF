@@ -28,6 +28,8 @@ und weltweit Copernicus GLO-30.
 - Projekte speichern, laden, als JSON exportieren/importieren
 - Ein Admin-Login zum Bearbeiten; Besucher sehen öffentliche Projekte nur lesend (Teilen per Link)
 - Basiskarten inkl. OpenStreetMap in Graustufen
+- Statusanzeige auf der Karte: was der Server gerade rechnet, für den Admin dazu CPU und RAM des Containers
+- Richtfunk: Antenne mit der Maus drehen, Strecke Station → Station mit beiden Antennen, gegenseitig ausrichten
 - Handytauglich und als App installierbar (Startbildschirm, öffnet ohne Browserleiste)
 - MeshCore-Netz aus [CoreScope](https://github.com/Kpa-clawbot/CoreScope): Repeater-Standorte, beobachtete
   Verbindungen und gemessenes SNR anzeigen, Repeater als Station übernehmen, Modell gegen Messwerte abgleichen
@@ -109,14 +111,20 @@ oder lässt sich dort abschalten.
 
 ## MeshCore-Netz (CoreScope)
 Mit `RFP_CORESCOPE_URL` holt TerraRF die Repeater einer CoreScope-Instanz (nur lesend, serverseitig, zwischengespeichert)
-und zeigt sie im Reiter „MeshCore“. Ein Klick auf einen Repeater zeigt seine Verbindungen:
-- **farbig durchgezogen** – gemessenes SNR: Der Partner ist selbst Observer und hat den Repeater direkt gehört.
-- **grau gestrichelt** – nur aus Paketpfaden abgeleitet. Kurze Hop-Präfixe können falsch zugeordnet sein; der Filter
-  „nur beidseitig“ + Mindestanzahl blendet die meisten Fehlkanten aus.
+und zeigt sie im Reiter „MeshCore“. Ein Klick auf einen Repeater blendet alle anderen aus und zeigt nur seine
+Nachbarn (nach den Filtern im Reiter), eingefärbt nach SNR; erneuter Klick hebt die Auswahl auf. Ein Klick auf eine
+verknüpfte Station zeigt ebenso deren Nachbarn. Im Popup lassen sich Repeater als Station übernehmen oder Höhe/Gewinn
+für den Abgleich hinterlegen; eigene Stationen lassen sich im Editor mit einem Repeater verknüpfen. Bedeutung der Farben:
+- **dunkler Rand** – gemessenes SNR: Der Partner ist selbst Observer und hat den Repeater direkt gehört.
+- **gestrichelter Rand** – Mittel über andere Observer; sagt über die Strecke selbst wenig. Kurze Hop-Präfixe können
+  falsche Nachbarn erzeugen; der Filter „nur beidseitig“ + Mindestanzahl blendet die meisten aus.
 
 „Als Station übernehmen“ legt eine Station mit Annahmen an (10 m, Rundstrahler 5,8 dBi, 22 dBm) – CoreScope kennt
 Antennenhöhe, Gewinn und Leistung nicht. „Mit Messwerten vergleichen“ rechnet für jede gemessene Strecke das
-SNR im Modell und zeigt die Abweichung. SNR-Werte ab 10 dB fließen nicht in die Statistik ein (LoRa-Meldungen sind
+SNR im Modell und zeigt die Abweichung – nur für Partner, die mit den aktuellen Filtern auch auf der Karte stehen.
+Für die Gegenstelle gelten, in dieser Reihenfolge: Werte der Station, falls der Partner im Projekt eingetragen ist
+(Höhe, Antenne in Richtung, Kabel), die je Repeater hinterlegte Höhe/Gewinn, sonst die Standardwerte. Ein Klick auf
+einen Partner zeigt die Strecke als Profil. SNR-Werte ab 10 dB fließen nicht in die Statistik ein (LoRa-Meldungen sind
 nach oben begrenzt). Bitte die Instanz schonend nutzen und im Zweifel bei den Betreibern nachfragen.
 
 ## Modell
