@@ -28,7 +28,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: docker/setup-qemu-action@v3
-      - uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-buildx-action@v4
       - name: Image-Name klein schreiben (GHCR verlangt das)
         run: echo "IMAGE=${IMAGE,,}" >> "$GITHUB_ENV"
       - uses: docker/metadata-action@v5
