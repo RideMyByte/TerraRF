@@ -1,0 +1,26 @@
+name: Wunsch / neue Funktion
+description: Idee oder Verbesserung für den RF-Planer
+labels: [wunsch]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Danke! Wünsche werden gesichtet und, wenn sie passen, mit dem Label **freigegeben** versehen.
+        Freigegebene Wünsche werden gesammelt umgesetzt (teils mit KI-Unterstützung) und als Pull Request geprüft.
+  - type: textarea
+    id: problem
+    attributes:
+      label: Was möchtest du erreichen?
+      description: Beschreibe das Ziel oder Problem, nicht nur die Lösung.
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: Vorschlag
+      description: Wie könnte es aussehen? Gerne mit Beispiel, Skizze oder Screenshot.
+  - type: textarea
+    id: context
+    attributes:
+      label: Kontext
+      description: Funkstandard (MeshCore, Meshtastic, HAMNET …), Region, Version des RF-Planers.

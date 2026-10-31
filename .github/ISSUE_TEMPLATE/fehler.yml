@@ -1,0 +1,31 @@
+name: Fehler melden
+description: Etwas funktioniert nicht oder rechnet falsch
+labels: [fehler]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: Was ist passiert, was hast du erwartet?
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Schritte zum Nachstellen
+      description: Projekt-JSON (⋯ → Export) anhängen, wenn möglich.
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: Ausgabe von `docker logs rfplanner` (gekürzt)
+      render: text
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: steht oben links neben „RF-Planer“
+  - type: textarea
+    id: measured
+    attributes:
+      label: Messwerte (bei falscher Abdeckung)
+      description: Standort, Antennenhöhe, gemessener RSSI/SNR, verwendete Hardware

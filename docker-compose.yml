@@ -1,0 +1,16 @@
+services:
+  rfplanner:
+    image: ghcr.io/OWNER/rfplanner:latest
+    # build: .                    # statt image: lokal bauen
+    container_name: rfplanner
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./data:/data              # Projekte, NRW-Höhendaten, Cache
+    environment:
+      - RFP_PRELOAD=nrw_dgm,nrw_dom     # leer = nur bei Bedarf laden
+      - RFP_NRW_RES=5
+      - RFP_PRELOAD_CENTER=51.48,7.55   # von hier aus nach außen vorladen (lat,lon)
+      # - PUID=1000
+      # - PGID=1000
+    restart: unless-stopped

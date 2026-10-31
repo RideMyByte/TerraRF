@@ -1,0 +1,10 @@
+data
+.git
+.github
+tests
+assets
+templates
+*.md
+__pycache__
+*.pyc
+.pytest_cache

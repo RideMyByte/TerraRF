@@ -1,0 +1,6 @@
+<?xml version="1.0"?>
+<CommunityApplications>
+  <Profile>RF-Planer – ein selbst gehostetes Werkzeug zur Funkplanung: Abdeckung, Sichtlinien und Linkbudgets für MeshCore, Meshtastic, LoRa, HAMNET und Amateurfunk, mit den offenen Höhendaten von Geobasis NRW und Copernicus. Fragen, Fehler und Wünsche bitte als GitHub-Issue.</Profile>
+  <Icon>https://raw.githubusercontent.com/OWNER/rfplanner/main/assets/icon.svg</Icon>
+  <WebPage>https://github.com/OWNER/rfplanner</WebPage>
+</CommunityApplications>

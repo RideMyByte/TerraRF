@@ -1,0 +1,51 @@
+name: Release
+
+# Knopf unter Actions -> Release -> "Run workflow": erhöht die Version, legt Tag + GitHub-Release an
+# und veröffentlicht das Image als :latest. Unraid zeigt danach "Update verfügbar".
+on:
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: "Welche Stelle erhöhen?"
+        type: choice
+        options: [patch, minor, major]
+        default: patch
+
+permissions:
+  contents: write
+  packages: write
+
+jobs:
+  tag:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: v
+        run: |
+          last=$(git tag --list 'v*' --sort=-v:refname | head -n1)
+          last=${last#v}; last=${last:-0.0.0}
+          IFS=. read -r MA MI PA <<< "$last"
+          case "${{ inputs.bump }}" in
+            major) MA=$((MA+1)); MI=0; PA=0 ;;
+            minor) MI=$((MI+1)); PA=0 ;;
+            *)     PA=$((PA+1)) ;;
+          esac
+          echo "version=$MA.$MI.$PA" >> "$GITHUB_OUTPUT"
+      - env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "v${{ steps.v.outputs.version }}" --target "${{ github.sha }}" \
+            --title "v${{ steps.v.outputs.version }}" --generate-notes
+
+  image:
+    needs: tag
+    uses: ./.github/workflows/docker.yml
+    with:
+      version: ${{ needs.tag.outputs.version }}
+    permissions:
+      contents: read
+      packages: write

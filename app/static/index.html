@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>RF-Planer</title>
+<link rel="stylesheet" href="/static/vendor/leaflet/leaflet.css">
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<div id="app">
+  <aside id="side">
+    <header>
+      <div class="brand">📡 RF-Planer <span id="ver" class="note"></span></div>
+      <div class="proj">
+        <input id="projName" value="Neues Projekt" title="Projektname">
+        <span id="dirty" title="Ungespeicherte Änderungen"></span>
+      </div>
+      <div class="row tight">
+        <button id="btnSave" title="Projekt auf dem Server speichern">💾 Speichern</button>
+        <select id="projList" title="Projekt laden"><option value="">Laden …</option></select>
+        <button id="btnNew" title="Neues Projekt">Neu</button>
+        <button id="btnMore" title="Import/Export">⋯</button>
+      </div>
+      <div id="moreMenu" class="menu hidden">
+        <button id="btnExport">Projekt als JSON exportieren</button>
+        <button id="btnImport">JSON importieren</button>
+        <button id="btnDelete" class="danger">Projekt löschen</button>
+        <input type="file" id="fileImport" accept=".json,application/json" class="hidden">
+      </div>
+    </header>
+
+    <nav class="tabs">
+      <button data-tab="stations" class="active">Stationen</button>
+      <button data-tab="settings">Einstellungen</button>
+      <button data-tab="results">Ergebnis</button>
+    </nav>
+
+    <section id="tab-stations" class="tab active">
+      <div class="row">
+        <button id="btnAdd" class="primary">＋ Station platzieren</button>
+        <button id="btnCompute" class="go">▶ Berechnen</button>
+      </div>
+      <label class="chk" style="margin-top:0"><input type="checkbox" id="autoCalc" checked> automatisch neu berechnen (aus Cache, nur Geändertes wird gerechnet)</label>
+      <div id="stationList"></div>
+      <div id="editor" class="hidden"></div>
+    </section>
+
+    <section id="tab-settings" class="tab">
+      <h3>Höhendaten</h3>
+      <label>Gelände (Boden, für Antennen-/Empfängerhöhe)
+        <select id="s_ground_source"></select></label>
+      <label>Hindernisse (Oberfläche: Gebäude, Bäume)
+        <select id="s_surface_source"></select></label>
+      <div class="row tight">
+        <button id="btnTestGround">Gelände-Quelle testen</button>
+        <button id="btnTestSurface">Oberfl.-Quelle testen</button>
+      </div>
+      <div id="testOut" class="note mono"></div>
+      <p class="note">Eigene GeoTIFFs in <code>data/dem/&lt;ordner&gt;/</code> erscheinen als „Lokal: …“.</p>
+
+      <h3>Höhendaten offline vorhalten</h3>
+      <div class="grid2">
+        <label>Quelle<select id="r_source">
+          <option value="nrw_dgm">NRW DGM (Gelände)</option>
+          <option value="nrw_dom">NRW DOM1 (Oberfläche)</option>
+          <option value="copernicus">Copernicus GLO-30</option></select></label>
+        <label>Gebiet<select id="r_area">
+          <option value="view">Aktueller Kartenausschnitt</option>
+          <option value="stations">Stationen + Radius</option>
+          <option value="nrw">Ganz NRW</option></select></label>
+        <label>Auflösung (m)<select id="r_res">
+          <option>5</option><option selected>10</option><option>20</option><option>25</option></select></label>
+        <label>Ordnername<input id="r_name" placeholder="automatisch"></label>
+      </div>
+      <div class="row tight">
+        <button id="btnPlan">Größe schätzen</button>
+        <button id="btnDownload" class="primary">Download starten</button>
+      </div>
+      <div id="planOut" class="note"></div>
+      <div id="jobs"></div>
+      <div class="row tight"><button id="btnCache">Cache anzeigen</button><button id="btnCacheClear">Rechen-Cache leeren</button></div>
+      <div id="cacheOut" class="note mono"></div>
+
+      <h3>Rechnung</h3>
+      <div class="grid2">
+        <label>Auflösung (m)<input id="s_res_m" type="number" min="2" max="100" step="1"></label>
+        <label>k-Faktor Erdradius<input id="s_k_factor" type="number" step="0.01"></label>
+        <label>Profilpunkte je Strahl<input id="s_max_profile_points" type="number" min="100" max="2000" step="50"></label>
+        <label>Max. Strahlen<input id="s_max_rays" type="number" min="360" max="20000" step="360"></label>
+      </div>
+      <h3>Ausbreitungsmodell</h3>
+      <label>Beugungsmodell<select id="s_diffraction_model">
+        <option value="deygout">Deygout, 3 Kanten (Standard, passt besser zu Messungen in bebautem Gebiet)</option>
+        <option value="bullington">Bullington (ITU-R P.526, optimistischer)</option></select></label>
+      <div class="grid3">
+        <label>Hindernisdämpfung (P.833)<select id="s_veg_mode">
+          <option value="auto">automatisch</option><option value="custom">eigene Werte</option><option value="off">aus</option></select></label>
+        <label>dB/m<input id="s_veg_gamma_db_m" type="number" step="0.01" placeholder="auto"></label>
+        <label>max. dB<input id="s_veg_max_db" type="number" step="1" placeholder="auto"></label>
+      </div>
+      <p class="note">Wo die direkte Linie durch Bäume/Gebäude läuft (über Gelände, unter der Oberfläche), kommt eine Dämpfung pro Meter dazu, begrenzt auf ein Maximum. Standard aus ITU-R P.833: bei 869 MHz ca. 0,16 dB/m, max. 25 dB.</p>
+      <div class="grid2">
+        <label>Clutter am Empfänger (ITU-R P.2108)<select id="s_clutter_mode">
+          <option value="auto">automatisch aus Oberflächenmodell</option>
+          <option value="off">aus</option>
+          <option value="suburban">fest: vorstädtisch (R 10 m)</option>
+          <option value="urban">fest: städtisch (R 15 m)</option>
+          <option value="dense">fest: dicht städtisch (R 20 m)</option>
+          <option value="trees">fest: Wald/Bäume (R 15 m)</option></select></label>
+        <label>Mindest-Clutter (bei „automatisch“)<select id="s_clutter_floor">
+          <option value="none">keiner</option>
+          <option value="suburban">vorstädtisch</option>
+          <option value="urban">städtisch</option>
+          <option value="dense">dicht städtisch</option>
+          <option value="trees">Wald/Bäume</option></select></label>
+        <label>Nahbereich Empfänger (m)<input id="s_clutter_exclude_m" type="number" min="0" max="500" step="10"></label>
+        <label class="chk"><input id="s_two_ray" type="checkbox"> Bodenreflexion (2-Strahl)</label>
+      </div>
+      <p class="note">„Automatisch“ nimmt die Hindernishöhe (Oberfläche − Gelände) im Nahbereich des Empfängers als Clutter-Höhe und ersetzt dort die Beugung durch den P.2108-Zuschlag. Mit grober Oberfläche (Copernicus) besser einen Mindest-Clutter setzen.</p>
+      <h3>Empfänger (Client)</h3>
+      <div class="grid2">
+        <label>Höhe über Grund (m)<input id="s_rx_height_m" type="number" step="0.5"></label>
+        <label>Antennengewinn (dBi)<input id="s_rx_gain_dbi" type="number" step="0.1"></label>
+        <label>Kabelverlust (dB)<input id="s_rx_cable_db" type="number" step="0.1"></label>
+        <label>Zusatzverlust Rx: Körper/Gebäude (dB)<input id="s_rx_extra_loss_db" type="number" step="1"></label>
+        <label>Rauschanhebung ggü. thermisch (dB)<input id="s_noise_rise_db" type="number" step="1"></label>
+        <label>Fading-/Standortreserve (dB)<input id="s_min_margin_db" type="number" step="1"></label>
+      </div>
+      <p class="note">Richtwerte: Handgerät am Körper 3–6 dB, im Gebäude 10–20 dB. Die Reserve deckt die Streuung über Standorte und Fading ab; als „versorgt“ zählt nur, was darüber liegt.</p>
+      <p class="note">Die Empfindlichkeit des Empfängers kommt aus den Funkparametern der jeweiligen Station (Bandbreite, SF, Rauschzahl). Man nimmt also an, dass auf beiden Seiten dasselbe Funkmodul sitzt.</p>
+    </section>
+
+    <section id="tab-results" class="tab">
+      <div id="resultInfo" class="note">Noch nicht berechnet.</div>
+    </section>
+    <div id="preloadInfo" class="note" style="padding:0 12px"></div>
+    <footer id="status">Bereit.</footer>
+  </aside>
+
+  <main id="mapwrap">
+    <div id="map"></div>
+    <div id="layerbox" class="hidden">
+      <label>Anzeige
+        <select id="layerSel"></select></label>
+      <label>Deckkraft <input id="opacity" type="range" min="0" max="1" step="0.05" value="0.6"></label>
+      <label>Mindest-Reserve: <b id="reqVal">10</b> dB <input id="reqSlider" type="range" min="-10" max="40" step="1" value="10"></label>
+      <div id="legend"></div>
+    </div>
+    <div id="placing" class="hidden">Klicke in die Karte, um die Station zu setzen (Esc bricht ab)</div>
+    <div id="profile" class="hidden">
+      <div class="phead"><b id="profTitle">Profil</b>
+        <span id="profMeta"></span>
+        <button id="profClose" title="Schließen">✕</button></div>
+      <div class="pbody">
+        <canvas id="profCanvas"></canvas>
+        <table id="profBudget"></table>
+      </div>
+    </div>
+  </main>
+</div>
+<script src="/static/vendor/leaflet/leaflet.js"></script>
+<script src="/static/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,695 @@
+/* RF-Planer frontend (vanilla JS + Leaflet) */
+(() => {
+"use strict";
+
+// ------------------------------------------------------------ presets
+const RADIO_PRESETS = {
+  meshcore_eu: { label: "MeshCore EU/UK Narrow (869,618 MHz, 62,5 kHz, SF8)", freq_mhz: 869.618, bw_khz: 62.5, mode: "lora", sf: 8, tx_power_dbm: 22, nf_db: 6 },
+  meshtastic_lf: { label: "Meshtastic EU LongFast (869,525 MHz, 250 kHz, SF11)", freq_mhz: 869.525, bw_khz: 250, mode: "lora", sf: 11, tx_power_dbm: 22, nf_db: 6 },
+  lora_custom: { label: "LoRa benutzerdefiniert", mode: "lora" },
+  fm_2m: { label: "2 m FM (145 MHz, 12,5 kHz)", freq_mhz: 145.5, bw_khz: 12.5, mode: "fm", req_snr_db: 10, tx_power_dbm: 37, nf_db: 5 },
+  fm_70cm: { label: "70 cm FM (438 MHz, 12,5 kHz)", freq_mhz: 438.5, bw_khz: 12.5, mode: "fm", req_snr_db: 10, tx_power_dbm: 37, nf_db: 5 },
+  pmr446: { label: "PMR446 (446,1 MHz, 0,5 W)", freq_mhz: 446.1, bw_khz: 12.5, mode: "fm", req_snr_db: 10, tx_power_dbm: 27, nf_db: 6 },
+  hamnet5: { label: "HAMNET 5,7 GHz (10 MHz, MCS0)", freq_mhz: 5765, bw_khz: 10000, mode: "custom", req_snr_db: 5, tx_power_dbm: 23, nf_db: 7 },
+  wifi24: { label: "WLAN 2,4 GHz (20 MHz, MCS0)", freq_mhz: 2442, bw_khz: 20000, mode: "custom", req_snr_db: 5, tx_power_dbm: 20, nf_db: 7 },
+  custom: { label: "Benutzerdefiniert" },
+};
+const ANT_PRESETS = {
+  omni2: { label: "Rundstrahler 2,15 dBi (Dipol/Stab)", type: "omni", gain_dbi: 2.15, vbw_deg: null, fb_db: 25 },
+  omni5: { label: "Rundstrahler 5,8 dBi (Kollinear)", type: "omni", gain_dbi: 5.8, vbw_deg: null, fb_db: 25 },
+  omni8: { label: "Rundstrahler 8 dBi", type: "omni", gain_dbi: 8, vbw_deg: null, fb_db: 25 },
+  sector90: { label: "Sektor 90° / 14 dBi", type: "directional", gain_dbi: 14, hbw_deg: 90, vbw_deg: 8, fb_db: 25 },
+  sector120: { label: "Sektor 120° / 13 dBi", type: "directional", gain_dbi: 13, hbw_deg: 120, vbw_deg: 8, fb_db: 22 },
+  yagi: { label: "Yagi 9 dBi", type: "directional", gain_dbi: 9, hbw_deg: 50, vbw_deg: 50, fb_db: 18 },
+  panel: { label: "Panel/Patch 14 dBi", type: "directional", gain_dbi: 14, hbw_deg: 30, vbw_deg: 30, fb_db: 25 },
+  dish: { label: "Parabol 24 dBi", type: "directional", gain_dbi: 24, hbw_deg: 8, vbw_deg: 8, fb_db: 30 },
+  custom: { label: "Benutzerdefiniert" },
+};
+const LORA_SNR = { 5: -2.5, 6: -5, 7: -7.5, 8: -10, 9: -12.5, 10: -15, 11: -17.5, 12: -20 };
+const COLORS = ["#e6194b", "#3cb44b", "#4363d8", "#f58231", "#911eb4", "#46c0c8", "#f032e6", "#9a6324", "#808000", "#000075"];
+
+// ------------------------------------------------------------ state
+let cfg = null;
+let project = null;
+let selected = null;
+let lastRun = null;
+let placing = false;
+let dirty = false;
+const markers = {};
+const azLines = {};
+let overlay = null;
+
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const uid = () => Math.random().toString(36).slice(2, 10);
+const fmt = (v, d = 1) => (v === null || v === undefined || Number.isNaN(v)) ? "–" : Number(v).toFixed(d).replace(".", ",");
+
+function status(msg, cls = "") { const s = $("status"); s.textContent = msg; s.className = cls; }
+function setDirty(v = true) { dirty = v; $("dirty").className = v ? "on" : ""; }
+
+async function api(path, opts = {}) {
+  const o = { headers: { "Content-Type": "application/json" }, ...opts };
+  if (o.body && typeof o.body !== "string") o.body = JSON.stringify(o.body);
+  const r = await fetch(path, o);
+  let data = null;
+  try { data = await r.json(); } catch { /* empty */ }
+  if (!r.ok) throw new Error((data && data.detail) || `HTTP ${r.status}`);
+  return data;
+}
+
+// ------------------------------------------------------------ map
+const map = L.map("map", { zoomControl: true, preferCanvas: false }).setView([51.575, 6.985], 12);
+const base = {
+  "OpenStreetMap": L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", { maxZoom: 19, attribution: "© OpenStreetMap-Mitwirkende" }),
+  "OpenTopoMap": L.tileLayer("https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png", { maxZoom: 17, attribution: "© OpenStreetMap-Mitwirkende, SRTM | © OpenTopoMap (CC-BY-SA)" }),
+  "Luftbild NRW (DOP)": L.tileLayer.wms("https://www.wms.nrw.de/geobasis/wms_nw_dop", { layers: "nw_dop_rgb", format: "image/jpeg", maxZoom: 20, attribution: "© Geobasis NRW (dl-de/zero-2-0)" }),
+  "Satellit (Esri)": L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}", { maxZoom: 19, attribution: "Tiles © Esri, Maxar, Earthstar Geographics" }),
+};
+const overlays = {};
+base["OpenStreetMap"].addTo(map);
+L.control.layers(base, overlays, { position: "topright" }).addTo(map);
+L.control.scale({ imperial: false }).addTo(map);
+
+function stationIcon(st) {
+  const c = st.color || "#3388ff";
+  const off = 1;
+  return L.divIcon({
+    className: "",
+    html: `<svg width="26" height="34" viewBox="0 0 26 34" style="opacity:${off}"><path d="M13 33 L4 15 A10 10 0 1 1 22 15 Z" fill="${c}" stroke="#fff" stroke-width="2"/><circle cx="13" cy="11" r="4" fill="#fff"/></svg>`,
+    iconSize: [26, 34], iconAnchor: [13, 33], popupAnchor: [0, -30],
+  });
+}
+
+function destPoint(lat, lon, brgDeg, distM) {
+  const R = 6371000, b = brgDeg * Math.PI / 180, d = distM / R;
+  const la1 = lat * Math.PI / 180, lo1 = lon * Math.PI / 180;
+  const la2 = Math.asin(Math.sin(la1) * Math.cos(d) + Math.cos(la1) * Math.sin(d) * Math.cos(b));
+  const lo2 = lo1 + Math.atan2(Math.sin(b) * Math.sin(d) * Math.cos(la1), Math.cos(d) - Math.sin(la1) * Math.sin(la2));
+  return [la2 * 180 / Math.PI, lo2 * 180 / Math.PI];
+}
+
+function drawStation(st) {
+  if (markers[st.id]) { map.removeLayer(markers[st.id]); delete markers[st.id]; }
+  if (azLines[st.id]) { map.removeLayer(azLines[st.id]); delete azLines[st.id]; }
+  if (st.enabled === false) return;  // deactivated stations are not shown on the map
+  const m = L.marker([st.lat, st.lon], { draggable: true, icon: stationIcon(st), title: st.name });
+  m.on("click", (e) => { L.DomEvent.stopPropagation(e); select(st.id); });
+  m.on("dragend", () => {
+    const ll = m.getLatLng();
+    st.lat = +ll.lat.toFixed(6); st.lon = +ll.lng.toFixed(6);
+    changed(st); drawStation(st);
+  });
+  m.addTo(map);
+  markers[st.id] = m;
+  const a = st.antenna || {};
+  if (a.type === "directional") {
+    const len = Math.min(3000, (st.radius_km || 5) * 1000 * 0.35);
+    const pts = [[st.lat, st.lon], destPoint(st.lat, st.lon, a.azimuth_deg || 0, len)];
+    const hb = (a.hbw_deg || 60) / 2;
+    const wedge = [[st.lat, st.lon], destPoint(st.lat, st.lon, (a.azimuth_deg || 0) - hb, len * 0.8),
+      destPoint(st.lat, st.lon, (a.azimuth_deg || 0) + hb, len * 0.8)];
+    azLines[st.id] = L.layerGroup([
+      L.polygon(wedge, { color: st.color, weight: 1, fillOpacity: 0.12, interactive: false }),
+      L.polyline(pts, { color: st.color, weight: 3, interactive: false }),
+    ]).addTo(map);
+  }
+}
+
+// ------------------------------------------------------------ project
+function defaultStation(lat, lon) {
+  const prev = project.stations[project.stations.length - 1];
+  const tmpl = prev ? JSON.parse(JSON.stringify(prev)) : {
+    height_m: 10, height_ref: "ground", radio_preset: "meshcore_eu", ...stripLabel(RADIO_PRESETS.meshcore_eu),
+    cable_loss_db: 1, radius_km: 10, sens_override_dbm: null, req_snr_db: 10,
+    antenna: { preset: "omni5", ...stripLabel(ANT_PRESETS.omni5), azimuth_deg: 0, tilt_deg: 0, hbw_deg: 60 },
+  };
+  const n = project.stations.length;
+  return { ...tmpl, id: uid(), name: `Station ${n + 1}`, color: COLORS[n % COLORS.length], enabled: true,
+    lat: +lat.toFixed(6), lon: +lon.toFixed(6), notes: "" };
+}
+function stripLabel(o) { const c = { ...o }; delete c.label; return c; }
+
+function newProject() {
+  project = { id: null, name: "Neues Projekt", settings: { ...cfg.defaults }, stations: [], view: null };
+  for (const k of Object.keys(markers)) { map.removeLayer(markers[k]); delete markers[k]; }
+  for (const k of Object.keys(azLines)) { map.removeLayer(azLines[k]); delete azLines[k]; }
+  clearOverlay(); selected = null; lastRun = null;
+  $("projName").value = project.name;
+  renderAll(); setDirty(false);
+}
+
+function loadProject(p) {
+  newProject();
+  project = p;
+  project.settings = { ...cfg.defaults, ...(p.settings || {}) };
+  project.stations = p.stations || [];
+  $("projName").value = p.name || "Projekt";
+  project.stations.forEach(drawStation);
+  if (p.view) map.setView(p.view.center, p.view.zoom);
+  else if (project.stations.length) map.fitBounds(L.latLngBounds(project.stations.map((s) => [s.lat, s.lon])).pad(0.5));
+  renderAll(); setDirty(false);
+  status(`Projekt „${p.name}“ geladen.`);
+  if ($("autoCalc").checked && project.stations.some((x) => x.enabled !== false)) compute(true);
+}
+
+async function saveProject() {
+  if (!project.id) project.id = (await api("/api/newid")).id;
+  project.name = $("projName").value.trim() || "Projekt";
+  project.view = { center: [map.getCenter().lat, map.getCenter().lng], zoom: map.getZoom() };
+  const r = await api(`/api/projects/${project.id}`, { method: "PUT", body: project });
+  project.updated = r.updated;
+  setDirty(false); status("Gespeichert."); refreshProjectList();
+}
+
+async function refreshProjectList() {
+  const list = await api("/api/projects");
+  const sel = $("projList");
+  sel.innerHTML = `<option value="">Laden … (${list.length})</option>` +
+    list.map((p) => `<option value="${esc(p.id)}">${esc(p.name)} · ${p.stations} St.</option>`).join("");
+}
+
+// ------------------------------------------------------------ station list + editor
+function renderAll() { renderList(); renderEditor(); renderSettings(); }
+
+function renderList() {
+  const el = $("stationList");
+  if (!project.stations.length) {
+    el.innerHTML = `<p class="note">Noch keine Station. „＋ Station platzieren“ und dann in die Karte klicken.</p>`;
+    return;
+  }
+  el.innerHTML = project.stations.map((st) => `
+    <div class="st ${st.id === selected ? "sel" : ""} ${st.enabled === false ? "off" : ""}" data-id="${st.id}">
+      <input type="checkbox" class="en" ${st.enabled !== false ? "checked" : ""} title="In Berechnung einbeziehen">
+      <span class="dot" style="background:${esc(st.color)}"></span>
+      <span class="nm">${esc(st.name)}<br><span class="sub">${fmt(st.freq_mhz, 3)} MHz · ${fmt(st.tx_power_dbm, 0)} dBm · ${fmt(st.height_m, 0)} m · ${esc((ANT_PRESETS[st.antenna?.preset] || {}).label || st.antenna?.type)}</span></span>
+    </div>`).join("");
+  el.querySelectorAll(".st").forEach((d) => {
+    d.addEventListener("click", (e) => { if (!e.target.classList.contains("en")) select(d.dataset.id, true); });
+    d.querySelector(".en").addEventListener("change", (e) => {
+      const st = byId(d.dataset.id); st.enabled = e.target.checked; changed(st); drawStation(st); renderList();
+    });
+  });
+}
+
+const byId = (id) => project.stations.find((s) => s.id === id);
+
+function select(id, pan = false) {
+  selected = id;
+  const st = byId(id);
+  if (pan && st) map.panTo([st.lat, st.lon]);
+  activateTab("stations"); renderList(); renderEditor();
+}
+
+function sensitivity(st) {
+  if (st.sens_override_dbm !== null && st.sens_override_dbm !== "" && st.sens_override_dbm !== undefined) return +st.sens_override_dbm;
+  const snr = st.mode === "lora" ? (LORA_SNR[st.sf] ?? -17.5) : +(st.req_snr_db ?? 10);
+  return -174 + 10 * Math.log10(st.bw_khz * 1000) + (+st.nf_db || 6) + snr;
+}
+function autoVbw(a) {
+  const g = +a.gain_dbi || 0;
+  if (a.type === "omni") return Math.max(3, Math.min(120, 78 / 10 ** ((g - 2.15) / 10)));
+  return Math.max(2, Math.min(120, 32400 / ((+a.hbw_deg || 60) * 10 ** (g / 10))));
+}
+
+function opt(obj, cur) { return Object.entries(obj).map(([k, v]) => `<option value="${k}" ${k === cur ? "selected" : ""}>${esc(v.label)}</option>`).join(""); }
+
+function renderEditor() {
+  const el = $("editor");
+  const st = selected && byId(selected);
+  if (!st) { el.classList.add("hidden"); return; }
+  el.classList.remove("hidden");
+  const a = st.antenna || (st.antenna = {});
+  const sens = sensitivity(st);
+  const eirp = st.tx_power_dbm - (st.cable_loss_db || 0) + (+a.gain_dbi || 0);
+  const mw = 10 ** (st.tx_power_dbm / 10);
+  el.innerHTML = `
+    <div class="ehead">
+      <input type="color" data-k="color" value="${esc(st.color)}">
+      <input type="text" data-k="name" value="${esc(st.name)}">
+      <button id="btnDel" class="danger" title="Station löschen">🗑</button>
+    </div>
+    <h4>Standort</h4>
+    <div class="grid2">
+      <label>Breite<input type="number" step="0.000001" data-k="lat" value="${st.lat}"></label>
+      <label>Länge<input type="number" step="0.000001" data-k="lon" value="${st.lon}"></label>
+      <label>Antennenhöhe (m)<input type="number" step="0.5" data-k="height_m" value="${st.height_m}"></label>
+      <label>Höhe bezogen auf<select data-k="height_ref">
+        <option value="ground" ${st.height_ref !== "surface" ? "selected" : ""}>Gelände (Boden)</option>
+        <option value="surface" ${st.height_ref === "surface" ? "selected" : ""}>Oberfläche (Dach)</option></select></label>
+    </div>
+    <div class="calc" id="elevInfo">Geländehöhe: <button id="btnElev">abfragen</button></div>
+    <h4>Funk</h4>
+    <label>Vorlage<select data-k="radio_preset">${opt(RADIO_PRESETS, st.radio_preset || "custom")}</select></label>
+    <div class="grid2">
+      <label>Frequenz (MHz)<input type="number" step="0.001" data-k="freq_mhz" value="${st.freq_mhz}"></label>
+      <label>Bandbreite (kHz)<input type="number" step="0.1" data-k="bw_khz" value="${st.bw_khz}"></label>
+      <label>Sendeleistung (dBm)<input type="number" step="0.5" data-k="tx_power_dbm" value="${st.tx_power_dbm}"></label>
+      <label>Kabel/Stecker (dB)<input type="number" step="0.1" data-k="cable_loss_db" value="${st.cable_loss_db ?? 0}"></label>
+      <label>Modulation<select data-k="mode">
+        <option value="lora" ${st.mode === "lora" ? "selected" : ""}>LoRa</option>
+        <option value="fm" ${st.mode === "fm" ? "selected" : ""}>FM</option>
+        <option value="custom" ${st.mode === "custom" ? "selected" : ""}>Sonstige (SNR)</option></select></label>
+      ${st.mode === "lora"
+        ? `<label>Spreading Factor<select data-k="sf">${[5, 6, 7, 8, 9, 10, 11, 12].map((s) => `<option ${+st.sf === s ? "selected" : ""}>${s}</option>`).join("")}</select></label>`
+        : `<label>nötiges SNR (dB)<input type="number" step="0.5" data-k="req_snr_db" value="${st.req_snr_db ?? 10}"></label>`}
+      <label>Rauschzahl Rx (dB)<input type="number" step="0.5" data-k="nf_db" value="${st.nf_db ?? 6}"></label>
+      <label>Empfindlichkeit fix (dBm)<input type="number" step="0.5" data-k="sens_override_dbm" value="${st.sens_override_dbm ?? ""}" placeholder="auto"></label>
+    </div>
+    <div class="calc">${fmt(mw >= 1000 ? mw / 1000 : mw, mw >= 1000 ? 2 : 0)} ${mw >= 1000 ? "W" : "mW"} · EIRP ${fmt(eirp)} dBm (${fmt(10 ** (eirp / 10) / 1000 / 1.64, 2)} W ERP) · Empfindlichkeit ${fmt(sens)} dBm</div>
+    <h4>Antenne</h4>
+    <label>Vorlage<select data-k="antenna.preset">${opt(ANT_PRESETS, a.preset || "custom")}</select></label>
+    <div class="grid2">
+      <label>Typ<select data-k="antenna.type">
+        <option value="omni" ${a.type === "omni" ? "selected" : ""}>Rundstrahler</option>
+        <option value="directional" ${a.type === "directional" ? "selected" : ""}>Richtantenne</option></select></label>
+      <label>Gewinn (dBi)<input type="number" step="0.1" data-k="antenna.gain_dbi" value="${a.gain_dbi ?? 0}"></label>
+      ${a.type === "directional" ? `
+      <label>Azimut (° von Nord)<input type="number" step="1" data-k="antenna.azimuth_deg" value="${a.azimuth_deg ?? 0}"></label>
+      <label>Öffnung horiz. (°)<input type="number" step="1" data-k="antenna.hbw_deg" value="${a.hbw_deg ?? 60}"></label>` : ""}
+      <label>Öffnung vert. (°)<input type="number" step="0.5" data-k="antenna.vbw_deg" value="${a.vbw_deg ?? ""}" placeholder="auto ${fmt(autoVbw(a), 0)}"></label>
+      <label>Neigung, + = abwärts (°)<input type="number" step="0.5" data-k="antenna.tilt_deg" value="${a.tilt_deg ?? 0}"></label>
+      <label>Vor/Rück (dB)<input type="number" step="1" data-k="antenna.fb_db" value="${a.fb_db ?? 25}"></label>
+    </div>
+    <h4>Berechnung</h4>
+    <div class="grid2">
+      <label>Radius (km)<input type="number" step="0.5" min="0.5" max="80" data-k="radius_km" value="${st.radius_km}"></label>
+    </div>
+    <label>Notizen<textarea data-k="notes" rows="2" style="width:100%">${esc(st.notes || "")}</textarea></label>`;
+
+  el.querySelectorAll("[data-k]").forEach((inp) => {
+    inp.addEventListener("change", () => onField(st, inp));
+  });
+  $("btnDel").onclick = () => {
+    if (!confirm(`Station „${st.name}“ löschen?`)) return;
+    project.stations = project.stations.filter((s) => s.id !== st.id);
+    if (markers[st.id]) { map.removeLayer(markers[st.id]); delete markers[st.id]; }
+    if (azLines[st.id]) { map.removeLayer(azLines[st.id]); delete azLines[st.id]; }
+    selected = null; renderAll(); changed();
+  };
+  $("btnElev").onclick = async () => {
+    $("elevInfo").textContent = "Frage Höhendaten ab …";
+    try {
+      const r = await api("/api/elevation", { method: "POST", body: { project, lat: st.lat, lon: st.lon } });
+      const base = st.height_ref === "surface" ? r.surface_m : r.ground_m;
+      $("elevInfo").innerHTML = `Gelände ${fmt(r.ground_m)} m · Oberfläche ${fmt(r.surface_m)} m (Δ ${fmt(r.surface_m - r.ground_m)} m) → Antenne auf <b>${fmt(base + +st.height_m)} m</b> ü. NHN`;
+    } catch (e) { $("elevInfo").textContent = "Fehler: " + e.message; }
+  };
+}
+
+function onField(st, inp) {
+  const path = inp.dataset.k.split(".");
+  let v = inp.type === "number" ? (inp.value === "" ? null : +inp.value) : inp.value;
+  if (path[0] === "sf") v = +v;
+  if (path.length === 2) {
+    st[path[0]] = st[path[0]] || {};
+    st[path[0]][path[1]] = v;
+    if (path[1] === "preset" && ANT_PRESETS[v] && v !== "custom") Object.assign(st.antenna, stripLabel(ANT_PRESETS[v]));
+    else if (path[1] !== "preset" && path[1] !== "azimuth_deg" && path[1] !== "tilt_deg") st.antenna.preset = "custom";
+  } else {
+    st[path[0]] = v;
+    if (path[0] === "radio_preset" && RADIO_PRESETS[v] && !["custom", "lora_custom"].includes(v)) Object.assign(st, stripLabel(RADIO_PRESETS[v]));
+    if (path[0] === "radio_preset" && v === "lora_custom") st.mode = "lora";
+    if (["freq_mhz", "bw_khz", "mode", "sf", "tx_power_dbm", "nf_db", "req_snr_db"].includes(path[0])) st.radio_preset = "custom";
+  }
+  changed(st); drawStation(st); renderList(); renderEditor();
+}
+
+let autoTimer = null, computing = false, pending = false;
+function changed() { setDirty(); scheduleAuto(); }
+function scheduleAuto() {
+  if (!$("autoCalc").checked) { if (lastRun) status("Geändert – „▶ Berechnen“ aktualisiert die Karte."); return; }
+  clearTimeout(autoTimer);
+  autoTimer = setTimeout(() => compute(true), 900);
+}
+
+// ------------------------------------------------------------ settings
+function renderSettings() {
+  const s = project.settings;
+  const srcOpts = (kind, cur, allowNone) => (allowNone ? `<option value="none" ${cur === "none" ? "selected" : ""}>keine (nur Gelände)</option>` : "") +
+    cfg.sources.filter((x) => kind === "ground" ? x.kind !== "surface" : x.kind !== "ground")
+      .map((x) => `<option value="${esc(x.id)}" ${x.id === cur ? "selected" : ""}>${esc(x.label)}</option>`).join("");
+  $("s_ground_source").innerHTML = srcOpts("ground", s.ground_source, false);
+  $("s_surface_source").innerHTML = srcOpts("surface", s.surface_source, true);
+  $("s_diffraction_model").value = s.diffraction_model || "bullington";
+  $("s_clutter_mode").value = s.clutter_mode || "auto";
+  $("s_clutter_floor").value = s.clutter_floor || "none";
+  $("s_two_ray").checked = s.two_ray !== false;
+  $("s_veg_mode").value = s.veg_mode || "auto";
+  $("s_veg_gamma_db_m").value = s.veg_gamma_db_m ?? "";
+  $("s_veg_max_db").value = s.veg_max_db ?? "";
+  $("reqSlider").value = s.min_margin_db ?? 10; $("reqVal").textContent = s.min_margin_db ?? 10;
+  for (const k of ["res_m", "k_factor", "max_profile_points", "max_rays", "rx_height_m", "rx_gain_dbi", "rx_cable_db", "min_margin_db", "rx_extra_loss_db", "noise_rise_db", "clutter_exclude_m"]) $("s_" + k).value = s[k] ?? cfg.defaults[k];
+}
+function bindSettings() {
+  for (const k of ["ground_source", "surface_source", "diffraction_model", "clutter_mode", "clutter_floor", "two_ray", "veg_mode", "veg_gamma_db_m", "veg_max_db", ...["res_m", "k_factor", "max_profile_points", "max_rays", "rx_height_m", "rx_gain_dbi", "rx_cable_db", "min_margin_db", "rx_extra_loss_db", "noise_rise_db", "clutter_exclude_m"]]) {
+    $("s_" + k).addEventListener("change", (e) => {
+      const el = e.target;
+      project.settings[k] = el.type === "checkbox" ? el.checked : el.tagName === "SELECT" ? el.value : (el.value === "" ? null : +el.value);
+      if (k === "min_margin_db") { $("reqSlider").value = el.value; $("reqVal").textContent = el.value; showLayer(); setDirty(); return; }
+      changed();
+    });
+  }
+  bindRegions();
+  const test = async (which) => {
+    const sid = project.settings[which];
+    const c = map.getCenter();
+    $("testOut").textContent = `Teste ${sid} bei ${c.lat.toFixed(4)}, ${c.lng.toFixed(4)} …`;
+    const r = await api(`/api/terrain/test?source=${encodeURIComponent(sid)}&lat=${c.lat}&lon=${c.lng}&res=${project.settings.res_m}`);
+    $("testOut").textContent = JSON.stringify(r, null, 1);
+  };
+  $("btnTestGround").onclick = () => test("ground_source").catch((e) => ($("testOut").textContent = e.message));
+  $("btnTestSurface").onclick = () => test("surface_source").catch((e) => ($("testOut").textContent = e.message));
+}
+
+// ------------------------------------------------------------ compute + overlay
+function clearOverlay() { if (overlay) { map.removeLayer(overlay); overlay = null; } $("layerbox").classList.add("hidden"); }
+
+async function compute(auto = false) {
+  const act = project.stations.filter((s) => s.enabled !== false);
+  if (!act.length) { clearOverlay(); lastRun = null; status(auto ? "Keine aktive Station." : "Keine aktive Station.", auto ? "" : "err"); return; }
+  if (computing) { pending = true; return; }
+  computing = true;
+  $("btnCompute").disabled = true;
+  status(`Berechne ${act.length} Station(en) … (beim ersten Mal werden Höhendaten geladen)`, "busy");
+  const t0 = performance.now();
+  try {
+    const r = await api("/api/coverage", { method: "POST", body: project });
+    lastRun = r;
+    const sel = $("layerSel");
+    const prev = sel.value;
+    sel.innerHTML = r.layers.map((l) => `<option value="${l.id}">${esc(l.label)}</option>`).join("") +
+      r.stations.map((s) => `<option value="station:${esc(s.id)}">Nur: ${esc(s.name)}</option>`).join("");
+    if ([...sel.options].some((o) => o.value === prev)) sel.value = prev;
+    showLayer();
+    renderResults(r);
+    status(`Fertig in ${((performance.now() - t0) / 1000).toFixed(1)} s.` + (r.downsample > 1 ? ` (Anzeige um Faktor ${r.downsample} vergröbert)` : ""));
+  } catch (e) {
+    status("Fehler: " + e.message, "err");
+  } finally {
+    $("btnCompute").disabled = false; computing = false;
+    if (pending) { pending = false; compute(true); }
+  }
+}
+
+function showLayer() {
+  if (!lastRun) return;
+  const layer = $("layerSel").value || "margin";
+  const bounds = layer.startsWith("station:") ? lastRun.station_bounds[layer.slice(8)] : lastRun.bounds;
+  if (overlay) map.removeLayer(overlay);
+  const req = +project.settings.min_margin_db || 0;
+  overlay = L.imageOverlay(`/api/run/${lastRun.run_id}/${encodeURIComponent(layer)}.png?req=${req}`, bounds,
+    { opacity: +$("opacity").value, interactive: false, className: "cov" }).addTo(map);
+  $("layerbox").classList.remove("hidden");
+  renderLegend(layer);
+}
+
+function renderLegend(layer) {
+  const lg = lastRun.legend;
+  let h = "";
+  if (layer === "margin" || layer.startsWith("station:")) {
+    const req = +project.settings.min_margin_db || 0;
+    const lows = req > 0 ? [0, req, req + 6, req + 12, req + 20] : [0, 6, 12, 20, 30];
+    const b = lg.margin.map((x, i) => ({ color: x.color, from: lows[i] }));
+    h = b.map((x, i) => `<div class="li"><span class="sw" style="background:${x.color}"></span>${i + 1 < b.length ? `${x.from} … ${b[i + 1].from}` : `≥ ${x.from}`} dB${req > 0 && i === 0 ? " – unter Reserve, unsicher" : ""}</div>`).join("") +
+      `<div class="note">Pegel über Empfindlichkeit. Versorgt ab ${req} dB (Fading-/Standortreserve).</div>`;
+  } else if (layer === "overlap") {
+    h = lg.overlap.map((x, i) => `<div class="li"><span class="sw" style="background:${x.color}"></span>${x.n}${i === lg.overlap.length - 1 ? "+" : ""} Station(en)</div>`).join("") +
+      `<div class="note">zählt Stationen mit ≥ ${+project.settings.min_margin_db || 0} dB Reserve</div>`;
+  } else if (layer === "server") {
+    h = project.stations.filter((s) => s.enabled !== false).map((s) => `<div class="li"><span class="sw" style="background:${esc(s.color)}"></span>${esc(s.name)}</div>`).join("");
+  } else if (layer === "los") {
+    h = lg.los.map((x) => `<div class="li"><span class="sw" style="background:${x.color}"></span>${esc(x.label)}</div>`).join("") +
+      `<div class="note">Empfänger in ${fmt(project.settings.rx_height_m)} m Höhe</div>`;
+  }
+  $("legend").innerHTML = h;
+}
+
+function renderResults(r) {
+  $("resultInfo").innerHTML = `<p>Gesamt ${fmt(r.t_total_s)} s. Klick in die Karte zeigt Pegel und Geländeprofil.</p>` +
+    r.stations.map((s) => {
+      const st = byId(s.id) || {};
+      return `<div class="res-st" style="border-color:${esc(st.color)}">
+        <b>${esc(s.name)}</b><br>
+        Versorgt: <b>${fmt(s.area_km2, 1)} km²</b> · Sichtlinie: ${fmt(s.los_area_km2, 1)} km²<br>
+        Empfindlichkeit ${fmt(s.sensitivity_dbm)} dBm · Antenne ${fmt(s.antenna_alt_m)} m ü. NHN (Gelände ${fmt(s.ground_m)} / Oberfl. ${fmt(s.surface_m)})<br>
+        <span class="note">${s.rays} Strahlen × ${s.bins} Punkte, Schritt ${fmt(s.step_m)} m, Raster ${fmt(s.res_m)} m · ${s.cached ? "aus Cache" : `${fmt(s.t_total_s)} s (Höhendaten ${fmt(s.t_terrain_s)} s, Rechnung ${fmt(s.t_kernel_s)} s)`}</span>
+        ${(s.warnings || []).map((w) => `<div class="warn">⚠ ${esc(w)}</div>`).join("")}
+      </div>`;
+    }).join("");
+}
+
+// ------------------------------------------------------------ inspect + profile
+async function inspectAt(latlng) {
+  const pop = L.popup({ maxWidth: 360 }).setLatLng(latlng).setContent("…").openOn(map);
+  let rows = "";
+  if (lastRun) {
+    try {
+      const r = await api("/api/inspect", { method: "POST", body: { run_id: lastRun.run_id, lat: latlng.lat, lon: latlng.lng } });
+      rows = r.stations.map((s) => `<tr><td><span style="color:${esc(s.color)}">●</span> ${esc(s.name)}</td>
+        <td>${fmt(s.distance_km, 2)} km</td>
+        <td>${s.in_range ? `${fmt(s.prx_dbm)} dBm` : "außerhalb"}</td>
+        <td class="${s.in_range && s.margin_db >= (project.settings.min_margin_db || 0) ? "ok" : "no"}">${s.in_range ? (s.margin_db >= 0 ? "+" : "") + fmt(s.margin_db) + " dB" : ""}</td>
+        <td title="Sicht Empfänger / Dach">${s.in_range ? ["–", "LOS", "LOS+F"][s.los] + (s.roof_visible ? " · Dach✓" : "") : ""}</td>
+        <td><button data-prof="${esc(s.id)}">Profil</button></td></tr>`).join("");
+    } catch (e) { rows = `<tr><td>${esc(e.message)}</td></tr>`; }
+  } else {
+    rows = project.stations.map((s) => `<tr><td><span style="color:${esc(s.color)}">●</span> ${esc(s.name)}</td><td><button data-prof="${esc(s.id)}">Profil</button></td></tr>`).join("");
+  }
+  const div = document.createElement("div");
+  div.className = "popup";
+  div.innerHTML = `<div class="note">${latlng.lat.toFixed(5)}, ${latlng.lng.toFixed(5)}</div><table>${rows}</table>`;
+  div.querySelectorAll("[data-prof]").forEach((b) => b.addEventListener("click", () => showProfile(b.dataset.prof, latlng)));
+  pop.setContent(div);
+}
+
+let profLine = null;
+async function showProfile(sid, latlng) {
+  const st = byId(sid);
+  $("profile").classList.remove("hidden");
+  $("profTitle").textContent = `Profil ${st.name} → Punkt`;
+  $("profMeta").textContent = "rechne …";
+  if (profLine) map.removeLayer(profLine);
+  profLine = L.polyline([[st.lat, st.lon], [latlng.lat, latlng.lng]], { color: st.color, dashArray: "6 4", weight: 2 }).addTo(map);
+  try {
+    const p = await api("/api/profile", { method: "POST", body: { project, station_id: sid, lat: latlng.lat, lon: latlng.lng } });
+    $("profMeta").textContent = `${fmt(p.distance_m / 1000, 2)} km · Azimut ${fmt(p.azimuth_deg, 0)}° · Elevation ${fmt(p.elevation_deg, 2)}° · ` +
+      ["keine Sichtlinie", "Sichtlinie, Fresnelzone verletzt", "Fresnelzone ≥ 60 % frei"][p.los_class] +
+      (p.worst_at_m != null ? ` · engste Stelle bei ${fmt(p.worst_at_m / 1000, 2)} km (Freiraum ${fmt(p.worst_clearance_ratio * 100, 0)} % F1)` : "");
+    drawProfile(p);
+    const b = p.budget;
+    const hv = p.hata;
+    $("profBudget").innerHTML = [
+      ["Sendeleistung", `${fmt(b.tx_power_dbm)} dBm`], ["Kabel Tx", `−${fmt(b.tx_cable_db)} dB`],
+      ["Antenne Tx (Richtung)", `${fmt(b.tx_gain_dbi)} dBi`], ["Freiraumdämpfung", `−${fmt(b.fspl_db)} dB`],
+      [`Beugung (${project.settings.diffraction_model === "deygout" ? "Deygout" : "Bullington"})`, `−${fmt(b.diffraction_db)} dB`],
+      ["Bodenreflexion", `−${fmt(b.reflection_db)} dB`],
+      [`Hindernisse durchquert (${fmt(b.obstacle_len_m, 0)} m)`, `−${fmt(b.obstacle_db)} dB`],
+      [`Clutter Rx (R ${fmt(b.clutter_height_m, 0)} m)`, `−${fmt(b.clutter_db)} dB`],
+      ["Antenne Rx", `${fmt(b.rx_gain_dbi)} dBi`],
+      ["Kabel + Zusatz Rx", `−${fmt(b.rx_cable_db + b.rx_extra_db)} dB`],
+    ].map(([a, v]) => `<tr><td>${a}</td><td>${v}</td></tr>`).join("") +
+      `<tr class="sum"><td>Gesamtdämpfung Pfad</td><td>${fmt(b.total_loss_db)} dB</td></tr>
+       <tr><td title="Okumura-Hata, nur zum Vergleich${hv.valid ? "" : " – außerhalb des Gültigkeitsbereichs"}">Vergleich Hata Stadt/Vorst.${hv.valid ? "" : " ⚠"}</td><td>${fmt(hv.loss_db.urban)} / ${fmt(hv.loss_db.suburban)} dB</td></tr>` +
+      `<tr class="sum"><td>Empfangspegel</td><td>${fmt(b.prx_dbm)} dBm</td></tr>
+       <tr><td>Empfindlichkeit</td><td>${fmt(b.sensitivity_dbm)} dBm</td></tr>
+       <tr class="sum"><td>Reserve (nötig ${fmt(b.required_margin_db, 0)})</td><td style="color:${b.margin_db >= b.required_margin_db ? "var(--go)" : b.margin_db >= 0 ? "#b45309" : "var(--bad)"}">${b.margin_db >= 0 ? "+" : ""}${fmt(b.margin_db)} dB</td></tr>`;
+  } catch (e) { $("profMeta").textContent = "Fehler: " + e.message; }
+}
+
+function drawProfile(p) {
+  const cv = $("profCanvas");
+  const dpr = window.devicePixelRatio || 1;
+  const W = cv.clientWidth, H = cv.clientHeight;
+  cv.width = W * dpr; cv.height = H * dpr;
+  const g = cv.getContext("2d");
+  g.scale(dpr, dpr);
+  g.clearRect(0, 0, W, H);
+  const padL = 44, padR = 10, padT = 10, padB = 22;
+  const D = p.d[p.d.length - 1];
+  const lowF = p.los.map((v, i) => v - p.fresnel[i]);
+  const highF = p.los.map((v, i) => v + p.fresnel[i]);
+  const ymin = Math.min(...p.ground) - 5;
+  const ymax = Math.max(...p.surface, ...highF, p.tx_alt, p.rx_alt) + 5;
+  const X = (d) => padL + (d / D) * (W - padL - padR);
+  const Y = (z) => padT + (1 - (z - ymin) / (ymax - ymin)) * (H - padT - padB);
+  // grid
+  g.strokeStyle = "#e5e7eb"; g.fillStyle = "#6b7280"; g.font = "11px system-ui"; g.lineWidth = 1;
+  const stepZ = niceStep((ymax - ymin) / 5);
+  for (let z = Math.ceil(ymin / stepZ) * stepZ; z <= ymax; z += stepZ) {
+    g.beginPath(); g.moveTo(padL, Y(z)); g.lineTo(W - padR, Y(z)); g.stroke(); g.fillText(`${z.toFixed(0)} m`, 2, Y(z) + 4);
+  }
+  const stepD = niceStep(D / 8);
+  for (let d = 0; d <= D; d += stepD) { g.fillText(`${(d / 1000).toFixed(stepD < 1000 ? 1 : 0)} km`, X(d) - 12, H - 6); }
+  const poly = (arr, close) => { g.beginPath(); arr.forEach((z, i) => (i ? g.lineTo(X(p.d[i]), Y(z)) : g.moveTo(X(p.d[i]), Y(z)))); if (close) { g.lineTo(X(D), H - padB); g.lineTo(X(0), H - padB); g.closePath(); } };
+  // Fresnel zone
+  g.beginPath(); highF.forEach((z, i) => (i ? g.lineTo(X(p.d[i]), Y(z)) : g.moveTo(X(p.d[i]), Y(z))));
+  for (let i = lowF.length - 1; i >= 0; i--) g.lineTo(X(p.d[i]), Y(lowF[i]));
+  g.closePath(); g.fillStyle = "rgba(37,99,235,0.10)"; g.fill();
+  // surface + ground
+  poly(p.surface, true); g.fillStyle = "#86a873"; g.fill();
+  poly(p.ground, true); g.fillStyle = "#b08a5e"; g.fill();
+  // LOS
+  g.strokeStyle = "#2563eb"; g.lineWidth = 1.5; poly(p.los, false); g.stroke();
+  g.setLineDash([4, 3]); g.lineWidth = 1; poly(lowF, false); g.stroke(); g.setLineDash([]);
+  // endpoints
+  g.fillStyle = "#111"; g.beginPath(); g.arc(X(0), Y(p.tx_alt), 3.5, 0, 7); g.fill();
+  g.beginPath(); g.arc(X(D), Y(p.rx_alt), 3.5, 0, 7); g.fill();
+  if (p.worst_at_m != null) { g.strokeStyle = "#dc2626"; g.beginPath(); g.moveTo(X(p.worst_at_m), padT); g.lineTo(X(p.worst_at_m), H - padB); g.stroke(); }
+}
+function niceStep(x) { const p = 10 ** Math.floor(Math.log10(x)); const n = x / p; return (n < 1.5 ? 1 : n < 3.5 ? 2 : n < 7.5 ? 5 : 10) * p; }
+
+// ------------------------------------------------------------ regions + cache
+function regionBody() {
+  const area = $("r_area").value;
+  const src = $("r_source").value;
+  const res = +$("r_res").value;
+  let bbox = null, a = area;
+  if (area === "view") {
+    const b = map.getBounds(); bbox = [b.getWest(), b.getSouth(), b.getEast(), b.getNorth()];
+  } else if (area === "stations") {
+    if (!project.stations.length) throw new Error("Keine Stationen");
+    let w = 180, s = 90, e = -180, n = -90;
+    for (const st of project.stations) {
+      const r = (st.radius_km || 10) * 1000 + 1000;
+      const [n1] = destPoint(st.lat, st.lon, 0, r), [s1] = destPoint(st.lat, st.lon, 180, r);
+      const [, e1] = destPoint(st.lat, st.lon, 90, r), [, w1] = destPoint(st.lat, st.lon, 270, r);
+      w = Math.min(w, w1); e = Math.max(e, e1); s = Math.min(s, s1); n = Math.max(n, n1);
+    }
+    bbox = [w, s, e, n]; a = "view";
+  }
+  const name = $("r_name").value.trim() || `${src}_${res}m`;
+  return { source: src, area: a, res_m: res, bbox, name };
+}
+function fmtBytes(b) { return b > 1e9 ? fmt(b / 1e9, 2) + " GB" : b > 1e6 ? fmt(b / 1e6, 1) + " MB" : fmt(b / 1e3, 0) + " kB"; }
+let jobTimer = null;
+async function pollJobs() {
+  const jobs = await api("/api/regions/jobs");
+  const label = { running: "läuft", done: "fertig", done_with_errors: "fertig mit Fehlern", cancelled: "abgebrochen", error: "Fehler" };
+  $("jobs").innerHTML = jobs.map((j) => {
+    const prog = j.done + j.skipped + j.empty + j.failed;
+    const pct = j.total ? Math.round(100 * prog / j.total) : 0;
+    const kind = j.source === "nrw_dom" ? "surface" : "ground";
+    return `<div class="job"><b>${esc(j.name)}</b> · ${esc(j.source)} ${j.res_m} m · ${esc(label[j.state] || j.state)}
+      <div class="bar"><div style="width:${pct}%"></div></div>
+      ${prog}/${j.total} Kacheln (${j.skipped} vorhanden, ${j.empty} leer, ${j.failed} Fehler) · ${fmtBytes(j.bytes)} · ${fmt(j.elapsed_s / 60, 1)} min
+      ${j.state === "running" ? `<button data-cancel="${j.id}">Abbrechen</button>` : ""}
+      ${j.state.startsWith("done") && j.source !== "copernicus" ? `<button data-use="${esc(j.name)}" data-kind="${kind}">als ${kind === "surface" ? "Oberfläche" : "Gelände"} verwenden</button>` : ""}
+      ${(j.errors || []).map((e) => `<div class="warn">${esc(e)}</div>`).join("")}${j.message ? `<div class="note">${esc(j.message)}</div>` : ""}</div>`;
+  }).join("");
+  $("jobs").querySelectorAll("[data-cancel]").forEach((b) => (b.onclick = () => api(`/api/regions/cancel/${b.dataset.cancel}`, { method: "POST" }).then(pollJobs)));
+  $("jobs").querySelectorAll("[data-use]").forEach((b) => (b.onclick = async () => {
+    cfg = await api("/api/config");
+    project.settings[b.dataset.kind === "surface" ? "surface_source" : "ground_source"] = "local:" + b.dataset.use;
+    renderSettings(); setDirty(); status(`Quelle auf „Lokal: ${b.dataset.use}“ gestellt.`);
+  }));
+  const pre = jobs.filter((j) => j.preload && j.state === "running");
+  $("preloadInfo").textContent = pre.length ? "NRW-Höhendaten werden geladen: " + pre.map((j) => `${j.source} ${j.done + j.skipped + j.empty}/${j.total}`).join(", ") : "";
+  clearTimeout(jobTimer);
+  if (jobs.some((j) => j.state === "running")) jobTimer = setTimeout(() => pollJobs().catch(() => {}), 4000);
+  else if (jobs.length) { cfg = await api("/api/config"); renderSettings(); }
+}
+function bindRegions() {
+  $("btnPlan").onclick = async () => {
+    try {
+      const b = regionBody();
+      const p = await api("/api/regions/plan", { method: "POST", body: b });
+      $("planOut").textContent = `${p.n_tiles} Kacheln${p.tile_km ? ` à ${p.tile_km} km` : ""}, ca. ${fmt(p.est_mb, 0)} MB → Ordner data/dem/${b.name}. ${p.note || ""}`;
+    } catch (e) { $("planOut").textContent = e.message; }
+  };
+  $("btnDownload").onclick = async () => {
+    try {
+      const b = regionBody();
+      if (b.area === "nrw" && !confirm("Ganz NRW laden? Das kann je nach Auflösung Stunden dauern und mehrere GB belegen. Der Download lässt sich abbrechen und später fortsetzen.")) return;
+      await api("/api/regions/start", { method: "POST", body: b });
+      pollJobs();
+    } catch (e) { $("planOut").textContent = e.message; }
+  };
+  $("btnCache").onclick = async () => {
+    const c = await api("/api/cache");
+    $("cacheOut").textContent = "Cache: " + Object.entries(c.cache).map(([k, v]) => `${k} ${fmtBytes(v)}`).join(", ") +
+      "\nOffline-Ordner: " + (Object.entries(c.dem).map(([k, v]) => `${k} (${v.files} Dateien, ${fmtBytes(v.bytes)})`).join(", ") || "keine");
+  };
+  $("btnCacheClear").onclick = async () => {
+    if (!confirm("Berechnungs- und Gitter-Cache leeren? Downloads und Offline-Ordner bleiben.")) return;
+    await api("/api/cache/clear", { method: "POST", body: { parts: ["terrain", "coverage"] } });
+    $("btnCache").click();
+  };
+  pollJobs().catch(() => {});
+}
+
+// ------------------------------------------------------------ ui wiring
+function activateTab(t) {
+  document.querySelectorAll(".tabs button").forEach((b) => b.classList.toggle("active", b.dataset.tab === t));
+  document.querySelectorAll(".tab").forEach((s) => s.classList.toggle("active", s.id === "tab-" + t));
+}
+
+function setPlacing(v) {
+  placing = v;
+  $("placing").classList.toggle("hidden", !v);
+  $("map").classList.toggle("placing", v);
+}
+
+function wire() {
+  document.querySelectorAll(".tabs button").forEach((b) => (b.onclick = () => activateTab(b.dataset.tab)));
+  $("btnAdd").onclick = () => setPlacing(!placing);
+  $("btnCompute").onclick = compute;
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape") setPlacing(false); });
+  map.on("click", (e) => {
+    if (placing) {
+      const st = defaultStation(e.latlng.lat, e.latlng.lng);
+      project.stations.push(st); drawStation(st); setPlacing(false); select(st.id); changed();
+      return;
+    }
+    inspectAt(e.latlng);
+  });
+  $("layerSel").onchange = showLayer;
+  $("opacity").oninput = () => overlay && overlay.setOpacity(+$("opacity").value);
+  $("reqSlider").oninput = () => { $("reqVal").textContent = $("reqSlider").value; };
+  $("reqSlider").onchange = () => {
+    project.settings.min_margin_db = +$("reqSlider").value;
+    $("s_min_margin_db").value = $("reqSlider").value;
+    setDirty(); showLayer();
+  };
+  $("autoCalc").onchange = () => { if ($("autoCalc").checked) scheduleAuto(); };
+  $("profClose").onclick = () => { $("profile").classList.add("hidden"); if (profLine) { map.removeLayer(profLine); profLine = null; } };
+  $("projName").onchange = () => { project.name = $("projName").value; setDirty(); };
+  $("btnSave").onclick = () => saveProject().catch((e) => status("Fehler: " + e.message, "err"));
+  $("btnNew").onclick = () => { if (!dirty || confirm("Ungespeicherte Änderungen verwerfen?")) newProject(); };
+  $("projList").onchange = async (e) => {
+    const id = e.target.value; e.target.value = "";
+    if (!id || (dirty && !confirm("Ungespeicherte Änderungen verwerfen?"))) return;
+    try { loadProject(await api(`/api/projects/${id}`)); } catch (er) { status("Fehler: " + er.message, "err"); }
+  };
+  $("btnMore").onclick = () => $("moreMenu").classList.toggle("hidden");
+  $("btnExport").onclick = () => {
+    $("moreMenu").classList.add("hidden");
+    project.name = $("projName").value;
+    const blob = new Blob([JSON.stringify(project, null, 1)], { type: "application/json" });
+    const a = document.createElement("a"); a.href = URL.createObjectURL(blob);
+    a.download = (project.name || "projekt").replace(/[^\w\-äöüÄÖÜß ]/g, "_") + ".json"; a.click();
+  };
+  $("btnImport").onclick = () => { $("moreMenu").classList.add("hidden"); $("fileImport").click(); };
+  $("fileImport").onchange = async (e) => {
+    const f = e.target.files[0]; if (!f) return;
+    try { const p = JSON.parse(await f.text()); p.id = null; loadProject(p); setDirty(); } catch (er) { status("Import fehlgeschlagen: " + er.message, "err"); }
+    e.target.value = "";
+  };
+  $("btnDelete").onclick = async () => {
+    $("moreMenu").classList.add("hidden");
+    if (!project.id || !confirm(`Projekt „${project.name}“ auf dem Server löschen?`)) return;
+    await api(`/api/projects/${project.id}`, { method: "DELETE" }); newProject(); refreshProjectList();
+  };
+  window.addEventListener("beforeunload", (e) => { if (dirty) { e.preventDefault(); e.returnValue = ""; } });
+  window.addEventListener("resize", () => { /* profile redraw on next open */ });
+}
+
+async function init() {
+  cfg = await api("/api/config");
+  $("ver").textContent = cfg.version ? "v" + cfg.version : "";
+  wire(); bindSettings();
+  newProject();
+  refreshProjectList().catch(() => {});
+  status("Bereit. „＋ Station platzieren“, dann „▶ Berechnen“.");
+}
+init().catch((e) => status("Start fehlgeschlagen: " + e.message, "err"));
+})();

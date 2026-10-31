@@ -1,0 +1,26 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements*.txt
+      - run: pip install -r requirements-dev.txt
+      - run: python -m pytest -q
+      - name: JavaScript-Syntax prüfen
+        run: node --check app/static/app.js
+      - name: Unraid-Template prüfen (wohlgeformtes XML)
+        run: python -c "import xml.etree.ElementTree as E,glob; [E.parse(f) for f in glob.glob('templates/*.xml')+['ca_profile.xml']]"
