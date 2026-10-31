@@ -87,3 +87,18 @@ def test_api_links_and_calibrate(mocked, project):
         rows = [x for x in res["rows"] if "delta_db" in x]
         assert rows and all(abs(x["measured_snr"] - x["predicted_snr"] - x["delta_db"]) < 0.11 for x in rows)
         assert res["noise_dbm"] < -110
+
+
+def test_links_have_avg_snr_and_overrides(mocked):
+    corescope._sync()
+    out = corescope.merge_links(PK, REACH, NB)
+    assert out["v"] == corescope.LINKS_VERSION
+    assert any(l.get("snr_any") is not None and l["snr"] is None for l in out["links"])  # indirekt, nicht gemessen
+    with TestClient(app) as c:
+        assert c.put(f"/api/corescope/overrides/{PK}", json={"height_m": 35}).status_code == 401
+        c.post("/api/login", json={"user": "admin", "password": "test-pw"})
+        assert c.put(f"/api/corescope/overrides/{PK}", json={"height_m": 35, "gain_dbi": 5.8}).status_code == 200
+        assert c.get("/api/corescope/overrides").json()[PK] == {"height_m": 35.0, "gain_dbi": 5.8}
+        assert c.put(f"/api/corescope/overrides/{PK}", json={"height_m": 9999}).status_code == 400
+        assert c.put(f"/api/corescope/overrides/{PK}", json={}).status_code == 200
+        assert PK not in c.get("/api/corescope/overrides").json()

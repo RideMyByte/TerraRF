@@ -288,6 +288,19 @@ async def cs_links(request: Request, pk: str, refresh: bool = False):
         _err(e, 502 if not isinstance(e, ValueError) else 400)
 
 
+@app.get("/api/corescope/overrides", dependencies=READ)
+def cs_overrides():
+    return corescope.overrides()
+
+
+@app.put("/api/corescope/overrides/{pk}", dependencies=ADMIN)
+def cs_set_override(pk: str, body: dict = Body(...)):
+    try:
+        return {"pk": pk.lower(), "values": corescope.set_override(pk.lower(), body)}
+    except (ValueError, TypeError) as e:
+        _err(e)
+
+
 @app.post("/api/corescope/calibrate")
 async def cs_calibrate(request: Request, body: dict = Body(...)):
     project = _project_for(request, body)

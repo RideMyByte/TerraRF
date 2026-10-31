@@ -81,7 +81,7 @@ def datenschutz_body():
                 "<li>Geobasis NRW (Luftbild), Bezirksregierung Köln</li></ul>")
     cs = ""
     if corescope.enabled():
-        cs = ("<h2>MeshCore-Netzdaten</h2><p>Der Tab „Netz“ zeigt öffentlich abrufbare Daten eines MeshCore-Analysedienstes "
+        cs = ("<h2>MeshCore-Netzdaten</h2><p>Der Reiter „MeshCore“ zeigt öffentlich abrufbare Daten eines MeshCore-Analysedienstes "
               f"(<a href='{html.escape(corescope.BASE)}'>{html.escape(corescope.BASE)}</a>): Knotennamen, Standorte, wie sie "
               "die Knoten selbst aussenden, und Verbindungsstatistiken. Diese Daten ruft der Server ab; Ihr Browser "
               "verbindet sich nicht mit dem Dienst.</p>")

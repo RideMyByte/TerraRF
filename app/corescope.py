@@ -40,6 +40,9 @@ os.makedirs(DIR, exist_ok=True)
 NODES_FILE = os.path.join(DIR, "nodes.json")
 PK = re.compile(r"^[0-9a-f]{64}$")
 ROLES = ("repeater", "room")
+LINKS_VERSION = 2
+OVERRIDES_FILE = os.path.join(DIR, "overrides.json")
+_ovr_lock = threading.Lock()
 
 _state = {"syncing": False, "error": None, "progress": None}
 _lock = threading.Lock()
@@ -186,7 +189,9 @@ def links(pk, refresh=False):
     p = _links_path(pk)
     if not refresh and os.path.exists(p) and time.time() - os.path.getmtime(p) < LINKS_TTL_S:
         with open(p) as f:
-            return json.load(f)
+            d = json.load(f)
+        if d.get("v") == LINKS_VERSION:
+            return d
     if not enabled():
         if os.path.exists(p):
             with open(p) as f:
@@ -225,7 +230,20 @@ def merge_links(pk, reach, nb):
             meas[q] = (float(o["avg_snr"]), int(o.get("count") or 0), o)
     for x in nb.get("neighbors") or []:
         q = str(x.get("pubkey") or "").lower()
-        if PK.match(q) and x.get("avg_snr") is not None and q in [str(v).lower() for v in x.get("observers") or []]:
+        if not PK.match(q):
+            continue
+        e = L.get(q)
+        if e is None:  # nur aus /neighbors bekannt -> Standort aus der Knotenliste
+            kn = node(q)
+            if kn:
+                e = L[q] = {"pk": q, "name": x.get("name") or kn["name"], "role": x.get("role") or kn.get("role"),
+                            "lat": kn["lat"], "lon": kn["lon"], "we_hear": 0, "they_hear": 0, "bidir": False,
+                            "distance_km": x.get("distance_km"), "snr": None, "snr_n": 0}
+        if e is not None:
+            e["count"] = int(x.get("count") or 0)
+            if x.get("avg_snr") is not None:
+                e["snr_any"] = round(float(x["avg_snr"]), 2)  # Mittel über alle Observer – nicht die Strecke
+        if x.get("avg_snr") is not None and q in [str(v).lower() for v in x.get("observers") or []]:
             meas[q] = (float(x["avg_snr"]), int(x.get("count") or 0), x)  # neuer/vollständiger als reach
     for q, (snr, cnt, src) in meas.items():
         e = L.get(q)
@@ -240,6 +258,43 @@ def merge_links(pk, reach, nb):
                         "we_hear": 0, "they_hear": 0, "bidir": False, "distance_km": dist or src.get("distance_km")}
         e["snr"] = round(snr, 2)
         e["snr_n"] = cnt
-    return {"pk": pk, "name": me.get("name"), "lat": me.get("lat"), "lon": me.get("lon"),
+    for e in L.values():
+        e.setdefault("count", 0)
+        e.setdefault("snr_any", e.get("snr"))
+    return {"v": LINKS_VERSION, "pk": pk, "name": me.get("name"), "lat": me.get("lat"), "lon": me.get("lon"),
             "fetched_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
             "window_days": (reach.get("window") or {}).get("days"), "links": list(L.values())}
+
+
+# ---------------------------------------------------------------- eigene Angaben je Repeater (ohne Station)
+def overrides():
+    try:
+        with open(OVERRIDES_FILE) as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return {}
+
+
+def set_override(pk, data):
+    """Höhe/Gewinn/Kabel für einen Repeater, der nicht als Station angelegt ist (für den Abgleich)."""
+    if not PK.match(pk):
+        raise ValueError("ungültiger Schlüssel")
+    clean = {}
+    for k, lo, hi in (("height_m", 0, 400), ("gain_dbi", -10, 40), ("cable_db", 0, 20)):
+        v = data.get(k)
+        if v not in (None, ""):
+            v = float(v)
+            if not lo <= v <= hi:
+                raise ValueError(f"{k} außerhalb {lo}…{hi}")
+            clean[k] = v
+    with _ovr_lock:
+        o = overrides()
+        if clean:
+            o[pk] = clean
+        else:
+            o.pop(pk, None)
+        tmp = OVERRIDES_FILE + ".tmp"
+        with open(tmp, "w") as f:
+            json.dump(o, f)
+        os.replace(tmp, OVERRIDES_FILE)
+    return clean

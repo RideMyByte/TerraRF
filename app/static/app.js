@@ -92,6 +92,7 @@ function setupBasemaps(proxy) {
   L.control.layers(base, overlays, { position: "topright" }).addTo(map);
 }
 L.control.scale({ imperial: false }).addTo(map);
+if (location.hash === "#debug") window.trfMap = map;  // für automatische Tests
 
 function stationIcon(st) {
   const c = st.color || "#3388ff";
@@ -116,7 +117,7 @@ function drawStation(st) {
   if (azLines[st.id]) { map.removeLayer(azLines[st.id]); delete azLines[st.id]; }
   if (st.enabled === false) return;  // deactivated stations are not shown on the map
   const m = L.marker([st.lat, st.lon], { draggable: isAdmin, icon: stationIcon(st), title: st.name });
-  m.on("click", (e) => { L.DomEvent.stopPropagation(e); select(st.id); });
+  m.on("click", (e) => { L.DomEvent.stopPropagation(e); select(st.id); csStationClicked(st); });
   m.on("dragend", () => {
     const ll = m.getLatLng();
     st.lat = +ll.lat.toFixed(6); st.lon = +ll.lng.toFixed(6);
@@ -304,17 +305,29 @@ function renderEditor() {
       <label>Neigung, + = abwärts (°)<input type="number" step="0.5" data-k="antenna.tilt_deg" value="${a.tilt_deg ?? 0}"></label>
       <label>Vor/Rück (dB)<input type="number" step="1" data-k="antenna.fb_db" value="${a.fb_db ?? 25}"></label>
     </div>
-    ${st.corescope_pk ? `<h4>MeshCore-Netz</h4><div class="calc">Verknüpft mit CoreScope-Knoten <code>${esc(st.corescope_pk.slice(0, 8))}…</code>
-      <div class="row tight"><button id="btnCsLinks">Verbindungen</button><button id="btnCal">Mit Messwerten vergleichen</button></div></div>` : ""}
+    ${st.corescope_pk ? `<h4>MeshCore</h4><div class="calc">Verknüpft mit <b>${esc(csNode(st.corescope_pk)?.name || st.corescope_pk.slice(0, 8) + "…")}</b>
+      <div class="row tight"><button id="btnCsLinks">Nachbarn zeigen</button><button id="btnCal">Mit Messwerten vergleichen</button></div>
+      ${isAdmin ? `<button id="btnCsUnlink" class="danger" style="border:0;padding:0">Verknüpfung lösen</button>` : ""}</div>`
+    : cfg.corescope?.enabled && isAdmin ? `<h4>MeshCore</h4><label>Mit Repeater verknüpfen (Umkreis 3 km)<select id="csLinkSel">
+        <option value="">– nicht verknüpft –</option>${csNearby(st).map(({ n, d }) => `<option value="${n.pk}">${esc(n.name)} (${fmt(d * 1000, 0)} m)</option>`).join("")}</select></label>` : ""}
     <h4>Berechnung</h4>
     <div class="grid2">
       <label>Radius (km)<input type="number" step="0.5" min="0.5" max="80" data-k="radius_km" value="${st.radius_km}"></label>
     </div>
     <label>Notizen<textarea data-k="notes" rows="2" style="width:100%">${esc(st.notes || "")}</textarea></label>`;
 
+  if ($("csLinkSel")) $("csLinkSel").onchange = (e) => {
+    if (!e.target.value) return;
+    if (csStationOf(e.target.value)) { status("Dieser Repeater ist schon mit einer anderen Station verknüpft.", "err"); e.target.value = ""; return; }
+    st.corescope_pk = e.target.value; changed(); csDrawNodes(); renderEditor();
+  };
+  if ($("btnCsUnlink")) $("btnCsUnlink").onclick = () => {
+    if (csSelPk === st.corescope_pk) csDeselect();
+    delete st.corescope_pk; changed(); csDrawNodes(); renderEditor();
+  };
   if (st.corescope_pk && $("btnCal")) {
     $("btnCal").onclick = () => csCalibrate(st);
-    $("btnCsLinks").onclick = () => csSelect(st.corescope_pk);
+    $("btnCsLinks").onclick = () => { if (csSelPk !== st.corescope_pk) csSelect(st.corescope_pk, { fromStation: true }); };
     if (!cfg.corescope?.enabled) { $("btnCal").disabled = true; $("btnCal").title = "RFP_CORESCOPE_URL nicht gesetzt"; }
   }
   el.querySelectorAll("[data-k]").forEach((inp) => {
@@ -794,11 +807,10 @@ function bindRegions() {
   pollJobs().catch(() => {});
 }
 
-// ------------------------------------------------------------ CoreScope (MeshCore-Netz)
+// ------------------------------------------------------------ MeshCore (CoreScope)
 const csRenderer = L.canvas({ padding: 0.3 });
 const csLayer = L.layerGroup();
-const csLinkLayer = L.layerGroup().addTo(map);
-let csNodes = [], csSelPk = null, csLinks = null, csTimer = null;
+let csNodes = [], csSelPk = null, csLinks = null, csTimer = null, csSelMarker = null, csOvr = {}, csLoading = null;
 
 function ageDays(ts) { const t = Date.parse(ts || ""); return Number.isNaN(t) ? 1e9 : (Date.now() - t) / 864e5; }
 function csAgeColor(d) { return d <= 1 ? "#16a34a" : d <= 7 ? "#d97706" : "#9ca3af"; }
@@ -810,6 +822,8 @@ function fmtAgo(ts) {
   if (d < 1) return `vor ${fmt(d * 24, 0)} h`;
   return `vor ${fmt(d, 0)} Tagen`;
 }
+const csNode = (pk) => csNodes.find((x) => x.pk === pk);
+const csStationOf = (pk) => (project?.stations || []).find((s) => s.corescope_pk === pk);
 
 async function csRefreshStatus() {
   const s = await api("/api/corescope/status");
@@ -821,23 +835,67 @@ async function csRefreshStatus() {
 }
 
 async function csLoadNodes() {
-  const r = await api("/api/corescope/nodes");
-  csNodes = r.nodes || [];
+  const [r, o] = await Promise.all([api("/api/corescope/nodes"), api("/api/corescope/overrides").catch(() => ({}))]);
+  csNodes = r.nodes || []; csOvr = o || {};
   csDrawNodes();
+}
+
+/** Nachbarn des gewählten Repeaters nach den Filtern im Tab. Dieselbe Auswahl gilt für Karte und Abgleich. */
+function csVisibleLinks() {
+  if (!csLinks) return [];
+  const min = +$("csMin").value, bidir = $("csBidir").checked, keepMeas = $("csMeas").checked;
+  return csLinks.links.filter((l) => {
+    if (keepMeas && l.snr != null) return true;
+    const obs = bidir ? Math.min(l.we_hear, l.they_hear) : Math.max(l.we_hear, l.they_hear, l.count || 0, l.snr_n || 0);
+    return (!bidir || l.bidir) && obs >= min;
+  });
+}
+
+function csSnrText(l) {
+  if (l.snr != null) return `SNR ${fmt(l.snr, 1)} dB gemessen (${l.snr_n} Pakete)`;
+  if (l.snr_any != null) return `Ø-SNR ${fmt(l.snr_any, 1)} dB (indirekt, über andere Observer)`;
+  return "kein SNR";
+}
+
+function csSelIcon(loading, ring) {
+  return L.divIcon({ className: "", iconSize: [30, 30], iconAnchor: [15, 15],
+    html: `<div class="cs-sel${ring ? " ring" : ""}${loading ? " loading" : ""}"></div>` });
 }
 
 function csDrawNodes() {
   csLayer.clearLayers();
+  if (csSelMarker) { map.removeLayer(csSelMarker); csSelMarker = null; }
+  if (csSelPk) {
+    // Auswahlmodus: gewählter Repeater groß, nur seine Nachbarn, eingefärbt nach SNR, keine Linien
+    const st = csStationOf(csSelPk);
+    const n = csNode(csSelPk) || (csLinks && { lat: csLinks.lat, lon: csLinks.lon, name: csLinks.name });
+    const pos = st ? [st.lat, st.lon] : n && n.lat != null ? [n.lat, n.lon] : null;
+    if (pos) {
+      csSelMarker = L.marker(pos, { icon: csSelIcon(csLoading === csSelPk, !!st), zIndexOffset: st ? -100 : 1000, interactive: !st,
+        title: (st && st.name) || (n && n.name) || "" });
+      if (!st) csSelMarker.on("click", (e) => { L.DomEvent.stopPropagation(e); csSelect(csSelPk); });
+      csSelMarker.addTo(map);
+    }
+    for (const l of csVisibleLinks()) {
+      if (csStationOf(l.pk)) continue;  // als Station eingetragen: deren Marker steht schon da
+      const s = l.snr ?? l.snr_any, meas = l.snr != null;
+      const m = L.circleMarker([l.lat, l.lon], { renderer: csRenderer, radius: meas ? 7 : 6, weight: meas ? 2.5 : 1.5,
+        color: meas ? "#111827" : "#fff", dashArray: meas ? null : "3 2", fillColor: s != null ? snrColor(s) : "#9ca3af", fillOpacity: 0.95 });
+      m.bindTooltip(`${esc(l.name || l.pk.slice(0, 8))} · ${fmt(l.distance_km, 1)} km<br>${csSnrText(l)}<br>hört uns ${l.they_hear}× · wir hören ${l.we_hear}×`, { direction: "top" });
+      m.on("click", (e) => { L.DomEvent.stopPropagation(e); csSelect(l.pk); });
+      csLayer.addLayer(m);
+    }
+    csLayer.addTo(map);
+    return;
+  }
   if (!$("csShow").checked) { map.removeLayer(csLayer); return; }
   const maxAge = +$("csAge").value, role = $("csRole").value;
-  const linked = new Set((project?.stations || []).map((s) => s.corescope_pk).filter(Boolean));
   for (const n of csNodes) {
     const d = ageDays(n.last_seen);
     if (maxAge && d > maxAge) continue;
     if (role && n.role !== role) continue;
-    if (linked.has(n.pk)) continue;  // als Station übernommen -> Stationsmarker reicht
-    const m = L.circleMarker([n.lat, n.lon], { renderer: csRenderer, radius: n.pk === csSelPk ? 7 : 5, weight: n.pk === csSelPk ? 3 : 1,
-      color: n.pk === csSelPk ? "#111827" : "#fff", fillColor: csAgeColor(d), fillOpacity: 0.95 });
+    if (csStationOf(n.pk)) continue;
+    const m = L.circleMarker([n.lat, n.lon], { renderer: csRenderer, radius: 5, weight: 1, color: "#fff", fillColor: csAgeColor(d), fillOpacity: 0.95 });
     m.bindTooltip(esc(n.name), { direction: "top" });
     m.on("click", (e) => { L.DomEvent.stopPropagation(e); csSelect(n.pk); });
     csLayer.addLayer(m);
@@ -845,71 +903,123 @@ function csDrawNodes() {
   csLayer.addTo(map);
 }
 
-async function csSelect(pk) {
-  csSelPk = pk; csLinks = null;
-  activateTab("net");
-  if ($("csShow").checked) csDrawNodes();
-  const n = csNodes.find((x) => x.pk === pk) || {};
-  $("csSel").innerHTML = `<h3>${esc(n.name || pk.slice(0, 8))}</h3><div class="note">lade Verbindungen …</div>`;
-  try { csLinks = await api(`/api/corescope/links/${pk}`); }
-  catch (e) { $("csSel").innerHTML = `<h3>${esc(n.name || "")}</h3><div class="warn">Fehler: ${esc(e.message)}</div>`; return; }
-  csRenderSel(n);
-  csDrawLinks();
-}
-
-function csFilteredLinks() {
-  if (!csLinks) return [];
-  const min = +$("csMin").value, bidir = $("csBidir").checked;
-  return csLinks.links.filter((l) => l.snr != null ||
-    (bidir ? l.bidir && Math.min(l.we_hear, l.they_hear) >= min : Math.max(l.we_hear, l.they_hear) >= min));
-}
-
-function csDrawLinks() {
-  csLinkLayer.clearLayers();
-  if (!csLinks || csLinks.lat == null) return;
-  const a = [csLinks.lat, csLinks.lon];
-  const ls = csFilteredLinks().sort((x, y) => (x.snr != null) - (y.snr != null));
-  for (const l of ls) {
-    const meas = l.snr != null;
-    const cnt = Math.max(l.we_hear, l.they_hear);
-    const pl = L.polyline([a, [l.lat, l.lon]], meas
-      ? { color: snrColor(l.snr), weight: 4, opacity: 0.9 }
-      : { color: "#6b7280", weight: Math.min(4, 1 + Math.log10(cnt + 1)), opacity: 0.55, dashArray: "5 5" });
-    pl.bindTooltip(`${esc(l.name || l.pk.slice(0, 8))} · ${fmt(l.distance_km, 1)} km<br>` +
-      (meas ? `<b>SNR ${fmt(l.snr, 1)} dB gemessen</b> (${l.snr_n} Pakete)<br>` : "") +
-      `hört uns ${l.they_hear}× · wir hören ${l.we_hear}×${l.bidir ? "" : " (einseitig)"}`, { sticky: true });
-    csLinkLayer.addLayer(pl);
+/** Repeater wählen (lädt Nachbarn) bzw. abwählen, wenn er schon gewählt ist. */
+async function csSelect(pk, { fromStation = false } = {}) {
+  if (!cfg.corescope?.enabled) return;
+  if (csSelPk === pk) { csDeselect(); return; }
+  csSelPk = pk; csLinks = null; csLoading = pk;
+  csDrawNodes(); csRenderSel();
+  if (!fromStation) csPopup();
+  status("MeshCore: lade Nachbarn …", "busy");
+  try {
+    const r = await api(`/api/corescope/links/${pk}`);
+    if (csSelPk !== pk) return;
+    csLinks = r;
+    status(`MeshCore: ${csVisibleLinks().length} Nachbarn (nach Filter).`);
+  } catch (e) {
+    if (csSelPk === pk) status("MeshCore: " + e.message, "err");
+  } finally {
+    if (csLoading === pk) csLoading = null;
   }
+  if (csSelPk !== pk) return;
+  csDrawNodes(); csRenderSel(); if (!fromStation) csPopup();
 }
 
-function csRenderSel(n) {
-  const L_ = csLinks.links, meas = L_.filter((l) => l.snr != null).sort((x, y) => y.snr - x.snr);
-  const st = (project?.stations || []).find((s) => s.corescope_pk === csLinks.pk);
-  $("csSel").innerHTML = `<h3>${esc(csLinks.name || n.name || "")}</h3>
-    <div class="note">${esc(n.role || "")} · zuletzt gehört ${esc(fmtAgo(n.last_seen))} · ${L_.length} Verbindungen, ${L_.filter((l) => l.bidir).length} beidseitig, ${meas.length} mit gemessenem SNR (Fenster ${csLinks.window_days ?? "?"} Tage)</div>
-    <div class="row tight">
-      ${st ? `<button id="csGoSt">Station „${esc(st.name)}“ öffnen</button>` : `<button id="csAdopt" class="admin-only primary">Als Station übernehmen</button>`}
-      <button id="csClear">Ausblenden</button></div>
-    ${meas.length ? `<table class="mini"><tr><th>Partner (hört direkt)</th><th>km</th><th>SNR</th></tr>${meas.map((l) =>
-      `<tr><td>${esc(l.name || l.pk.slice(0, 8))}</td><td>${fmt(l.distance_km, 1)}</td><td style="color:${snrColor(l.snr)}">${fmt(l.snr, 1)}</td></tr>`).join("")}</table>` : ""}`;
-  $("csClear").onclick = () => { csSelPk = null; csLinks = null; csLinkLayer.clearLayers(); $("csSel").innerHTML = ""; csDrawNodes(); };
-  if (st) $("csGoSt").onclick = () => { activateTab("stations"); select(st.id, true); };
-  else if (isAdmin) $("csAdopt").onclick = () => csAdopt(n);
+function csDeselect() {
+  csSelPk = null; csLinks = null; csLoading = null;
+  map.closePopup(); csDrawNodes(); csRenderSel();
+}
+
+function csActionsHtml(pk) {
+  const st = csStationOf(pk), o = csOvr[pk] || {};
+  if (!isAdmin) return st ? `<button data-cs="open">Station „${esc(st.name)}“ öffnen</button>` : "";
+  return `${st ? `<button data-cs="open">Station „${esc(st.name)}“ öffnen</button>` : `<button data-cs="adopt" class="primary">Als Station hinzufügen</button>`}
+    ${st ? "" : `<div class="cs-ovr"><span>Für den Abgleich:</span>
+      <label>Höhe m<input data-ovr="height_m" type="number" step="1" value="${o.height_m ?? ""}" placeholder="?"></label>
+      <label>Gewinn dBi<input data-ovr="gain_dbi" type="number" step="0.5" value="${o.gain_dbi ?? ""}" placeholder="?"></label>
+      <button data-cs="ovr">Speichern</button></div>`}`;
+}
+
+function csWireActions(root, pk) {
+  root.querySelectorAll("[data-cs]").forEach((b) => b.onclick = async (e) => {
+    L.DomEvent.stopPropagation(e);
+    const n = csNode(pk) || {};
+    if (b.dataset.cs === "open") { const st = csStationOf(pk); activateTab("stations"); select(st.id, true); }
+    else if (b.dataset.cs === "adopt") csAdopt({ ...n, pk });
+    else if (b.dataset.cs === "ovr") {
+      const body = {};
+      root.querySelectorAll("[data-ovr]").forEach((i) => { body[i.dataset.ovr] = i.value === "" ? null : +i.value; });
+      try {
+        const r = await api(`/api/corescope/overrides/${pk}`, { method: "PUT", body });
+        if (Object.keys(r.values).length) csOvr[pk] = r.values; else delete csOvr[pk];
+        status(`Angaben für ${n.name || pk.slice(0, 8)} gespeichert.`);
+      } catch (er) { status("Fehler: " + er.message, "err"); }
+    }
+  });
+}
+
+function csPopup() {
+  const pk = csSelPk; if (!pk) return;
+  const n = csNode(pk) || (csLinks && { name: csLinks.name, lat: csLinks.lat, lon: csLinks.lon }) || {};
+  if (n.lat == null) return;
+  const cnt = csLinks ? `${csVisibleLinks().length} Nachbarn (nach Filter)` : `<span class="cs-wait">Nachbarn werden geladen …</span>`;
+  const el = document.createElement("div");
+  el.className = "popup";
+  el.innerHTML = `<b>${esc(n.name || pk.slice(0, 8))}</b><br><span class="note">${esc(n.role || "")} · zuletzt gehört ${esc(fmtAgo(n.last_seen))}</span><br>${cnt}
+    <div class="cs-act">${csActionsHtml(pk)}<button data-cs="close">Abwählen</button></div>`;
+  csWireActions(el, pk);
+  el.querySelector('[data-cs="close"]').onclick = (e) => { L.DomEvent.stopPropagation(e); csDeselect(); };
+  L.popup({ autoPan: true, closeButton: true, offset: [0, -8] }).setLatLng([n.lat, n.lon]).setContent(el).openOn(map);
+}
+
+function csRenderSel() {
+  const box = $("csSel"); if (!box) return;
+  if (!csSelPk) { box.innerHTML = `<p class="note">Repeater auf der Karte anklicken, um seine Nachbarn zu sehen. Erneut anklicken hebt die Auswahl auf.</p>`; return; }
+  const n = csNode(csSelPk) || {};
+  if (!csLinks) { box.innerHTML = `<h3>${esc(n.name || csSelPk.slice(0, 8))}</h3><div class="note cs-wait">lade Nachbarn …</div>`; return; }
+  const vis = csVisibleLinks().sort((a, b) => ((b.snr ?? b.snr_any ?? -99) - (a.snr ?? a.snr_any ?? -99)));
+  box.innerHTML = `<h3>${esc(csLinks.name || n.name || "")}</h3>
+    <div class="note">${esc(n.role || "")} · zuletzt gehört ${esc(fmtAgo(n.last_seen))} · ${csLinks.links.length} Verbindungen bekannt, ${vis.length} nach Filter (Fenster ${csLinks.window_days ?? "?"} Tage)</div>
+    <div class="cs-act">${csActionsHtml(csSelPk)}<button data-cs="close">Abwählen</button></div>
+    ${vis.length ? `<table class="mini cs-nb"><tr><th>Nachbar</th><th>km</th><th title="gemessen bzw. Mittel über Observer">SNR</th></tr>${vis.map((l) =>
+      `<tr data-pk="${l.pk}"><td>${esc(l.name || l.pk.slice(0, 8))}${csStationOf(l.pk) ? " 📍" : ""}</td><td>${fmt(l.distance_km, 1)}</td>
+       <td style="color:${snrColor(l.snr ?? l.snr_any ?? -99)}">${l.snr != null ? `<b>${fmt(l.snr, 1)}</b>` : l.snr_any != null ? `<i>${fmt(l.snr_any, 1)}</i>` : "–"}</td></tr>`).join("")}</table>
+      <p class="note">Fett: gemessen (Partner hat direkt gehört). Kursiv: Mittel über andere Observer, sagt über die Strecke wenig.</p>` : ""}`;
+  csWireActions(box, csSelPk);
+  box.querySelector('[data-cs="close"]').onclick = () => csDeselect();
+  box.querySelectorAll("tr[data-pk]").forEach((tr) => tr.onclick = () => csSelect(tr.dataset.pk));
 }
 
 function csAdopt(n) {
+  const ex = csStationOf(n.pk);
+  if (ex) { activateTab("stations"); select(ex.id, true); return; }
+  const o = csOvr[n.pk] || {};
   const st = defaultStation(n.lat, n.lon);
-  Object.assign(st, { name: n.name || st.name, corescope_pk: n.pk, height_m: 10, height_ref: "ground",
+  Object.assign(st, { name: n.name || st.name, corescope_pk: n.pk, height_m: o.height_m ?? 10, height_ref: "ground",
     notes: `Aus CoreScope übernommen (${cfg.corescope.url}). Höhe, Antenne und Leistung sind Annahmen – bitte anpassen.` });
-  project.stations.push(st); drawStation(st); csDrawNodes();
+  if (o.gain_dbi != null) st.antenna = { ...st.antenna, gain_dbi: o.gain_dbi, preset: "custom" };
+  project.stations.push(st); drawStation(st); map.closePopup(); csDrawNodes();
   activateTab("stations"); select(st.id); changed();
   status(`„${st.name}“ übernommen – Höhe/Antenne/Leistung prüfen, dann speichern.`);
+}
+
+/** Klick auf eine Station: verknüpfte zeigen ihre Repeater-Nachbarn; erneuter Klick oder andere Station blendet aus. */
+function csStationClicked(st) {
+  if (!cfg.corescope?.enabled) return;
+  if (st.corescope_pk) csSelect(st.corescope_pk, { fromStation: true });
+  else if (csSelPk) csDeselect();
+}
+
+/** Liste der nächstgelegenen Knoten für die manuelle Verknüpfung im Stations-Editor. */
+function csNearby(st, maxKm = 3, max = 15) {
+  return csNodes.map((n) => ({ n, d: distKm(st.lat, st.lon, n.lat, n.lon) }))
+    .filter((x) => x.d <= maxKm).sort((a, b) => a.d - b.d).slice(0, max);
 }
 
 async function csCalibrate(st) {
   activateTab("net");
   $("calOut").innerHTML = `<div class="note">rechne Strecken für „${esc(st.name)}“ …</div>`;
-  if (st.corescope_pk !== csSelPk) csSelect(st.corescope_pk);
+  if (st.corescope_pk !== csSelPk) csSelect(st.corescope_pk, { fromStation: true });
   try {
     const r = await api("/api/corescope/calibrate", { method: "POST", body: {
       ...(isAdmin ? { project } : { project_id: project.id }), station_id: st.id,
@@ -940,8 +1050,10 @@ async function csInit() {
   if (s && s.count) await csLoadNodes().catch(() => {});
   $("csShow").onchange = csDrawNodes;
   $("csAge").onchange = csDrawNodes; $("csRole").onchange = csDrawNodes;
-  $("csBidir").onchange = csDrawLinks;
-  $("csMin").oninput = () => { $("csMinVal").textContent = $("csMin").value; csDrawLinks(); };
+  const refilter = () => { csDrawNodes(); csRenderSel(); };
+  $("csBidir").onchange = refilter; $("csMeas").onchange = refilter;
+  $("csMin").oninput = () => { $("csMinVal").textContent = $("csMin").value; refilter(); };
+  csRenderSel();
   $("btnCsSync").onclick = async () => {
     try { await api("/api/corescope/sync", { method: "POST" }); } catch (e) { status("Fehler: " + e.message, "err"); return; }
     clearInterval(csTimer);

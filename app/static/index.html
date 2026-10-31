@@ -48,7 +48,7 @@
     <nav class="tabs">
       <button data-tab="stations" class="active">Stationen</button>
       <button data-tab="settings" class="admin-only">Einstellungen</button>
-      <button data-tab="net" id="tabNetBtn">Netz</button>
+      <button data-tab="net" id="tabNetBtn">MeshCore</button>
       <button data-tab="results">Ergebnis</button>
     </nav>
 
@@ -158,10 +158,11 @@
             <option value="1">1 Tag</option><option value="7" selected>7 Tagen</option><option value="30">30 Tagen</option><option value="0">egal</option></select></label>
           <label>Rolle<select id="csRole"><option value="">alle</option><option value="repeater">Repeater</option><option value="room">Room</option></select></label>
         </div>
-        <h3>Verbindungen</h3>
-        <label class="chk"><input type="checkbox" id="csBidir" checked> nur beidseitig beobachtete</label>
+        <h3 style="margin-bottom:0">Nachbarn des gewählten Repeaters</h3>
+        <label class="chk" style="margin-top:6px"><input type="checkbox" id="csBidir" checked> nur beidseitig beobachtete</label>
+        <label class="chk" style="margin-top:2px"><input type="checkbox" id="csMeas" checked> gemessene Partner immer zeigen</label>
         <label>Mindestens <b id="csMinVal">20</b> Beobachtungen<input type="range" id="csMin" min="1" max="500" value="20"></label>
-        <p class="note">Durchgezogen und farbig: gemessenes SNR (der Partner ist selbst Observer und hat den Knoten direkt gehört). Gestrichelt grau: nur aus Pfaden abgeleitet. Dabei können durch kurze Hop-Präfixe auch falsche Kanten entstehen, deshalb der Filter.</p>
+        <p class="note">Ein Klick auf einen Repeater blendet alle anderen aus und färbt seine Nachbarn nach SNR: dunkler Rand = gemessen (der Partner hat ihn direkt gehört), gestrichelter Rand = Mittel über andere Observer. Kurze Hop-Präfixe können falsche Nachbarn erzeugen, dagegen hilft der Filter. Erneuter Klick hebt die Auswahl auf.</p>
         <div id="csSel"></div>
         <h3>Abgleich Modell ↔ Messung</h3>
         <p class="note">Für eine Station, die mit einem CoreScope-Knoten verknüpft ist: Das Modell rechnet die Strecke zu jedem Partner mit gemessenem SNR und vergleicht. Antennenwerte der Partner kennt CoreScope nicht, sie gelten hier für alle:</p>

@@ -162,3 +162,17 @@ table.mini tr.dim td { color:#9ca3af; }
 @media (display-mode: standalone) {
   #lnkInstall { display:none; }
 }
+
+/* MeshCore-Auswahl */
+.cs-sel { width:22px; height:22px; margin:4px; border-radius:50%; background:#1d4ed8; border:3px solid #fff; box-shadow:0 0 0 2px #111827, 0 2px 6px rgba(0,0,0,.4); cursor:pointer; }
+.cs-sel.ring { background:transparent; border:3px solid #1d4ed8; box-shadow:0 0 0 2px #fff; width:30px; height:30px; margin:0; }
+.cs-sel.loading { animation:cspulse 1s ease-in-out infinite; }
+@keyframes cspulse { 0%,100% { box-shadow:0 0 0 2px #111827, 0 0 0 0 rgba(29,78,216,.6); } 50% { box-shadow:0 0 0 2px #111827, 0 0 0 12px rgba(29,78,216,0); } }
+.cs-wait::after { content:""; display:inline-block; width:8px; height:8px; margin-left:6px; border:2px solid var(--acc); border-top-color:transparent; border-radius:50%; animation:spin .8s linear infinite; }
+.cs-act { display:flex; flex-wrap:wrap; gap:6px; margin-top:6px; }
+.cs-act button { margin:0; }
+.cs-ovr { display:flex; flex-wrap:wrap; align-items:flex-end; gap:6px; width:100%; font-size:12px; color:var(--mut); }
+.cs-ovr span { width:100%; }
+.cs-ovr label { margin:0; width:78px; }
+table.cs-nb tr[data-pk] { cursor:pointer; }
+table.cs-nb tr[data-pk]:hover td { background:#eef2ff; }

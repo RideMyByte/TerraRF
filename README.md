@@ -63,7 +63,7 @@ oder `docker compose up -d` mit der beiliegenden `docker-compose.yml`.
 | `RFP_TILE_CACHE_MB` | `2000` | Größe des Kachel-Caches |
 | `RFP_IMPRINT_NAME` / `_ADDRESS` / `_EMAIL` | – | Angaben für Impressum und Datenschutzerklärung (Adresszeilen mit `\|` trennen) |
 | `RFP_PRIVACY_EXTRA` | – | Zusatztext für die Datenschutzerklärung, z. B. zu Logs eines vorgeschalteten Reverse-Proxys |
-| `RFP_CORESCOPE_URL` | – | CoreScope-Instanz für den Tab „Netz“, z. B. `https://corescope.meshrheinland.de` |
+| `RFP_CORESCOPE_URL` | – | CoreScope-Instanz für den Reiter „MeshCore“, z. B. `https://corescope.meshrheinland.de` |
 | `RFP_GRID_LAT` | `51.5` | Bezugsbreite des Rechengitters; nur ändern, wenn das Einsatzgebiet weit von 51,5° N liegt |
 | `RFP_CORESCOPE_SYNC_H` | `24` | Repeater-Liste alle n Stunden neu holen (0 = nur per Knopf) |
 | `RFP_PRELOAD` | `nrw_dgm,nrw_dom` | NRW-Modelle beim Start komplett laden (leer = nur bei Bedarf) |
@@ -109,7 +109,7 @@ oder lässt sich dort abschalten.
 
 ## MeshCore-Netz (CoreScope)
 Mit `RFP_CORESCOPE_URL` holt TerraRF die Repeater einer CoreScope-Instanz (nur lesend, serverseitig, zwischengespeichert)
-und zeigt sie im Tab „Netz“. Ein Klick auf einen Repeater zeigt seine Verbindungen:
+und zeigt sie im Reiter „MeshCore“. Ein Klick auf einen Repeater zeigt seine Verbindungen:
 - **farbig durchgezogen** – gemessenes SNR: Der Partner ist selbst Observer und hat den Repeater direkt gehört.
 - **grau gestrichelt** – nur aus Paketpfaden abgeleitet. Kurze Hop-Präfixe können falsch zugeordnet sein; der Filter
   „nur beidseitig“ + Mindestanzahl blendet die meisten Fehlkanten aus.
