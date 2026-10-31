@@ -104,12 +104,14 @@ class StationResult:
         return self.prx - self.sens
 
     def nbytes(self):
-        return self.prx.nbytes + self.vmain.nbytes
+        return self.prx.nbytes + self.vmain.nbytes + (self.vis.nbytes if self.vis is not None else 0)
 
 
 _station_cache: "OrderedDict[str, StationResult]" = OrderedDict()
 _station_cache_lock = threading.Lock()
 _STATION_CACHE_MAX = int(os.environ.get("RFP_STATION_CACHE", "16"))
+# Obergrenze in Bytes: große Radien erzeugen Ergebnisse von mehreren hundert MB pro Station
+_STATION_CACHE_BYTES = float(os.environ.get("RFP_STATION_CACHE_MB", "1200")) * 1e6
 _compute_lock = threading.Lock()
 
 
@@ -243,7 +245,8 @@ def _remember(key, res):
     with _station_cache_lock:
         _station_cache[key] = res
         _station_cache.move_to_end(key)
-        while len(_station_cache) > _STATION_CACHE_MAX:
+        while len(_station_cache) > 1 and (len(_station_cache) > _STATION_CACHE_MAX or
+                                           sum(r.nbytes() for r in _station_cache.values()) > _STATION_CACHE_BYTES):
             _station_cache.popitem(last=False)
 
 
@@ -320,6 +323,7 @@ def _down_grid(g, f):
 
 _png_cache: "OrderedDict[str, bytes]" = OrderedDict()
 _png_lock = threading.Lock()
+_png_gen_lock = threading.Lock()  # immer nur ein Bild gleichzeitig erzeugen (Speicher)
 
 
 def station_png(key, f):
@@ -329,6 +333,27 @@ def station_png(key, f):
         if ck in _png_cache:
             _png_cache.move_to_end(ck)
             return _png_cache[ck]
+    disk = os.path.join(COV_DIR, f"{key}_{f}.png")
+    if os.path.exists(disk):
+        with open(disk, "rb") as fh:
+            return fh.read()
+    with _png_gen_lock:
+        if os.path.exists(disk):  # inzwischen von einer parallelen Anfrage erzeugt
+            with open(disk, "rb") as fh:
+                return fh.read()
+        data = _make_png(key, f)
+        tmp = disk + ".tmp"
+        with open(tmp, "wb") as fh:
+            fh.write(data)
+        os.replace(tmp, disk)
+    with _png_lock:
+        _png_cache[ck] = data
+        while len(_png_cache) > 64:
+            _png_cache.popitem(last=False)
+    return data
+
+
+def _make_png(key, f):
     r = load_station(key)
     if r is None:
         raise KeyError(key)
@@ -352,12 +377,7 @@ def station_png(key, f):
     rgba = np.dstack([R, G, np.zeros_like(R), np.full_like(R, 255)])
     buf = io.BytesIO()
     Image.fromarray(rgba, "RGBA").save(buf, "PNG", compress_level=6)
-    data = buf.getvalue()
-    with _png_lock:
-        _png_cache[ck] = data
-        while len(_png_cache) > 64:
-            _png_cache.popitem(last=False)
-    return data
+    return buf.getvalue()
 
 
 def load_station(key):
