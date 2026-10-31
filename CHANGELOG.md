@@ -2,6 +2,26 @@
 
 ## [Unreleased]
 
+## 0.4.2
+### Neu
+- Reiter „Netz“ heißt jetzt „MeshCore“
+- Klick auf einen Repeater: Markierung pulsiert beim Laden, danach nur noch seine Nachbarn (nach den Filtern
+  im Reiter) ohne Linien, eingefärbt nach SNR; erneuter Klick hebt die Auswahl auf
+- Klick auf eine mit MeshCore verknüpfte Station zeigt deren Repeater-Nachbarn; erneuter Klick oder eine andere
+  Station blendet sie aus
+- Popup am Repeater: als Station hinzufügen, Höhe/Gewinn für den Abgleich hinterlegen (auch ohne Station), abwählen
+- Selbst angelegte Stationen lassen sich mit einem Repeater im Umkreis von 3 km verknüpfen und wieder lösen
+- Abgleich: Werte der Gegenstelle aus der Station im Projekt (Höhe, Richtgewinn, Kabel) bzw. der hinterlegten
+  Höhe; nur Partner, die auch auf der Karte stehen; Klick auf einen Partner zeigt die Strecke
+- Richtfunk: Antenne per Griff mit der Maus drehen, „Strecke zeigen“ rechnet mit beiden Antennen,
+  „Richtantennen aufeinander ausrichten“ setzt Azimut und Neigung beider Stationen
+- Statusanzeige auf der Karte: was gerade gerechnet wird, für den Admin CPU und RAM des Containers
+
+## 0.4.1
+### Behoben
+- 502-Fehler nach großen Berechnungen: Abdeckungsbilder werden einzeln erzeugt und auf der Platte abgelegt,
+  der RAM-Zwischenspeicher ist nach Größe begrenzt (RFP_STATION_CACHE_MB, Standard 1200)
+
 ## 0.4.0
 ### Neu
 - Handytauglich: Seitenleiste als Schublade (☰), Profil als unteres Blatt, einklappbare „Ansicht & Legende“,
