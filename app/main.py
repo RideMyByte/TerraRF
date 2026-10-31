@@ -92,6 +92,7 @@ def config(request: Request):
         "corescope": {"enabled": corescope.enabled(), "url": corescope.BASE or None},
         "tile_proxy": tiles.ENABLED,
         "legal": {"imprint": legal.configured()},
+        "last_project": _last_project() if auth.is_admin(request) else None,
     }
 
 
@@ -155,9 +156,28 @@ def list_projects(request: Request):
     return out
 
 
+LAST_FILE = os.path.join(terrain.DATA_DIR, "last_project")
+
+
 @app.get("/api/projects/{pid}")
 def get_project(request: Request, pid: str):
-    return _visible_project(request, pid)
+    p = _visible_project(request, pid)
+    if auth.is_admin(request):  # beim nächsten Start (z. B. als App vom Startbildschirm) wieder öffnen
+        try:
+            with open(LAST_FILE, "w") as f:
+                f.write(pid)
+        except OSError:
+            pass
+    return p
+
+
+def _last_project():
+    try:
+        with open(LAST_FILE) as f:
+            pid = f.read().strip()
+        return pid if _ID.match(pid) and os.path.exists(_ppath(pid)) else None
+    except OSError:
+        return None
 
 
 @app.put("/api/projects/{pid}", dependencies=ADMIN)
@@ -206,7 +226,9 @@ async def coverage(request: Request, body: dict = Body(...)):
         known = {s["id"] for s in project.get("stations") or []}
         ids = [i for i in ids if i in known]
     try:
-        return await run_in_threadpool(cov.run_coverage, project, ids)
+        max_px = body.get("max_px")
+        max_px = int(min(max(int(max_px), 500), cov.MAX_DIM)) if max_px else None
+        return await run_in_threadpool(cov.run_coverage, project, ids, max_px)
     except (ValueError, terrain.SourceError, KeyError) as e:
         _err(e)
 
@@ -401,6 +423,25 @@ async def tile_wms(src: str, request: Request):
     except httpx.HTTPError as e:
         raise HTTPException(502, f"Kartendienst nicht erreichbar: {e}")
     return Response(data, media_type="image/jpeg", headers=TILE_HEADERS)
+
+
+MANIFEST = {
+    "name": "TerraRF – Funkplanung", "short_name": "TerraRF", "id": "/", "start_url": "/", "scope": "/",
+    "display": "standalone", "orientation": "any", "lang": "de",
+    "description": "Funkabdeckung, Sichtlinie und Linkbudget für MeshCore, LoRa und Amateurfunk planen",
+    "background_color": "#f6f7f9", "theme_color": "#0d2236", "categories": ["utilities", "navigation"],
+    "icons": [
+        {"src": "/static/pwa/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any"},
+        {"src": "/static/pwa/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any"},
+        {"src": "/static/pwa/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable"},
+        {"src": "/static/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any"},
+    ],
+}
+
+
+@app.get("/manifest.webmanifest")
+def manifest():
+    return JSONResponse(MANIFEST, media_type="application/manifest+json")
 
 
 @app.get("/impressum")

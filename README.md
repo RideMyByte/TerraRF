@@ -28,6 +28,7 @@ und weltweit Copernicus GLO-30.
 - Projekte speichern, laden, als JSON exportieren/importieren
 - Ein Admin-Login zum Bearbeiten; Besucher sehen öffentliche Projekte nur lesend (Teilen per Link)
 - Basiskarten inkl. OpenStreetMap in Graustufen
+- Handytauglich und als App installierbar (Startbildschirm, öffnet ohne Browserleiste)
 - MeshCore-Netz aus [CoreScope](https://github.com/Kpa-clawbot/CoreScope): Repeater-Standorte, beobachtete
   Verbindungen und gemessenes SNR anzeigen, Repeater als Station übernehmen, Modell gegen Messwerte abgleichen
 
@@ -87,6 +88,14 @@ Wer immer den neuesten Stand von `main` will, nimmt `:edge`.
 | **NRW DOM1** (Standard Hindernisse) | Oberflächenmodell aus Laserscan, WCS `wcs_nw_dom` | lokal als 5-m-Kacheln |
 | Copernicus GLO-30 | Oberflächenmodell 30 m, weltweit | Rückfall außerhalb NRW |
 | Lokal | eigene GeoTIFFs in `data/dem/<ordner>/` | erscheinen als „Lokal: …“ |
+
+## Auf dem Handy / als App
+Unter 800 px Breite wird die Seitenleiste zur Schublade (☰), Profil und Legende passen sich an, Meldungen erscheinen
+kurz auf der Karte. Auf dem Startbildschirm: Android/Chrome Menü ⋮ → „App installieren“, iPhone/Safari Teilen →
+„Zum Home-Bildschirm“ (Hilfe auch unten links unter „Als App installieren“). **Voraussetzung ist HTTPS**, z. B. über
+einen Reverse-Proxy mit Zertifikat – über `http://<unraid-ip>:8080` entsteht nur ein Lesezeichen, das im Browser
+öffnet. Einen Service Worker gibt es bewusst nicht (nichts wird auf dem Gerät gespeichert); TerraRF braucht ohnehin
+eine Verbindung zum Server. Als Admin öffnet die App beim Start das zuletzt geöffnete Projekt.
 
 ## Datenschutz und Impressum
 TerraRF setzt für Besucher keine Cookies, nutzt keinen lokalen Browserspeicher, lädt keine Skripte oder Schriften

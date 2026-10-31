@@ -1,7 +1,7 @@
 :root { --bg:#f6f7f9; --fg:#1d2430; --mut:#6b7280; --line:#d9dde3; --acc:#2563eb; --go:#16a34a; --bad:#dc2626; }
 * { box-sizing: border-box; }
 html, body { margin:0; height:100%; font: 13px/1.35 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; color:var(--fg); }
-#app { display:flex; height:100vh; }
+#app { display:flex; height:100vh; height:100dvh; }
 #side { width:380px; min-width:320px; background:var(--bg); border-right:1px solid var(--line); display:flex; flex-direction:column; }
 #side header { padding:10px 12px 6px; border-bottom:1px solid var(--line); position:relative; }
 .brand { font-weight:800; font-size:17px; margin-bottom:6px; display:flex; align-items:center; gap:6px; letter-spacing:-0.01em; color:#0d2236; }
@@ -103,3 +103,62 @@ table.mini tr.dim td { color:#9ca3af; }
 .profrx { display:inline-flex; align-items:center; gap:4px; margin-left:auto; color:var(--mut); font-size:12px; white-space:nowrap; }
 .profrx input { width:58px; padding:2px 4px; }
 .profrx button { padding:1px 6px; }
+
+/* ---------------------------------------------------------------- Ansicht-Box einklappbar */
+.lbhead { display:flex; justify-content:space-between; align-items:center; width:100%; border:0; background:none; padding:0 0 4px; font-weight:600; font-size:12px; color:var(--fg); }
+#layerbox.collapsed #layerBody { display:none; }
+#layerbox.collapsed { width:auto; }
+#layerbox.collapsed .lbhead { padding:0; }
+#layerbox.collapsed .lbhead span { transform:rotate(-90deg); }
+.lbhead span { transition:transform .15s; }
+.mapbtn, .sideclose, #sideBackdrop, #mstatus { display:none; }
+
+/* ---------------------------------------------------------------- Handy / schmale Fenster */
+@media (max-width: 800px) {
+  #side { position:fixed; z-index:3000; top:0; bottom:0; left:0; width:min(92vw, 420px); min-width:0;
+          transform:translateX(-102%); transition:transform .2s ease; box-shadow:4px 0 24px rgba(0,0,0,.25);
+          padding-top:env(safe-area-inset-top); padding-bottom:env(safe-area-inset-bottom); }
+  body.side-open #side { transform:none; }
+  #sideBackdrop { display:block; position:fixed; inset:0; z-index:2999; background:rgba(15,23,42,.35); opacity:0; pointer-events:none; transition:opacity .2s; }
+  body.side-open #sideBackdrop { opacity:1; pointer-events:auto; }
+  .sideclose { display:inline-block; border:0; background:none; font-size:18px; padding:2px 8px; margin-left:4px; }
+  .mapbtn { display:block; position:absolute; z-index:1100; left:calc(10px + env(safe-area-inset-left)); top:calc(10px + env(safe-area-inset-top));
+            width:44px; height:44px; font-size:22px; line-height:1; border-radius:8px; background:#fff; border:0; box-shadow:0 2px 8px rgba(0,0,0,.3); }
+  .leaflet-top.leaflet-left { top:calc(60px + env(safe-area-inset-top)); }
+  .leaflet-top.leaflet-right { top:env(safe-area-inset-top); }
+  .leaflet-touch .leaflet-control-zoom { display:none; }  /* zoomen mit zwei Fingern */
+  #layerbox { right:calc(8px + env(safe-area-inset-right)); bottom:calc(22px + env(safe-area-inset-bottom)); width:min(260px, calc(100vw - 16px)); max-height:60vh; overflow:auto; }
+  #placing { top:calc(62px + env(safe-area-inset-top)); width:max-content; max-width:90vw; text-align:center; }
+  #profile { left:0; right:0; bottom:0; border-radius:12px 12px 0 0; max-height:72vh; display:flex; flex-direction:column;
+             padding-bottom:env(safe-area-inset-bottom); }
+  body.profile-open #layerbox { display:none; }
+  .phead { flex-wrap:wrap; gap:4px 8px; }
+  .phead #profMeta { flex-basis:100%; order:3; }
+  .profrx { margin-left:0; }
+  .pbody { flex-direction:column; overflow:auto; }
+  #profCanvas { flex:none; width:100%; height:180px; }
+  #profBudget { min-width:0; width:100%; }
+  .menu { right:8px; }
+  #mstatus { display:block; position:absolute; z-index:1100; left:calc(62px + env(safe-area-inset-left)); right:60px; top:calc(14px + env(safe-area-inset-top));
+             background:rgba(17,24,39,.88); color:#fff; font-size:12px; padding:7px 10px; border-radius:8px; opacity:0; pointer-events:none; transition:opacity .25s; }
+  #mstatus.show { opacity:1; }
+  #mstatus.err { background:rgba(185,28,28,.92); }
+  #mstatus.busy::before { content:""; display:inline-block; width:9px; height:9px; margin-right:6px; border:2px solid #fff; border-top-color:transparent; border-radius:50%; animation:spin .8s linear infinite; vertical-align:-1px; }
+  .tab { -webkit-overflow-scrolling:touch; }
+  .grid3 { grid-template-columns:1fr 1fr; }
+  dialog { width:min(92vw, 380px); }
+}
+/* größere Bedienelemente für Finger */
+@media (pointer: coarse) {
+  button, select, input:not([type=checkbox]):not([type=range]):not([type=color]) { min-height:38px; }
+  input[type=checkbox] { width:20px; height:20px; }
+  input[type=range] { height:28px; }
+  .tabs button { padding:11px 6px; }
+  .st { padding:9px 8px; }
+  .popup button { padding:6px 10px; font-size:13px; }
+  .phead button { min-height:34px; min-width:34px; }
+  .profrx input { min-height:32px; }
+}
+@media (display-mode: standalone) {
+  #lnkInstall { display:none; }
+}

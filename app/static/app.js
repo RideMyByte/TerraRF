@@ -44,7 +44,21 @@ const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "
 const uid = () => Math.random().toString(36).slice(2, 10);
 const fmt = (v, d = 1) => (v === null || v === undefined || Number.isNaN(v)) ? "–" : Number(v).toFixed(d).replace(".", ",");
 
-function status(msg, cls = "") { const s = $("status"); s.textContent = msg; s.className = cls; }
+// ------------------------------------------------------------ Handy-Layout
+const narrowQ = window.matchMedia("(max-width: 800px)");
+const narrow = () => narrowQ.matches;
+function openSide() { document.body.classList.add("side-open"); }
+function closeSide() { document.body.classList.remove("side-open"); }
+
+let mstT = null;
+function status(msg, cls = "") {
+  const s = $("status"); s.textContent = msg; s.className = cls;
+  // Handy: Seitenleiste ist meist zu, daher Meldung kurz auf der Karte zeigen
+  const m = $("mstatus"); if (!m) return;
+  m.textContent = msg; m.className = cls; m.classList.add("show");
+  clearTimeout(mstT);
+  if (cls !== "busy") mstT = setTimeout(() => m.classList.remove("show"), cls === "err" ? 8000 : 3500);
+}
 function setDirty(v = true) { dirty = v; $("dirty").className = v ? "on" : ""; }
 
 async function api(path, opts = {}) {
@@ -217,6 +231,7 @@ function select(id, pan = false) {
   const st = byId(id);
   if (pan && st) map.panTo([st.lat, st.lon]);
   activateTab("stations"); renderList(); renderEditor();
+  if (narrow()) openSide();
 }
 
 function sensitivity(st) {
@@ -412,7 +427,9 @@ const CanvasOverlay = L.ImageOverlay.extend({
 function clearOverlay() { if (covLayer) { map.removeLayer(covLayer); covLayer = null; } $("layerbox").classList.add("hidden"); }
 
 function computeBody(ids) {
-  return isAdmin ? { project, station_ids: ids } : { project_id: project.id, station_ids: ids };
+  const b = isAdmin ? { project, station_ids: ids } : { project_id: project.id, station_ids: ids };
+  if (narrow()) b.max_px = 1600;  // Handy: gröberes Bild, weniger Speicher beim Zusammensetzen
+  return b;
 }
 
 async function loadStationData(e) {
@@ -616,6 +633,8 @@ let profLine = null, profAt = null;
 async function showProfile(sid, latlng) {
   const st = byId(sid);
   profAt = { sid, latlng };
+  closeSide(); map.closePopup();
+  document.body.classList.add("profile-open");
   if ($("profRxH").value === "") $("profRxH").value = project.settings.rx_height_m;
   if ($("profRxG").value === "") $("profRxG").value = project.settings.rx_gain_dbi;
   $("profile").classList.remove("hidden");
@@ -650,7 +669,9 @@ async function showProfile(sid, latlng) {
   } catch (e) { $("profMeta").textContent = "Fehler: " + e.message; }
 }
 
+let lastProfile = null;
 function drawProfile(p) {
+  lastProfile = p;
   const cv = $("profCanvas");
   const dpr = window.devicePixelRatio || 1;
   const W = cv.clientWidth, H = cv.clientHeight;
@@ -673,7 +694,8 @@ function drawProfile(p) {
     g.beginPath(); g.moveTo(padL, Y(z)); g.lineTo(W - padR, Y(z)); g.stroke(); g.fillText(`${z.toFixed(0)} m`, 2, Y(z) + 4);
   }
   const stepD = niceStep(D / 8);
-  for (let d = 0; d <= D; d += stepD) { g.fillText(`${(d / 1000).toFixed(stepD < 1000 ? 1 : 0)} km`, X(d) - 12, H - 6); }
+  const dLabel = (d) => stepD < 100 ? `${fmt(d, 0)} m` : `${fmt(d / 1000, stepD < 1000 ? 1 : 0)} km`;
+  for (let d = 0; d <= D; d += stepD) { g.fillText(dLabel(d), X(d) - 12, H - 6); }
   const poly = (arr, close) => { g.beginPath(); arr.forEach((z, i) => (i ? g.lineTo(X(p.d[i]), Y(z)) : g.moveTo(X(p.d[i]), Y(z)))); if (close) { g.lineTo(X(D), H - padB); g.lineTo(X(0), H - padB); g.closePath(); } };
   // Fresnel zone
   g.beginPath(); highF.forEach((z, i) => (i ? g.lineTo(X(p.d[i]), Y(z)) : g.moveTo(X(p.d[i]), Y(z))));
@@ -939,6 +961,7 @@ function activateTab(t) {
 
 function setPlacing(v) {
   placing = v;
+  if (v) closeSide();
   $("placing").classList.toggle("hidden", !v);
   $("map").classList.toggle("placing", v);
 }
@@ -968,6 +991,7 @@ function wire() {
   $("autoCalc").onchange = () => { if ($("autoCalc").checked) scheduleAuto(); };
   $("profClose").onclick = () => {
     $("profile").classList.add("hidden"); if (profLine) { map.removeLayer(profLine); profLine = null; }
+    document.body.classList.remove("profile-open"); lastProfile = null;
     $("profRxH").value = ""; $("profRxG").value = ""; profAt = null;  // nächstes Profil startet mit den Projektwerten
   };
   const reProfile = () => { if (profAt && byId(profAt.sid)) showProfile(profAt.sid, profAt.latlng); };
@@ -1017,7 +1041,27 @@ function wire() {
     await api(`/api/projects/${project.id}`, { method: "DELETE" }); newProject(); refreshProjectList();
   };
   window.addEventListener("beforeunload", (e) => { if (dirty) { e.preventDefault(); e.returnValue = ""; } });
-  window.addEventListener("resize", () => { /* profile redraw on next open */ });
+  let rzT = null;
+  window.addEventListener("resize", () => {
+    clearTimeout(rzT);
+    rzT = setTimeout(() => { if (lastProfile && !$("profile").classList.contains("hidden")) drawProfile(lastProfile); }, 150);
+  });
+  // Handy: Menü, Ansicht-Box, Installationshinweis
+  $("btnSide").onclick = openSide;
+  $("btnSideClose").onclick = closeSide;
+  $("sideBackdrop").onclick = closeSide;
+  $("layerToggle").onclick = () => {
+    const c = $("layerbox").classList.toggle("collapsed");
+    $("layerToggle").setAttribute("aria-expanded", String(!c));
+  };
+  if (narrow()) $("layerbox").classList.add("collapsed");
+  $("lnkInstall").onclick = (e) => {
+    e.preventDefault();
+    const secure = location.protocol === "https:" || ["localhost", "127.0.0.1"].includes(location.hostname);
+    $("installHttp").textContent = secure ? "" : "Achtung: Diese Seite läuft ohne HTTPS. Als eigenständige App lässt sie sich nur über HTTPS installieren (z. B. über einen Reverse-Proxy mit Zertifikat) – sonst entsteht nur ein Lesezeichen, das im Browser öffnet.";
+    $("installDlg").showModal();
+  };
+  $("installClose").onclick = () => $("installDlg").close();
 }
 
 async function logout() {
@@ -1045,7 +1089,7 @@ async function init() {
   if (!isAdmin && !cfg.auth.public_read) { status("Bitte anmelden."); $("loginDlg").showModal(); return; }
   const list = await refreshProjectList().catch(() => []);
   const want = new URLSearchParams(location.search).get("p");
-  const pick = want || (!isAdmin && list && list.length ? list[0].id : null);
+  const pick = want || (isAdmin ? cfg.last_project : (list && list.length ? list[0].id : null));
   if (pick) {
     try { loadProject(await api(`/api/projects/${encodeURIComponent(pick)}`)); }
     catch (e) { status("Projekt nicht gefunden oder nicht öffentlich.", "err"); }

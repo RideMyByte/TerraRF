@@ -80,3 +80,32 @@ def test_public_project_is_precomputed_on_save(admin, project):
     with TestClient(app) as anon:
         r = anon.post("/api/coverage", json={"project_id": "warm"}).json()
         assert r["stations"][0]["cached"] is True
+
+
+def test_pwa_manifest_and_icons():
+    with TestClient(app) as c:
+        r = c.get("/manifest.webmanifest")
+        assert r.status_code == 200 and r.headers["content-type"].startswith("application/manifest+json")
+        m = r.json()
+        assert m["display"] == "standalone" and m["start_url"] == "/"
+        purposes = {i["purpose"] for i in m["icons"]}
+        assert {"any", "maskable"} <= purposes
+        for i in m["icons"]:
+            assert c.get(i["src"]).status_code == 200
+        html = c.get("/").text
+        assert 'rel="manifest"' in html and "apple-touch-icon" in html and "viewport-fit=cover" in html
+
+
+def test_mobile_max_px_gives_coarser_image(admin, project):
+    full = admin.post("/api/coverage", json={"project": project, "station_ids": ["a"]}).json()
+    small = admin.post("/api/coverage", json={"project": project, "station_ids": ["a"], "max_px": 500}).json()
+    assert small["factor"] >= full["factor"]
+    assert max(small["stations"][0]["w"], small["stations"][0]["h"]) <= 500
+
+
+def test_admin_reopens_last_project(admin, project):
+    assert admin.put("/api/projects/zuletzt", json=project).status_code == 200
+    admin.get("/api/projects/zuletzt")
+    assert admin.get("/api/config").json()["last_project"] == "zuletzt"
+    with TestClient(app) as anon:
+        assert anon.get("/api/config").json()["last_project"] is None

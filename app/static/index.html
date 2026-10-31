@@ -2,9 +2,17 @@
 <html lang="de">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>TerraRF</title>
+<meta name="description" content="Funkabdeckung, Sichtlinie und Linkbudget für MeshCore, LoRa und Amateurfunk planen">
+<meta name="theme-color" content="#0d2236">
+<link rel="manifest" href="/manifest.webmanifest">
 <link rel="icon" type="image/svg+xml" href="/static/icon.svg">
+<link rel="apple-touch-icon" href="/static/pwa/apple-touch-icon.png">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="TerraRF">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <link rel="stylesheet" href="/static/vendor/leaflet/leaflet.css">
 <link rel="stylesheet" href="/static/style.css?v=__VERSION__">
 </head>
@@ -13,7 +21,8 @@
   <aside id="side">
     <header>
       <div class="brand"><img src="/static/icon.svg" alt="" class="logo"> Terra<span class="rf">RF</span> <span id="ver" class="note"></span>
-        <button id="btnLogin" class="login">Anmelden</button></div>
+        <button id="btnLogin" class="login">Anmelden</button>
+        <button id="btnSideClose" class="sideclose" aria-label="Menü schließen">✕</button></div>
       <div class="proj">
         <input id="projName" value="Neues Projekt" title="Projektname" class="admin-ro">
         <span id="dirty" title="Ungespeicherte Änderungen"></span>
@@ -170,12 +179,17 @@
     </section>
     <div id="preloadInfo" class="note" style="padding:0 12px"></div>
     <footer id="status">Bereit.</footer>
-    <div class="legal"><a href="/impressum" target="_blank">Impressum</a> · <a href="/datenschutz" target="_blank">Datenschutz</a></div>
+    <div class="legal"><a href="/impressum" target="_blank">Impressum</a> · <a href="/datenschutz" target="_blank">Datenschutz</a> · <a href="#" id="lnkInstall">Als App installieren</a></div>
   </aside>
 
+  <div id="sideBackdrop"></div>
   <main id="mapwrap">
     <div id="map"></div>
+    <div id="mstatus" role="status"></div>
+    <button id="btnSide" class="mapbtn" title="Menü" aria-label="Menü öffnen">☰</button>
     <div id="layerbox" class="hidden">
+      <button id="layerToggle" class="lbhead" aria-expanded="true">Ansicht &amp; Legende <span>▾</span></button>
+      <div id="layerBody">
       <label>Anzeige
         <select id="layerSel">
           <option value="margin">Bester Pegel (Reserve über Empfindlichkeit)</option>
@@ -185,6 +199,7 @@
       <label>Deckkraft <input id="opacity" type="range" min="0" max="1" step="0.05" value="0.6"></label>
       <label>Mindest-Reserve: <b id="reqVal">10</b> dB <input id="reqSlider" type="range" min="-10" max="40" step="1" value="10"></label>
       <div id="legend"></div>
+      </div>
     </div>
     <div id="placing" class="hidden">Klicke in die Karte, um die Station zu setzen (Esc bricht ab)</div>
     <div id="profile" class="hidden">
@@ -211,6 +226,15 @@
     <div id="loginErr" class="warn"></div>
     <div class="row"><button type="button" id="loginCancel">Abbrechen</button><button type="submit" class="primary">Anmelden</button></div>
   </form>
+</dialog>
+<dialog id="installDlg">
+  <h3>TerraRF als App</h3>
+  <p class="note">TerraRF lässt sich auf den Startbildschirm legen und öffnet sich dann ohne Browserleiste.</p>
+  <p><b>Android (Chrome, Edge, Samsung):</b> Menü ⋮ → „App installieren“ bzw. „Zum Startbildschirm hinzufügen“.</p>
+  <p><b>iPhone/iPad (Safari):</b> Teilen-Symbol □↑ → „Zum Home-Bildschirm“.</p>
+  <p><b>Desktop (Chrome, Edge):</b> Installieren-Symbol rechts in der Adressleiste.</p>
+  <p class="note" id="installHttp"></p>
+  <div class="row"><button type="button" id="installClose" class="primary">OK</button></div>
 </dialog>
 <script src="/static/vendor/leaflet/leaflet.js"></script>
 <script src="/static/app.js?v=__VERSION__"></script>

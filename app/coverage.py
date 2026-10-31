@@ -262,7 +262,7 @@ def project_cs(project, s):
 MAX_DIM = int(os.environ.get("RFP_MAX_LAYER_PX", "3000"))  # max. edge length of one station image
 
 
-def run_coverage(project, station_ids=None):
+def run_coverage(project, station_ids=None, max_dim=None):
     """Compute (or fetch from cache) all requested stations. No server-side compositing:
     the browser stacks the per-station data images itself."""
     s = merged_settings(project)
@@ -278,7 +278,8 @@ def run_coverage(project, station_ids=None):
             r, cached = compute_station(st, s, cs)
             results.append((st, r, cached))
     # one common downsampling factor keeps all station images on the same pixel grid
-    f = max(1, max(math.ceil(max(r.grid.nx, r.grid.ny) / MAX_DIM) for _, r, _ in results))
+    md = max_dim or MAX_DIM
+    f = max(1, max(math.ceil(max(r.grid.nx, r.grid.ny) / md) for _, r, _ in results))
     out = []
     for st, r, cached in results:
         g = r.grid
