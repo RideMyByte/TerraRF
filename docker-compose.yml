@@ -11,6 +11,9 @@ services:
       - RFP_ADMIN_USER=admin
       - RFP_ADMIN_PASSWORD=             # leer = zufällig erzeugen (Log / data/admin_password.txt)
       - RFP_PUBLIC_READ=true            # Besucher dürfen öffentliche Projekte ansehen
+      # - RFP_IMPRINT_NAME=Max Mustermann
+      # - RFP_IMPRINT_ADDRESS=Musterstr. 1|45964 Gladbeck
+      # - RFP_IMPRINT_EMAIL=max@example.org
       # - RFP_CORESCOPE_URL=https://corescope.meshrheinland.de   # Tab „Netz“ (MeshCore-Repeater)
       - RFP_PRELOAD=nrw_dgm,nrw_dom     # leer = nur bei Bedarf laden
       - RFP_NRW_RES=5

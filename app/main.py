@@ -17,7 +17,7 @@ from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
-from . import auth, corescope, regions, terrain
+from . import auth, corescope, legal, regions, terrain, tiles
 from . import coverage as cov
 from . import propagation as prop
 from .version import VERSION
@@ -67,7 +67,9 @@ def login(request: Request, body: dict = Body(...)):
     if not auth.check_login(request, str(body.get("user", "")), str(body.get("password", ""))):
         raise HTTPException(401, "Benutzer oder Passwort falsch")
     resp = JSONResponse({"ok": True, "admin": True})
-    resp.set_cookie(auth.COOKIE, auth.make_token(auth.ADMIN_USER), max_age=auth.SESSION_S, httponly=True,
+    # Standard: Sitzungscookie (endet mit dem Browser); "angemeldet bleiben" nur auf ausdrücklichen Wunsch
+    resp.set_cookie(auth.COOKIE, auth.make_token(auth.ADMIN_USER),
+                    max_age=auth.SESSION_S if body.get("remember") else None, httponly=True,
                     samesite="lax", secure=auth.is_https(request), path="/")
     return resp
 
@@ -88,6 +90,8 @@ def config(request: Request):
         "tile_res": terrain.TILE_RES,
         "auth": me(request),
         "corescope": {"enabled": corescope.enabled(), "url": corescope.BASE or None},
+        "tile_proxy": tiles.ENABLED,
+        "legal": {"imprint": legal.configured()},
     }
 
 
@@ -165,7 +169,19 @@ def save_project(pid: str, project: dict = Body(...)):
     with open(tmp, "w") as f:
         json.dump(project, f, indent=1, ensure_ascii=False)
     os.replace(tmp, p)
+    if project.get("public"):
+        threading.Thread(target=_warm, args=(project,), daemon=True).start()
     return {"ok": True, "id": pid, "updated": project["updated"]}
+
+
+def _warm(project):
+    """Öffentliche Projekte nach dem Speichern vorrechnen, damit Besucher sofort Ergebnisse aus dem Cache bekommen
+    (eine Erstberechnung kann länger dauern als das Zeitlimit eines Reverse-Proxys)."""
+    try:
+        if any(s.get("enabled", True) for s in project.get("stations") or []):
+            cov.run_coverage(project)
+    except Exception as e:  # noqa: BLE001
+        log.warning("Vorberechnung für %s fehlgeschlagen: %s", project.get("id"), e)
 
 
 @app.delete("/api/projects/{pid}", dependencies=ADMIN)
@@ -211,7 +227,7 @@ async def profile(request: Request, body: dict = Body(...)):
     project = _project_for(request, body)
     try:
         return await run_in_threadpool(cov.profile, project, body["station_id"], float(body["lat"]),
-                                       float(body["lon"]), body.get("rx_height_m"))
+                                       float(body["lon"]), body.get("rx_height_m"), body.get("rx_gain_dbi"))
     except (ValueError, terrain.SourceError, KeyError) as e:
         _err(e)
 
@@ -353,6 +369,50 @@ def cache_clear(body: dict = Body(...)):
 
 
 # ---------------------------------------------------------------- frontend
+# ---------------------------------------------------------------- Kachel-Proxy, Rechtstexte
+TILE_HEADERS = {"Cache-Control": "public, max-age=604800"}
+
+
+@app.get("/tiles/{src}/{z}/{x}/{y}.png")
+async def tile(src: str, z: int, x: int, y: int):
+    if not tiles.ENABLED:
+        raise HTTPException(404, "Kachel-Proxy ist ausgeschaltet")
+    try:
+        data = await run_in_threadpool(tiles.xyz, src, z, x, y)
+    except KeyError:
+        raise HTTPException(404, "unbekannte Quelle")
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except httpx.HTTPError as e:
+        raise HTTPException(502, f"Kartendienst nicht erreichbar: {e}")
+    return Response(data, media_type="image/png", headers=TILE_HEADERS)
+
+
+@app.get("/tiles/wms/{src}")
+async def tile_wms(src: str, request: Request):
+    if not tiles.ENABLED:
+        raise HTTPException(404, "Kachel-Proxy ist ausgeschaltet")
+    try:
+        data = await run_in_threadpool(tiles.wms, src, dict(request.query_params))
+    except KeyError:
+        raise HTTPException(404, "unbekannte Quelle")
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except httpx.HTTPError as e:
+        raise HTTPException(502, f"Kartendienst nicht erreichbar: {e}")
+    return Response(data, media_type="image/jpeg", headers=TILE_HEADERS)
+
+
+@app.get("/impressum")
+def impressum():
+    return Response(legal.page("impressum"), media_type="text/html")
+
+
+@app.get("/datenschutz")
+def datenschutz():
+    return Response(legal.page("datenschutz"), media_type="text/html")
+
+
 _INDEX = None
 
 

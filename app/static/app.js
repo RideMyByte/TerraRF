@@ -53,22 +53,30 @@ async function api(path, opts = {}) {
   const r = await fetch(path, o);
   let data = null;
   try { data = await r.json(); } catch { /* empty */ }
-  if (!r.ok) throw new Error((data && data.detail) || `HTTP ${r.status}`);
+  if (!r.ok) { const er = new Error((data && data.detail) || `HTTP ${r.status}`); er.status = r.status; throw er; }
   return data;
 }
 
 // ------------------------------------------------------------ map
 const map = L.map("map", { zoomControl: true, preferCanvas: false }).setView([51.575, 6.985], 12);
-const base = {
-  "OpenStreetMap": L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", { maxZoom: 19, attribution: "© OpenStreetMap-Mitwirkende" }),
-  "OpenStreetMap (Graustufen)": L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", { maxZoom: 19, className: "osm-gray", attribution: "© OpenStreetMap-Mitwirkende" }),
-  "OpenTopoMap": L.tileLayer("https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png", { maxZoom: 17, attribution: "© OpenStreetMap-Mitwirkende, SRTM | © OpenTopoMap (CC-BY-SA)" }),
-  "Luftbild NRW (DOP)": L.tileLayer.wms("https://www.wms.nrw.de/geobasis/wms_nw_dop", { layers: "nw_dop_rgb", format: "image/jpeg", maxZoom: 20, attribution: "© Geobasis NRW (dl-de/zero-2-0)" }),
-  "Satellit (Esri)": L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}", { maxZoom: 19, attribution: "Tiles © Esri, Maxar, Earthstar Geographics" }),
-};
 const overlays = {};
-base["OpenStreetMap"].addTo(map);
-L.control.layers(base, overlays, { position: "topright" }).addTo(map);
+let base = {};
+function setupBasemaps(proxy) {
+  const osmA = "© OpenStreetMap-Mitwirkende";
+  const osm = proxy ? "/tiles/osm/{z}/{x}/{y}.png" : "https://tile.openstreetmap.org/{z}/{x}/{y}.png";
+  const otm = proxy ? "/tiles/otm/{z}/{x}/{y}.png" : "https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png";
+  const dop = proxy ? "/tiles/wms/nrwdop" : "https://www.wms.nrw.de/geobasis/wms_nw_dop";
+  base = {
+    "OpenStreetMap": L.tileLayer(osm, { maxZoom: 19, attribution: osmA }),
+    "OpenStreetMap (Graustufen)": L.tileLayer(osm, { maxZoom: 19, className: "osm-gray", attribution: osmA }),
+    "OpenTopoMap": L.tileLayer(otm, { maxZoom: 17, attribution: osmA + ", SRTM | © OpenTopoMap (CC-BY-SA)" }),
+    "Luftbild NRW (DOP)": L.tileLayer.wms(dop, { layers: "nw_dop_rgb", format: "image/jpeg", maxZoom: 20, attribution: "© Geobasis NRW (dl-de/zero-2-0)" }),
+  };
+  // Esri nur ohne Proxy: dessen Nutzungsbedingungen zum Zwischenspeichern sind nicht geprüft
+  if (!proxy) base["Satellit (Esri)"] = L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}", { maxZoom: 19, attribution: "Tiles © Esri, Maxar, Earthstar Geographics" });
+  base["OpenStreetMap"].addTo(map);
+  L.control.layers(base, overlays, { position: "topright" }).addTo(map);
+}
 L.control.scale({ imperial: false }).addTo(map);
 
 function stationIcon(st) {
@@ -334,7 +342,7 @@ function onField(st, inp) {
   changed(st); drawStation(st); renderList(); renderEditor();
 }
 
-let autoTimer = null, computing = false, pending = false;
+let autoTimer = null, computing = false, pending = false, retries = 0;
 function changed() { if (!isAdmin) return; setDirty(); scheduleAuto(); }
 function scheduleAuto() {
   if (!$("autoCalc").checked) { if (lastRun) status("Geändert – „▶ Berechnen“ aktualisiert die Karte."); return; }
@@ -443,8 +451,17 @@ async function compute(auto = false) {
     renderResults(r);
     const nNew = r.stations.filter((e) => !e.cached).length;
     status(`Fertig in ${((performance.now() - t0) / 1000).toFixed(1)} s – ${nNew} berechnet, ${r.stations.length - nNew} aus dem Cache.` + (r.factor > 1 ? ` (Anzeige ${fmt(r.cell_m * Math.cos(map.getCenter().lat * Math.PI / 180), 0)} m Raster)` : ""));
+    retries = 0;
   } catch (e) {
-    status("Fehler: " + e.message, "err");
+    if ([502, 503, 504].includes(e.status) && retries < 30) {
+      // Zeitlimit eines Reverse-Proxys: der Server rechnet weiter und legt das Ergebnis in den Cache
+      retries++;
+      status(`Die Berechnung läuft auf dem Server noch … neuer Versuch in 10 s (${retries})`, "busy");
+      setTimeout(() => compute(true), 10000);
+    } else {
+      retries = 0;
+      status("Fehler: " + e.message, "err");
+    }
   } finally {
     $("btnCompute").disabled = false; computing = false;
     if (pending) { pending = false; compute(true); }
@@ -595,16 +612,20 @@ function inspectAt(latlng) {
   L.popup({ maxWidth: 380 }).setLatLng(latlng).setContent(div).openOn(map);
 }
 
-let profLine = null;
+let profLine = null, profAt = null;
 async function showProfile(sid, latlng) {
   const st = byId(sid);
+  profAt = { sid, latlng };
+  if ($("profRxH").value === "") $("profRxH").value = project.settings.rx_height_m;
+  if ($("profRxG").value === "") $("profRxG").value = project.settings.rx_gain_dbi;
   $("profile").classList.remove("hidden");
   $("profTitle").textContent = `Profil ${st.name} → Punkt`;
   $("profMeta").textContent = "rechne …";
   if (profLine) map.removeLayer(profLine);
   profLine = L.polyline([[st.lat, st.lon], [latlng.lat, latlng.lng]], { color: st.color, dashArray: "6 4", weight: 2 }).addTo(map);
   try {
-    const p = await api("/api/profile", { method: "POST", body: { ...(isAdmin ? { project } : { project_id: project.id }), station_id: sid, lat: latlng.lat, lon: latlng.lng } });
+    const p = await api("/api/profile", { method: "POST", body: { ...(isAdmin ? { project } : { project_id: project.id }), station_id: sid, lat: latlng.lat, lon: latlng.lng,
+      rx_height_m: +$("profRxH").value, rx_gain_dbi: +$("profRxG").value } });
     $("profMeta").textContent = `${fmt(p.distance_m / 1000, 2)} km · Azimut ${fmt(p.azimuth_deg, 0)}° · Elevation ${fmt(p.elevation_deg, 2)}° · ` +
       ["keine Sichtlinie", "Sichtlinie, Fresnelzone verletzt", "Fresnelzone ≥ 60 % frei"][p.los_class] +
       (p.worst_at_m != null ? ` · engste Stelle bei ${fmt(p.worst_at_m / 1000, 2)} km (Freiraum ${fmt(p.worst_clearance_ratio * 100, 0)} % F1)` : "");
@@ -712,6 +733,7 @@ async function pollJobs() {
   $("jobs").querySelectorAll("[data-cancel]").forEach((b) => (b.onclick = () => api(`/api/regions/cancel/${b.dataset.cancel}`, { method: "POST" }).then(pollJobs)));
   $("jobs").querySelectorAll("[data-use]").forEach((b) => (b.onclick = async () => {
     cfg = await api("/api/config");
+  setupBasemaps(!!cfg.tile_proxy);
     project.settings[b.dataset.kind === "surface" ? "surface_source" : "ground_source"] = "local:" + b.dataset.use;
     renderSettings(); setDirty(); status(`Quelle auf „Lokal: ${b.dataset.use}“ gestellt.`);
   }));
@@ -894,11 +916,10 @@ async function csInit() {
   $("csOff").classList.add("hidden"); $("csOn").classList.remove("hidden");
   const s = await csRefreshStatus().catch(() => null);
   if (s && s.count) await csLoadNodes().catch(() => {});
-  $("csShow").onchange = () => { try { localStorage.setItem("terrarf.csShow", $("csShow").checked ? "1" : ""); } catch { /* */ } csDrawNodes(); };
+  $("csShow").onchange = csDrawNodes;
   $("csAge").onchange = csDrawNodes; $("csRole").onchange = csDrawNodes;
   $("csBidir").onchange = csDrawLinks;
   $("csMin").oninput = () => { $("csMinVal").textContent = $("csMin").value; csDrawLinks(); };
-  try { if (localStorage.getItem("terrarf.csShow")) { $("csShow").checked = true; csDrawNodes(); } } catch { /* */ }
   $("btnCsSync").onclick = async () => {
     try { await api("/api/corescope/sync", { method: "POST" }); } catch (e) { status("Fehler: " + e.message, "err"); return; }
     clearInterval(csTimer);
@@ -945,7 +966,13 @@ function wire() {
     composite();
   };
   $("autoCalc").onchange = () => { if ($("autoCalc").checked) scheduleAuto(); };
-  $("profClose").onclick = () => { $("profile").classList.add("hidden"); if (profLine) { map.removeLayer(profLine); profLine = null; } };
+  $("profClose").onclick = () => {
+    $("profile").classList.add("hidden"); if (profLine) { map.removeLayer(profLine); profLine = null; }
+    $("profRxH").value = ""; $("profRxG").value = ""; profAt = null;  // nächstes Profil startet mit den Projektwerten
+  };
+  const reProfile = () => { if (profAt && byId(profAt.sid)) showProfile(profAt.sid, profAt.latlng); };
+  $("profRxH").onchange = reProfile; $("profRxG").onchange = reProfile;
+  $("profReset").onclick = () => { $("profRxH").value = project.settings.rx_height_m; $("profRxG").value = project.settings.rx_gain_dbi; reProfile(); };
   $("projName").onchange = () => { project.name = $("projName").value; setDirty(); };
   $("projPublic").onchange = () => { project.public = $("projPublic").checked; setDirty(); };
   $("btnShare").onclick = async () => {
@@ -958,7 +985,7 @@ function wire() {
   $("loginForm").onsubmit = async (e) => {
     e.preventDefault();
     try {
-      await api("/api/login", { method: "POST", body: { user: $("loginUser").value, password: $("loginPw").value } });
+      await api("/api/login", { method: "POST", body: { user: $("loginUser").value, password: $("loginPw").value, remember: $("loginRemember").checked } });
       location.reload();
     } catch (er) { $("loginErr").textContent = er.message; }
   };
@@ -1008,6 +1035,7 @@ function applyRole() {
 
 async function init() {
   cfg = await api("/api/config");
+  setupBasemaps(!!cfg.tile_proxy);
   isAdmin = !!cfg.auth?.admin;
   $("ver").textContent = !cfg.version ? "" : /^\d/.test(cfg.version) ? "v" + cfg.version : cfg.version;
   wire(); applyRole();

@@ -376,8 +376,10 @@ def load_station(key):
     return res
 
 
-def profile(project, station_id, lat, lon, rx_height=None):
+def profile(project, station_id, lat, lon, rx_height=None, rx_gain=None):
     s = merged_settings(project)
+    if rx_gain not in (None, ""):
+        s = {**s, "rx_gain_dbi": float(rx_gain)}
     st = next((x for x in project.get("stations") or [] if x["id"] == station_id), None)
     if st is None:
         raise KeyError("Station nicht gefunden")

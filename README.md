@@ -58,6 +58,10 @@ oder `docker compose up -d` mit der beiliegenden `docker-compose.yml`.
 | `RFP_ADMIN_USER` | `admin` | Benutzer für den Login (Bearbeiten, Speichern, Downloads) |
 | `RFP_ADMIN_PASSWORD` | – | Passwort; leer = wird beim ersten Start erzeugt und ins Log sowie nach `data/admin_password.txt` geschrieben |
 | `RFP_PUBLIC_READ` | `true` | Besucher dürfen als „öffentlich“ markierte Projekte ohne Login ansehen |
+| `RFP_TILE_PROXY` | `true` | Kartenkacheln über den Server laden (Besucher-IPs gehen nicht an Kartendienste); `false` = direkt, dann zusätzlich Esri-Satellit |
+| `RFP_TILE_CACHE_MB` | `2000` | Größe des Kachel-Caches |
+| `RFP_IMPRINT_NAME` / `_ADDRESS` / `_EMAIL` | – | Angaben für Impressum und Datenschutzerklärung (Adresszeilen mit `\|` trennen) |
+| `RFP_PRIVACY_EXTRA` | – | Zusatztext für die Datenschutzerklärung, z. B. zu Logs eines vorgeschalteten Reverse-Proxys |
 | `RFP_CORESCOPE_URL` | – | CoreScope-Instanz für den Tab „Netz“, z. B. `https://corescope.meshrheinland.de` |
 | `RFP_GRID_LAT` | `51.5` | Bezugsbreite des Rechengitters; nur ändern, wenn das Einsatzgebiet weit von 51,5° N liegt |
 | `RFP_CORESCOPE_SYNC_H` | `24` | Repeater-Liste alle n Stunden neu holen (0 = nur per Knopf) |
@@ -83,6 +87,16 @@ Wer immer den neuesten Stand von `main` will, nimmt `:edge`.
 | **NRW DOM1** (Standard Hindernisse) | Oberflächenmodell aus Laserscan, WCS `wcs_nw_dom` | lokal als 5-m-Kacheln |
 | Copernicus GLO-30 | Oberflächenmodell 30 m, weltweit | Rückfall außerhalb NRW |
 | Lokal | eigene GeoTIFFs in `data/dem/<ordner>/` | erscheinen als „Lokal: …“ |
+
+## Datenschutz und Impressum
+TerraRF setzt für Besucher keine Cookies, nutzt keinen lokalen Browserspeicher, lädt keine Skripte oder Schriften
+von Dritten und schreibt keine Zugriffsprotokolle. Kartenkacheln laufen standardmäßig über den eigenen Server
+(`RFP_TILE_PROXY`). Nur der Admin-Login setzt ein Sitzungscookie – technisch notwendig, daher kein Cookie-Banner.
+Unter `/impressum` und `/datenschutz` erzeugt TerraRF passende Texte aus den `RFP_IMPRINT_*`-Angaben; eigene Fassungen
+als `data/legal/impressum.html` bzw. `datenschutz.html` ersetzen sie. **Keine Rechtsberatung:** Ob ein Impressum nötig
+ist und ob die Texte für deinen Betrieb vollständig sind, musst du selbst prüfen. Insbesondere protokolliert ein
+vorgeschalteter Reverse-Proxy (z. B. Nginx Proxy Manager) meist IP-Adressen – das gehört dann in `RFP_PRIVACY_EXTRA`
+oder lässt sich dort abschalten.
 
 ## MeshCore-Netz (CoreScope)
 Mit `RFP_CORESCOPE_URL` holt TerraRF die Repeater einer CoreScope-Instanz (nur lesend, serverseitig, zwischengespeichert)

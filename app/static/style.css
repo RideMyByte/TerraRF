@@ -98,3 +98,8 @@ table.mini th { text-align:left; color:var(--mut); font-weight:600; border-botto
 table.mini td { padding:2px 3px; border-bottom:1px solid #eef0f3; }
 table.mini td:not(:first-child), table.mini th:not(:first-child) { text-align:right; white-space:nowrap; }
 table.mini tr.dim td { color:#9ca3af; }
+.legal { padding:2px 12px 6px; font-size:11px; color:var(--mut); }
+.legal a { color:var(--mut); }
+.profrx { display:inline-flex; align-items:center; gap:4px; margin-left:auto; color:var(--mut); font-size:12px; white-space:nowrap; }
+.profrx input { width:58px; padding:2px 4px; }
+.profrx button { padding:1px 6px; }
