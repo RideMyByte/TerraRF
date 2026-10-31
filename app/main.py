@@ -10,13 +10,14 @@ import time
 import uuid
 from contextlib import asynccontextmanager
 
+import httpx
 import numpy as np
 from fastapi import Body, Depends, FastAPI, HTTPException, Request
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
-from . import auth, regions, terrain
+from . import auth, corescope, regions, terrain
 from . import coverage as cov
 from . import propagation as prop
 from .version import VERSION
@@ -35,6 +36,7 @@ async def lifespan(_app):
     threading.Thread(target=prop.warmup, daemon=True).start()
     if os.environ.get("RFP_PRELOAD", "nrw_dgm,nrw_dom").strip():
         threading.Thread(target=regions.start_preload, daemon=True).start()
+    threading.Thread(target=corescope.auto_sync_loop, daemon=True).start()
     yield
 
 
@@ -85,6 +87,7 @@ def config(request: Request):
         "defaults": cov.DEFAULT_SETTINGS,
         "tile_res": terrain.TILE_RES,
         "auth": me(request),
+        "corescope": {"enabled": corescope.enabled(), "url": corescope.BASE or None},
     }
 
 
@@ -210,6 +213,60 @@ async def profile(request: Request, body: dict = Body(...)):
         return await run_in_threadpool(cov.profile, project, body["station_id"], float(body["lat"]),
                                        float(body["lon"]), body.get("rx_height_m"))
     except (ValueError, terrain.SourceError, KeyError) as e:
+        _err(e)
+
+
+# ---------------------------------------------------------------- CoreScope (MeshCore-Netz)
+@app.get("/api/corescope/status", dependencies=READ)
+def cs_status():
+    return corescope.status()
+
+
+@app.post("/api/corescope/sync", dependencies=ADMIN)
+def cs_sync():
+    try:
+        return {"started": corescope.start_sync()}
+    except ValueError as e:
+        _err(e)
+
+
+@app.get("/api/corescope/nodes", dependencies=READ)
+def cs_nodes(bbox: str | None = None):
+    bb = None
+    if bbox:
+        try:
+            bb = [float(v) for v in bbox.split(",")]
+            assert len(bb) == 4
+        except (ValueError, AssertionError):
+            raise HTTPException(400, "bbox = minLat,minLon,maxLat,maxLon")
+    return {"nodes": corescope.nodes(bb), **corescope.status()}
+
+
+@app.get("/api/corescope/links/{pk}", dependencies=READ)
+async def cs_links(request: Request, pk: str, refresh: bool = False):
+    try:
+        return await run_in_threadpool(corescope.links, pk.lower(), refresh and auth.is_admin(request))
+    except Exception as e:  # noqa: BLE001
+        _err(e, 502 if not isinstance(e, ValueError) else 400)
+
+
+@app.post("/api/corescope/calibrate")
+async def cs_calibrate(request: Request, body: dict = Body(...)):
+    project = _project_for(request, body)
+    st = next((x for x in project.get("stations") or [] if x["id"] == body.get("station_id")), None)
+    if st is None or not st.get("corescope_pk"):
+        raise HTTPException(400, "Station ist nicht mit einem CoreScope-Knoten verknüpft")
+
+    def work():
+        L = corescope.links(str(st["corescope_pk"]).lower())
+        pts = [x for x in L["links"] if x.get("snr") is not None]
+        res = cov.calibrate(project, st["id"], pts, float(body.get("rx_height_m", 10)), float(body.get("rx_gain_dbi", 3)),
+                            float(body.get("rx_cable_db", 1)))
+        res["window_days"] = L.get("window_days")
+        return res
+    try:
+        return await run_in_threadpool(work)
+    except (ValueError, KeyError, terrain.SourceError, httpx.HTTPError) as e:
         _err(e)
 
 

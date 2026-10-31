@@ -28,6 +28,8 @@ und weltweit Copernicus GLO-30.
 - Projekte speichern, laden, als JSON exportieren/importieren
 - Ein Admin-Login zum Bearbeiten; Besucher sehen öffentliche Projekte nur lesend (Teilen per Link)
 - Basiskarten inkl. OpenStreetMap in Graustufen
+- MeshCore-Netz aus [CoreScope](https://github.com/Kpa-clawbot/CoreScope): Repeater-Standorte, beobachtete
+  Verbindungen und gemessenes SNR anzeigen, Repeater als Station übernehmen, Modell gegen Messwerte abgleichen
 
 ## Installation
 
@@ -56,6 +58,8 @@ oder `docker compose up -d` mit der beiliegenden `docker-compose.yml`.
 | `RFP_ADMIN_USER` | `admin` | Benutzer für den Login (Bearbeiten, Speichern, Downloads) |
 | `RFP_ADMIN_PASSWORD` | – | Passwort; leer = wird beim ersten Start erzeugt und ins Log sowie nach `data/admin_password.txt` geschrieben |
 | `RFP_PUBLIC_READ` | `true` | Besucher dürfen als „öffentlich“ markierte Projekte ohne Login ansehen |
+| `RFP_CORESCOPE_URL` | – | CoreScope-Instanz für den Tab „Netz“, z. B. `https://corescope.meshrheinland.de` |
+| `RFP_CORESCOPE_SYNC_H` | `24` | Repeater-Liste alle n Stunden neu holen (0 = nur per Knopf) |
 | `RFP_PRELOAD` | `nrw_dgm,nrw_dom` | NRW-Modelle beim Start komplett laden (leer = nur bei Bedarf) |
 | `RFP_NRW_RES` | `5` | Rasterweite des lokalen NRW-Speichers (m) |
 | `RFP_PRELOAD_CENTER` | `51.48,7.55` | Startpunkt des Vorladens (lat,lon), nahe Kacheln zuerst |
@@ -78,6 +82,18 @@ Wer immer den neuesten Stand von `main` will, nimmt `:edge`.
 | **NRW DOM1** (Standard Hindernisse) | Oberflächenmodell aus Laserscan, WCS `wcs_nw_dom` | lokal als 5-m-Kacheln |
 | Copernicus GLO-30 | Oberflächenmodell 30 m, weltweit | Rückfall außerhalb NRW |
 | Lokal | eigene GeoTIFFs in `data/dem/<ordner>/` | erscheinen als „Lokal: …“ |
+
+## MeshCore-Netz (CoreScope)
+Mit `RFP_CORESCOPE_URL` holt TerraRF die Repeater einer CoreScope-Instanz (nur lesend, serverseitig, zwischengespeichert)
+und zeigt sie im Tab „Netz“. Ein Klick auf einen Repeater zeigt seine Verbindungen:
+- **farbig durchgezogen** – gemessenes SNR: Der Partner ist selbst Observer und hat den Repeater direkt gehört.
+- **grau gestrichelt** – nur aus Paketpfaden abgeleitet. Kurze Hop-Präfixe können falsch zugeordnet sein; der Filter
+  „nur beidseitig“ + Mindestanzahl blendet die meisten Fehlkanten aus.
+
+„Als Station übernehmen“ legt eine Station mit Annahmen an (10 m, Rundstrahler 5,8 dBi, 22 dBm) – CoreScope kennt
+Antennenhöhe, Gewinn und Leistung nicht. „Mit Messwerten vergleichen“ rechnet für jede gemessene Strecke das
+SNR im Modell und zeigt die Abweichung. SNR-Werte ab 10 dB fließen nicht in die Statistik ein (LoRa-Meldungen sind
+nach oben begrenzt). Bitte die Instanz schonend nutzen und im Zweifel bei den Betreibern nachfragen.
 
 ## Modell
 

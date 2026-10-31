@@ -15,6 +15,7 @@ import numpy as np
 from PIL import Image
 
 from . import propagation as prop
+from . import terrain
 from .terrain import CACHE_DIR, Grid, fill_nans, load_terrain, lonlat_to_merc, merc_to_lonlat
 
 log = logging.getLogger("terrarf.coverage")
@@ -487,3 +488,42 @@ def point_elevation(project, lat, lon):
 
 
 __all__ = ["run_coverage", "station_png", "profile", "point_elevation", "DEFAULT_SETTINGS"]
+
+
+SNR_SAT_DB = 10.0  # LoRa-SNR-Meldungen sind nach oben begrenzt; darüber nicht für die Statistik nutzen
+
+
+def calibrate(project, station_id, points, rx_height=10.0, rx_gain=3.0, rx_cable=1.0):
+    """Gemessenes SNR (Station -> Partner) gegen das Modell. points: [{pk,name,lat,lon,snr,snr_n}]."""
+    s = dict(merged_settings(project))
+    s.update(rx_gain_dbi=float(rx_gain), rx_cable_db=float(rx_cable), rx_extra_loss_db=0.0)
+    proj = {**project, "settings": s}
+    st = next((x for x in project.get("stations") or [] if x["id"] == station_id), None)
+    if st is None:
+        raise KeyError("Station nicht gefunden")
+    noise = -174.0 + 10.0 * math.log10(float(st.get("bw_khz", 125.0)) * 1000.0) + float(st.get("nf_db", 6.0)) \
+        + float(s.get("noise_rise_db", 0.0))
+    rows = []
+    for p in points:
+        r = {"pk": p.get("pk"), "name": p.get("name"), "lat": p["lat"], "lon": p["lon"],
+             "measured_snr": float(p["snr"]), "n": int(p.get("snr_n") or 0)}
+        try:
+            pr = profile(proj, station_id, float(p["lat"]), float(p["lon"]), rx_height=float(rx_height))
+        except (ValueError, terrain.SourceError) as e:
+            r["error"] = str(e)
+            rows.append(r)
+            continue
+        b = pr["budget"]
+        pred = b["prx_dbm"] - noise
+        r.update(distance_km=round(pr["distance_m"] / 1000, 2), los_class=pr["los_class"], prx_dbm=b["prx_dbm"],
+                 predicted_snr=round(pred, 1), delta_db=round(r["measured_snr"] - pred, 1),
+                 saturated=r["measured_snr"] >= SNR_SAT_DB)
+        rows.append(r)
+    use = [r for r in rows if "delta_db" in r and not r["saturated"]]
+    stats = None
+    if use:
+        d = np.array([r["delta_db"] for r in use])
+        stats = {"n": len(use), "mean_db": round(float(d.mean()), 1), "median_db": round(float(np.median(d)), 1),
+                 "std_db": round(float(d.std()), 1), "rmse_db": round(float(np.sqrt((d ** 2).mean())), 1)}
+    return {"station": st.get("name"), "noise_dbm": round(noise, 1), "rx_height_m": rx_height, "rx_gain_dbi": rx_gain,
+            "rx_cable_db": rx_cable, "sat_db": SNR_SAT_DB, "rows": rows, "stats": stats}

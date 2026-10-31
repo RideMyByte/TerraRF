@@ -93,3 +93,8 @@ dialog { border:1px solid var(--line); border-radius:8px; padding:14px 16px; wid
 dialog::backdrop { background:rgba(15,23,42,.35); }
 dialog h3 { margin-top:0; }
 input:disabled, select:disabled, textarea:disabled { color:var(--mut); background:#f3f4f6; }
+table.mini { width:100%; border-collapse:collapse; font-size:12px; margin:6px 0; }
+table.mini th { text-align:left; color:var(--mut); font-weight:600; border-bottom:1px solid var(--line); padding:2px 3px; }
+table.mini td { padding:2px 3px; border-bottom:1px solid #eef0f3; }
+table.mini td:not(:first-child), table.mini th:not(:first-child) { text-align:right; white-space:nowrap; }
+table.mini tr.dim td { color:#9ca3af; }

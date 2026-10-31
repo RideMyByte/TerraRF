@@ -151,6 +151,7 @@ function loadProject(p) {
   if (p.view) map.setView(p.view.center, p.view.zoom);
   else if (project.stations.length) map.fitBounds(L.latLngBounds(project.stations.map((s) => [s.lat, s.lon])).pad(0.5));
   renderAll(); setDirty(false);
+  if (csNodes.length) csDrawNodes();
   status(`Projekt „${p.name}“ geladen.`);
   if ((!isAdmin || $("autoCalc").checked) && project.stations.some((x) => x.enabled !== false)) compute(true);
 }
@@ -280,12 +281,19 @@ function renderEditor() {
       <label>Neigung, + = abwärts (°)<input type="number" step="0.5" data-k="antenna.tilt_deg" value="${a.tilt_deg ?? 0}"></label>
       <label>Vor/Rück (dB)<input type="number" step="1" data-k="antenna.fb_db" value="${a.fb_db ?? 25}"></label>
     </div>
+    ${st.corescope_pk ? `<h4>MeshCore-Netz</h4><div class="calc">Verknüpft mit CoreScope-Knoten <code>${esc(st.corescope_pk.slice(0, 8))}…</code>
+      <div class="row tight"><button id="btnCsLinks">Verbindungen</button><button id="btnCal">Mit Messwerten vergleichen</button></div></div>` : ""}
     <h4>Berechnung</h4>
     <div class="grid2">
       <label>Radius (km)<input type="number" step="0.5" min="0.5" max="80" data-k="radius_km" value="${st.radius_km}"></label>
     </div>
     <label>Notizen<textarea data-k="notes" rows="2" style="width:100%">${esc(st.notes || "")}</textarea></label>`;
 
+  if (st.corescope_pk && $("btnCal")) {
+    $("btnCal").onclick = () => csCalibrate(st);
+    $("btnCsLinks").onclick = () => csSelect(st.corescope_pk);
+    if (!cfg.corescope?.enabled) { $("btnCal").disabled = true; $("btnCal").title = "RFP_CORESCOPE_URL nicht gesetzt"; }
+  }
   el.querySelectorAll("[data-k]").forEach((inp) => {
     if (!isAdmin) { inp.disabled = true; return; }
     inp.addEventListener("change", () => onField(st, inp));
@@ -739,6 +747,166 @@ function bindRegions() {
   pollJobs().catch(() => {});
 }
 
+// ------------------------------------------------------------ CoreScope (MeshCore-Netz)
+const csRenderer = L.canvas({ padding: 0.3 });
+const csLayer = L.layerGroup();
+const csLinkLayer = L.layerGroup().addTo(map);
+let csNodes = [], csSelPk = null, csLinks = null, csTimer = null;
+
+function ageDays(ts) { const t = Date.parse(ts || ""); return Number.isNaN(t) ? 1e9 : (Date.now() - t) / 864e5; }
+function csAgeColor(d) { return d <= 1 ? "#16a34a" : d <= 7 ? "#d97706" : "#9ca3af"; }
+function snrColor(s) { return s >= 5 ? "#16a34a" : s >= -5 ? "#65a30d" : s >= -10 ? "#d97706" : "#dc2626"; }
+function fmtAgo(ts) {
+  const d = ageDays(ts);
+  if (d > 1e8) return "unbekannt";
+  if (d < 1 / 24) return `vor ${fmt(d * 1440, 0)} min`;
+  if (d < 1) return `vor ${fmt(d * 24, 0)} h`;
+  return `vor ${fmt(d, 0)} Tagen`;
+}
+
+async function csRefreshStatus() {
+  const s = await api("/api/corescope/status");
+  $("csStatus").innerHTML = `Quelle: <a href="${esc(s.url)}" target="_blank" rel="noopener">${esc(s.url)}</a><br>` +
+    (s.fetched_at ? `${s.count} Knoten mit Standort · Stand ${esc(new Date(s.fetched_at).toLocaleString("de-DE"))}` : "Noch nicht synchronisiert.") +
+    (s.syncing ? ` · <b>synchronisiere … ${esc(s.progress || "")}</b>` : "") +
+    (s.error ? `<div class="warn">Letzter Sync fehlgeschlagen: ${esc(s.error)}</div>` : "");
+  return s;
+}
+
+async function csLoadNodes() {
+  const r = await api("/api/corescope/nodes");
+  csNodes = r.nodes || [];
+  csDrawNodes();
+}
+
+function csDrawNodes() {
+  csLayer.clearLayers();
+  if (!$("csShow").checked) { map.removeLayer(csLayer); return; }
+  const maxAge = +$("csAge").value, role = $("csRole").value;
+  const linked = new Set((project?.stations || []).map((s) => s.corescope_pk).filter(Boolean));
+  for (const n of csNodes) {
+    const d = ageDays(n.last_seen);
+    if (maxAge && d > maxAge) continue;
+    if (role && n.role !== role) continue;
+    if (linked.has(n.pk)) continue;  // als Station übernommen -> Stationsmarker reicht
+    const m = L.circleMarker([n.lat, n.lon], { renderer: csRenderer, radius: n.pk === csSelPk ? 7 : 5, weight: n.pk === csSelPk ? 3 : 1,
+      color: n.pk === csSelPk ? "#111827" : "#fff", fillColor: csAgeColor(d), fillOpacity: 0.95 });
+    m.bindTooltip(esc(n.name), { direction: "top" });
+    m.on("click", (e) => { L.DomEvent.stopPropagation(e); csSelect(n.pk); });
+    csLayer.addLayer(m);
+  }
+  csLayer.addTo(map);
+}
+
+async function csSelect(pk) {
+  csSelPk = pk; csLinks = null;
+  activateTab("net");
+  if ($("csShow").checked) csDrawNodes();
+  const n = csNodes.find((x) => x.pk === pk) || {};
+  $("csSel").innerHTML = `<h3>${esc(n.name || pk.slice(0, 8))}</h3><div class="note">lade Verbindungen …</div>`;
+  try { csLinks = await api(`/api/corescope/links/${pk}`); }
+  catch (e) { $("csSel").innerHTML = `<h3>${esc(n.name || "")}</h3><div class="warn">Fehler: ${esc(e.message)}</div>`; return; }
+  csRenderSel(n);
+  csDrawLinks();
+}
+
+function csFilteredLinks() {
+  if (!csLinks) return [];
+  const min = +$("csMin").value, bidir = $("csBidir").checked;
+  return csLinks.links.filter((l) => l.snr != null ||
+    (bidir ? l.bidir && Math.min(l.we_hear, l.they_hear) >= min : Math.max(l.we_hear, l.they_hear) >= min));
+}
+
+function csDrawLinks() {
+  csLinkLayer.clearLayers();
+  if (!csLinks || csLinks.lat == null) return;
+  const a = [csLinks.lat, csLinks.lon];
+  const ls = csFilteredLinks().sort((x, y) => (x.snr != null) - (y.snr != null));
+  for (const l of ls) {
+    const meas = l.snr != null;
+    const cnt = Math.max(l.we_hear, l.they_hear);
+    const pl = L.polyline([a, [l.lat, l.lon]], meas
+      ? { color: snrColor(l.snr), weight: 4, opacity: 0.9 }
+      : { color: "#6b7280", weight: Math.min(4, 1 + Math.log10(cnt + 1)), opacity: 0.55, dashArray: "5 5" });
+    pl.bindTooltip(`${esc(l.name || l.pk.slice(0, 8))} · ${fmt(l.distance_km, 1)} km<br>` +
+      (meas ? `<b>SNR ${fmt(l.snr, 1)} dB gemessen</b> (${l.snr_n} Pakete)<br>` : "") +
+      `hört uns ${l.they_hear}× · wir hören ${l.we_hear}×${l.bidir ? "" : " (einseitig)"}`, { sticky: true });
+    csLinkLayer.addLayer(pl);
+  }
+}
+
+function csRenderSel(n) {
+  const L_ = csLinks.links, meas = L_.filter((l) => l.snr != null).sort((x, y) => y.snr - x.snr);
+  const st = (project?.stations || []).find((s) => s.corescope_pk === csLinks.pk);
+  $("csSel").innerHTML = `<h3>${esc(csLinks.name || n.name || "")}</h3>
+    <div class="note">${esc(n.role || "")} · zuletzt gehört ${esc(fmtAgo(n.last_seen))} · ${L_.length} Verbindungen, ${L_.filter((l) => l.bidir).length} beidseitig, ${meas.length} mit gemessenem SNR (Fenster ${csLinks.window_days ?? "?"} Tage)</div>
+    <div class="row tight">
+      ${st ? `<button id="csGoSt">Station „${esc(st.name)}“ öffnen</button>` : `<button id="csAdopt" class="admin-only primary">Als Station übernehmen</button>`}
+      <button id="csClear">Ausblenden</button></div>
+    ${meas.length ? `<table class="mini"><tr><th>Partner (hört direkt)</th><th>km</th><th>SNR</th></tr>${meas.map((l) =>
+      `<tr><td>${esc(l.name || l.pk.slice(0, 8))}</td><td>${fmt(l.distance_km, 1)}</td><td style="color:${snrColor(l.snr)}">${fmt(l.snr, 1)}</td></tr>`).join("")}</table>` : ""}`;
+  $("csClear").onclick = () => { csSelPk = null; csLinks = null; csLinkLayer.clearLayers(); $("csSel").innerHTML = ""; csDrawNodes(); };
+  if (st) $("csGoSt").onclick = () => { activateTab("stations"); select(st.id, true); };
+  else if (isAdmin) $("csAdopt").onclick = () => csAdopt(n);
+}
+
+function csAdopt(n) {
+  const st = defaultStation(n.lat, n.lon);
+  Object.assign(st, { name: n.name || st.name, corescope_pk: n.pk, height_m: 10, height_ref: "ground",
+    notes: `Aus CoreScope übernommen (${cfg.corescope.url}). Höhe, Antenne und Leistung sind Annahmen – bitte anpassen.` });
+  project.stations.push(st); drawStation(st); csDrawNodes();
+  activateTab("stations"); select(st.id); changed();
+  status(`„${st.name}“ übernommen – Höhe/Antenne/Leistung prüfen, dann speichern.`);
+}
+
+async function csCalibrate(st) {
+  activateTab("net");
+  $("calOut").innerHTML = `<div class="note">rechne Strecken für „${esc(st.name)}“ …</div>`;
+  if (st.corescope_pk !== csSelPk) csSelect(st.corescope_pk);
+  try {
+    const r = await api("/api/corescope/calibrate", { method: "POST", body: {
+      ...(isAdmin ? { project } : { project_id: project.id }), station_id: st.id,
+      rx_height_m: +$("calH").value, rx_gain_dbi: +$("calG").value, rx_cable_db: +$("calC").value } });
+    const s = r.stats;
+    let hint = "";
+    if (s) {
+      const m = s.mean_db;
+      hint = Math.abs(m) < 2 ? "Modell und Messung passen im Mittel gut zusammen."
+        : m < 0 ? `Das Modell ist im Mittel um ${fmt(-m)} dB zu optimistisch. Mögliche Ursachen: Antennenhöhe/-gewinn der Station zu hoch angesetzt, mehr Rauschen vor Ort (Einstellung „Rauschanhebung“) oder Hindernisse, die das Oberflächenmodell nicht kennt.`
+        : `Das Modell ist im Mittel um ${fmt(m)} dB zu pessimistisch. Prüfe, ob die Station höher sitzt oder mehr Gewinn hat als eingetragen.`;
+      if (s.n < 5) hint += " Nur wenige Messpunkte – mit Vorsicht deuten.";
+    }
+    $("calOut").innerHTML = `<div class="note">Rauschboden ${fmt(r.noise_dbm)} dBm · Partner ${fmt(r.rx_height_m, 0)} m, ${fmt(r.rx_gain_dbi)} dBi · Fenster ${r.window_days ?? "?"} Tage</div>
+      <table class="mini"><tr><th>Partner</th><th>km</th><th title="Sichtlinie">LOS</th><th>gem.</th><th>Modell</th><th>Δ</th></tr>
+      ${r.rows.map((x) => x.error ? `<tr><td>${esc(x.name)}</td><td colspan="5" class="warn">${esc(x.error)}</td></tr>`
+        : `<tr${x.saturated ? ' class="dim" title="SNR ≥ ' + r.sat_db + ' dB: LoRa-Meldungen sind nach oben begrenzt, nicht in der Statistik"' : ""}><td>${esc(x.name || "")}</td><td>${fmt(x.distance_km, 1)}</td><td>${["–", "~", "✓"][x.los_class]}</td>
+          <td>${fmt(x.measured_snr, 1)}</td><td>${fmt(x.predicted_snr, 1)}</td><td style="color:${Math.abs(x.delta_db) < 3 ? "var(--go)" : Math.abs(x.delta_db) < 8 ? "#b45309" : "var(--bad)"}">${x.delta_db > 0 ? "+" : ""}${fmt(x.delta_db, 1)}</td></tr>`).join("")}</table>
+      ${s ? `<div class="calc">Δ = gemessen − Modell: Mittel <b>${s.mean_db > 0 ? "+" : ""}${fmt(s.mean_db)} dB</b> · Median ${fmt(s.median_db)} · Streuung ${fmt(s.std_db)} dB · n = ${s.n}</div><p class="note">${hint}</p>
+        <p class="note">Gemessene Mittelwerte enthalten nur Pakete, die angekommen sind. An der Reichweitengrenze liegen sie deshalb eher zu hoch.</p>` : `<p class="note">Keine auswertbaren Messpunkte.</p>`}`;
+  } catch (e) { $("calOut").innerHTML = `<div class="warn">Fehler: ${esc(e.message)}</div>`; }
+}
+
+async function csInit() {
+  if (!cfg.corescope?.enabled) return;
+  $("csOff").classList.add("hidden"); $("csOn").classList.remove("hidden");
+  const s = await csRefreshStatus().catch(() => null);
+  if (s && s.count) await csLoadNodes().catch(() => {});
+  $("csShow").onchange = () => { try { localStorage.setItem("terrarf.csShow", $("csShow").checked ? "1" : ""); } catch { /* */ } csDrawNodes(); };
+  $("csAge").onchange = csDrawNodes; $("csRole").onchange = csDrawNodes;
+  $("csBidir").onchange = csDrawLinks;
+  $("csMin").oninput = () => { $("csMinVal").textContent = $("csMin").value; csDrawLinks(); };
+  try { if (localStorage.getItem("terrarf.csShow")) { $("csShow").checked = true; csDrawNodes(); } } catch { /* */ }
+  $("btnCsSync").onclick = async () => {
+    try { await api("/api/corescope/sync", { method: "POST" }); } catch (e) { status("Fehler: " + e.message, "err"); return; }
+    clearInterval(csTimer);
+    csTimer = setInterval(async () => {
+      const st = await csRefreshStatus().catch(() => null);
+      if (st && !st.syncing) { clearInterval(csTimer); await csLoadNodes(); status(`CoreScope: ${st.count} Knoten geladen.`); }
+    }, 2000);
+    csRefreshStatus();
+  };
+}
+
 // ------------------------------------------------------------ ui wiring
 function activateTab(t) {
   document.querySelectorAll(".tabs button").forEach((b) => b.classList.toggle("active", b.dataset.tab === t));
@@ -840,6 +1008,7 @@ async function init() {
   isAdmin = !!cfg.auth?.admin;
   $("ver").textContent = !cfg.version ? "" : /^\d/.test(cfg.version) ? "v" + cfg.version : cfg.version;
   wire(); applyRole();
+  csInit().catch((e) => console.warn("CoreScope", e));
   if (isAdmin) bindSettings();
   newProject();
   if (!isAdmin && !cfg.auth.public_read) { status("Bitte anmelden."); $("loginDlg").showModal(); return; }

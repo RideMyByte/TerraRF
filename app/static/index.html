@@ -39,6 +39,7 @@
     <nav class="tabs">
       <button data-tab="stations" class="active">Stationen</button>
       <button data-tab="settings" class="admin-only">Einstellungen</button>
+      <button data-tab="net" id="tabNetBtn">Netz</button>
       <button data-tab="results">Ergebnis</button>
     </nav>
 
@@ -135,6 +136,33 @@
       </div>
       <p class="note">Richtwerte: Handgerät am Körper 3–6 dB, im Gebäude 10–20 dB. Die Reserve deckt die Streuung über Standorte und Fading ab; als „versorgt“ zählt nur, was darüber liegt.</p>
       <p class="note">Die Empfindlichkeit des Empfängers kommt aus den Funkparametern der jeweiligen Station (Bandbreite, SF, Rauschzahl). Man nimmt also an, dass auf beiden Seiten dasselbe Funkmodul sitzt.</p>
+    </section>
+
+    <section id="tab-net" class="tab">
+      <div id="csOff" class="note">Keine CoreScope-Instanz eingerichtet. Setze im Container <code>RFP_CORESCOPE_URL</code>, z. B. <code>https://corescope.meshrheinland.de</code>.</div>
+      <div id="csOn" class="hidden">
+        <div id="csStatus" class="note"></div>
+        <div class="row tight"><button id="btnCsSync" class="admin-only">Repeater synchronisieren</button></div>
+        <label class="chk"><input type="checkbox" id="csShow"> Repeater auf der Karte zeigen</label>
+        <div class="grid2">
+          <label>Zuletzt gehört innerhalb<select id="csAge">
+            <option value="1">1 Tag</option><option value="7" selected>7 Tagen</option><option value="30">30 Tagen</option><option value="0">egal</option></select></label>
+          <label>Rolle<select id="csRole"><option value="">alle</option><option value="repeater">Repeater</option><option value="room">Room</option></select></label>
+        </div>
+        <h3>Verbindungen</h3>
+        <label class="chk"><input type="checkbox" id="csBidir" checked> nur beidseitig beobachtete</label>
+        <label>Mindestens <b id="csMinVal">20</b> Beobachtungen<input type="range" id="csMin" min="1" max="500" value="20"></label>
+        <p class="note">Durchgezogen und farbig: gemessenes SNR (der Partner ist selbst Observer und hat den Knoten direkt gehört). Gestrichelt grau: nur aus Pfaden abgeleitet. Dabei können durch kurze Hop-Präfixe auch falsche Kanten entstehen, deshalb der Filter.</p>
+        <div id="csSel"></div>
+        <h3>Abgleich Modell ↔ Messung</h3>
+        <p class="note">Für eine Station, die mit einem CoreScope-Knoten verknüpft ist: Das Modell rechnet die Strecke zu jedem Partner mit gemessenem SNR und vergleicht. Antennenwerte der Partner kennt CoreScope nicht, sie gelten hier für alle:</p>
+        <div class="grid3">
+          <label>Höhe Partner (m)<input id="calH" type="number" value="10" step="1"></label>
+          <label>Gewinn (dBi)<input id="calG" type="number" value="3" step="0.5"></label>
+          <label>Kabel (dB)<input id="calC" type="number" value="1" step="0.5"></label>
+        </div>
+        <div id="calOut"></div>
+      </div>
     </section>
 
     <section id="tab-results" class="tab">
