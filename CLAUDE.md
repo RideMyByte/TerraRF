@@ -12,7 +12,11 @@ Läuft als ein Docker-Container (FastAPI + statisches Leaflet-Frontend), Zielpla
 - `app/coverage.py` – Orchestrierung pro Station (Cache auf Platte + RAM), Composite-Layer, PNGs,
   Inspect und Profil. **Bei jeder Modelländerung `MODEL_VERSION` erhöhen**, sonst liefern Caches alte Werte.
 - `app/regions.py` – Download-Jobs und Vorladen von NRW beim Start.
-- `app/main.py` – API. `app/static/` – Frontend (Vanilla JS, keine Build-Tools).
+- `app/main.py` – API. `app/auth.py` – ein Admin (Env), signiertes Session-Cookie; Besucher nur lesend
+  auf Projekte mit `public: true`. Schreibende Endpunkte immer mit `dependencies=ADMIN`.
+- `app/static/` – Frontend (Vanilla JS, keine Build-Tools). Jede Station kommt als Datenbild
+  (`/api/station/<key>/<factor>.png`: R = dBm+200, G = Sichtklasse | Dachsicht<<2); das Zusammensetzen
+  der Ansichten passiert im Browser (`composite()` in `app.js`).
 - `templates/terrarf.xml`, `ca_profile.xml` – Unraid / Community Applications.
 
 ## Regeln

@@ -8,6 +8,9 @@ services:
     volumes:
       - ./data:/data              # Projekte, NRW-Höhendaten, Cache
     environment:
+      - RFP_ADMIN_USER=admin
+      - RFP_ADMIN_PASSWORD=             # leer = zufällig erzeugen (Log / data/admin_password.txt)
+      - RFP_PUBLIC_READ=true            # Besucher dürfen öffentliche Projekte ansehen
       - RFP_PRELOAD=nrw_dgm,nrw_dom     # leer = nur bei Bedarf laden
       - RFP_NRW_RES=5
       - RFP_PRELOAD_CENTER=51.48,7.55   # von hier aus nach außen vorladen (lat,lon)

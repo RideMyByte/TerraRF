@@ -8,6 +8,8 @@ import pytest
 _DATA = tempfile.mkdtemp(prefix="rfp-test-")
 os.environ["RFP_DATA"] = _DATA
 os.environ["RFP_PRELOAD"] = ""          # never download at startup in tests
+os.environ["RFP_ADMIN_USER"] = "admin"
+os.environ["RFP_ADMIN_PASSWORD"] = "test-pw"
 os.environ["NUMBA_CACHE_DIR"] = os.path.join(_DATA, "numba")
 
 import rasterio  # noqa: E402

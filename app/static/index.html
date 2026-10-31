@@ -6,22 +6,27 @@
 <title>TerraRF</title>
 <link rel="icon" type="image/svg+xml" href="/static/icon.svg">
 <link rel="stylesheet" href="/static/vendor/leaflet/leaflet.css">
-<link rel="stylesheet" href="/static/style.css">
+<link rel="stylesheet" href="/static/style.css?v=__VERSION__">
 </head>
 <body>
 <div id="app">
   <aside id="side">
     <header>
-      <div class="brand"><img src="/static/icon.svg" alt="" class="logo"> Terra<span class="rf">RF</span> <span id="ver" class="note"></span></div>
+      <div class="brand"><img src="/static/icon.svg" alt="" class="logo"> Terra<span class="rf">RF</span> <span id="ver" class="note"></span>
+        <button id="btnLogin" class="login">Anmelden</button></div>
       <div class="proj">
-        <input id="projName" value="Neues Projekt" title="Projektname">
+        <input id="projName" value="Neues Projekt" title="Projektname" class="admin-ro">
         <span id="dirty" title="Ungespeicherte Änderungen"></span>
       </div>
       <div class="row tight">
-        <button id="btnSave" title="Projekt auf dem Server speichern">💾 Speichern</button>
+        <button id="btnSave" class="admin-only" title="Projekt auf dem Server speichern">💾 Speichern</button>
         <select id="projList" title="Projekt laden"><option value="">Laden …</option></select>
-        <button id="btnNew" title="Neues Projekt">Neu</button>
-        <button id="btnMore" title="Import/Export">⋯</button>
+        <button id="btnNew" class="admin-only" title="Neues Projekt">Neu</button>
+        <button id="btnMore" class="admin-only" title="Import/Export">⋯</button>
+      </div>
+      <div class="row tight">
+        <label class="chk admin-only" style="margin:0"><input type="checkbox" id="projPublic"> öffentlich sichtbar</label>
+        <button id="btnShare" title="Link zu diesem Projekt kopieren">🔗 Link teilen</button>
       </div>
       <div id="moreMenu" class="menu hidden">
         <button id="btnExport">Projekt als JSON exportieren</button>
@@ -33,16 +38,16 @@
 
     <nav class="tabs">
       <button data-tab="stations" class="active">Stationen</button>
-      <button data-tab="settings">Einstellungen</button>
+      <button data-tab="settings" class="admin-only">Einstellungen</button>
       <button data-tab="results">Ergebnis</button>
     </nav>
 
     <section id="tab-stations" class="tab active">
       <div class="row">
-        <button id="btnAdd" class="primary">＋ Station platzieren</button>
+        <button id="btnAdd" class="primary admin-only">＋ Station platzieren</button>
         <button id="btnCompute" class="go">▶ Berechnen</button>
       </div>
-      <label class="chk" style="margin-top:0"><input type="checkbox" id="autoCalc" checked> automatisch neu berechnen (aus Cache, nur Geändertes wird gerechnet)</label>
+      <label class="chk admin-only" style="margin-top:0"><input type="checkbox" id="autoCalc" checked> automatisch neu berechnen (aus Cache, nur Geändertes wird gerechnet)</label>
       <div id="stationList"></div>
       <div id="editor" class="hidden"></div>
     </section>
@@ -143,7 +148,11 @@
     <div id="map"></div>
     <div id="layerbox" class="hidden">
       <label>Anzeige
-        <select id="layerSel"></select></label>
+        <select id="layerSel">
+          <option value="margin">Bester Pegel (Reserve über Empfindlichkeit)</option>
+          <option value="overlap">Überlappung (Anzahl Stationen)</option>
+          <option value="server">Bester Server (Stationsfarbe)</option>
+          <option value="los">Sichtlinie / Fresnelzone / Dächer</option></select></label>
       <label>Deckkraft <input id="opacity" type="range" min="0" max="1" step="0.05" value="0.6"></label>
       <label>Mindest-Reserve: <b id="reqVal">10</b> dB <input id="reqSlider" type="range" min="-10" max="40" step="1" value="10"></label>
       <div id="legend"></div>
@@ -160,7 +169,16 @@
     </div>
   </main>
 </div>
+<dialog id="loginDlg">
+  <form id="loginForm">
+    <h3>Anmelden</h3>
+    <label>Benutzer<input id="loginUser" autocomplete="username" value="admin"></label>
+    <label>Passwort<input id="loginPw" type="password" autocomplete="current-password"></label>
+    <div id="loginErr" class="warn"></div>
+    <div class="row"><button type="button" id="loginCancel">Abbrechen</button><button type="submit" class="primary">Anmelden</button></div>
+  </form>
+</dialog>
 <script src="/static/vendor/leaflet/leaflet.js"></script>
-<script src="/static/app.js"></script>
+<script src="/static/app.js?v=__VERSION__"></script>
 </body>
 </html>

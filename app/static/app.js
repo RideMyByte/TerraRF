@@ -37,7 +37,7 @@ let placing = false;
 let dirty = false;
 const markers = {};
 const azLines = {};
-let overlay = null;
+let isAdmin = false;
 
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -61,6 +61,7 @@ async function api(path, opts = {}) {
 const map = L.map("map", { zoomControl: true, preferCanvas: false }).setView([51.575, 6.985], 12);
 const base = {
   "OpenStreetMap": L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", { maxZoom: 19, attribution: "© OpenStreetMap-Mitwirkende" }),
+  "OpenStreetMap (Graustufen)": L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", { maxZoom: 19, className: "osm-gray", attribution: "© OpenStreetMap-Mitwirkende" }),
   "OpenTopoMap": L.tileLayer("https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png", { maxZoom: 17, attribution: "© OpenStreetMap-Mitwirkende, SRTM | © OpenTopoMap (CC-BY-SA)" }),
   "Luftbild NRW (DOP)": L.tileLayer.wms("https://www.wms.nrw.de/geobasis/wms_nw_dop", { layers: "nw_dop_rgb", format: "image/jpeg", maxZoom: 20, attribution: "© Geobasis NRW (dl-de/zero-2-0)" }),
   "Satellit (Esri)": L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}", { maxZoom: 19, attribution: "Tiles © Esri, Maxar, Earthstar Geographics" }),
@@ -92,7 +93,7 @@ function drawStation(st) {
   if (markers[st.id]) { map.removeLayer(markers[st.id]); delete markers[st.id]; }
   if (azLines[st.id]) { map.removeLayer(azLines[st.id]); delete azLines[st.id]; }
   if (st.enabled === false) return;  // deactivated stations are not shown on the map
-  const m = L.marker([st.lat, st.lon], { draggable: true, icon: stationIcon(st), title: st.name });
+  const m = L.marker([st.lat, st.lon], { draggable: isAdmin, icon: stationIcon(st), title: st.name });
   m.on("click", (e) => { L.DomEvent.stopPropagation(e); select(st.id); });
   m.on("dragend", () => {
     const ll = m.getLatLng();
@@ -133,7 +134,7 @@ function newProject() {
   project = { id: null, name: "Neues Projekt", settings: { ...cfg.defaults }, stations: [], view: null };
   for (const k of Object.keys(markers)) { map.removeLayer(markers[k]); delete markers[k]; }
   for (const k of Object.keys(azLines)) { map.removeLayer(azLines[k]); delete azLines[k]; }
-  clearOverlay(); selected = null; lastRun = null;
+  clearOverlay(); selected = null; lastRun = null; runStations = {};
   $("projName").value = project.name;
   renderAll(); setDirty(false);
 }
@@ -144,28 +145,33 @@ function loadProject(p) {
   project.settings = { ...cfg.defaults, ...(p.settings || {}) };
   project.stations = p.stations || [];
   $("projName").value = p.name || "Projekt";
+  $("projPublic").checked = !!p.public;
+  if (p.id) history.replaceState(null, "", `?p=${encodeURIComponent(p.id)}`);
   project.stations.forEach(drawStation);
   if (p.view) map.setView(p.view.center, p.view.zoom);
   else if (project.stations.length) map.fitBounds(L.latLngBounds(project.stations.map((s) => [s.lat, s.lon])).pad(0.5));
   renderAll(); setDirty(false);
   status(`Projekt „${p.name}“ geladen.`);
-  if ($("autoCalc").checked && project.stations.some((x) => x.enabled !== false)) compute(true);
+  if ((!isAdmin || $("autoCalc").checked) && project.stations.some((x) => x.enabled !== false)) compute(true);
 }
 
 async function saveProject() {
   if (!project.id) project.id = (await api("/api/newid")).id;
   project.name = $("projName").value.trim() || "Projekt";
+  project.public = $("projPublic").checked;
   project.view = { center: [map.getCenter().lat, map.getCenter().lng], zoom: map.getZoom() };
   const r = await api(`/api/projects/${project.id}`, { method: "PUT", body: project });
   project.updated = r.updated;
-  setDirty(false); status("Gespeichert."); refreshProjectList();
+  setDirty(false); status(project.public ? "Gespeichert – öffentlich sichtbar." : "Gespeichert (privat)."); refreshProjectList();
+  history.replaceState(null, "", `?p=${encodeURIComponent(project.id)}`);
 }
 
 async function refreshProjectList() {
   const list = await api("/api/projects");
   const sel = $("projList");
   sel.innerHTML = `<option value="">Laden … (${list.length})</option>` +
-    list.map((p) => `<option value="${esc(p.id)}">${esc(p.name)} · ${p.stations} St.</option>`).join("");
+    list.map((p) => `<option value="${esc(p.id)}">${esc(p.name)} · ${p.stations} St.${isAdmin ? (p.public ? " · öffentlich" : " · privat") : ""}</option>`).join("");
+  return list;
 }
 
 // ------------------------------------------------------------ station list + editor
@@ -186,7 +192,11 @@ function renderList() {
   el.querySelectorAll(".st").forEach((d) => {
     d.addEventListener("click", (e) => { if (!e.target.classList.contains("en")) select(d.dataset.id, true); });
     d.querySelector(".en").addEventListener("change", (e) => {
-      const st = byId(d.dataset.id); st.enabled = e.target.checked; changed(st); drawStation(st); renderList();
+      const st = byId(d.dataset.id); st.enabled = e.target.checked;
+      drawStation(st); renderList();
+      if (isAdmin) setDirty();
+      composite();                                   // instant, from cached station images
+      if (st.enabled && !runStations[st.id]) compute(true);  // only stations never computed
     });
   });
 }
@@ -277,8 +287,10 @@ function renderEditor() {
     <label>Notizen<textarea data-k="notes" rows="2" style="width:100%">${esc(st.notes || "")}</textarea></label>`;
 
   el.querySelectorAll("[data-k]").forEach((inp) => {
+    if (!isAdmin) { inp.disabled = true; return; }
     inp.addEventListener("change", () => onField(st, inp));
   });
+  if (!isAdmin) { $("btnDel").remove(); $("elevInfo").remove(); return; }
   $("btnDel").onclick = () => {
     if (!confirm(`Station „${st.name}“ löschen?`)) return;
     project.stations = project.stations.filter((s) => s.id !== st.id);
@@ -315,7 +327,7 @@ function onField(st, inp) {
 }
 
 let autoTimer = null, computing = false, pending = false;
-function changed() { setDirty(); scheduleAuto(); }
+function changed() { if (!isAdmin) return; setDirty(); scheduleAuto(); }
 function scheduleAuto() {
   if (!$("autoCalc").checked) { if (lastRun) status("Geändert – „▶ Berechnen“ aktualisiert die Karte."); return; }
   clearTimeout(autoTimer);
@@ -361,28 +373,65 @@ function bindSettings() {
   $("btnTestSurface").onclick = () => test("surface_source").catch((e) => ($("testOut").textContent = e.message));
 }
 
-// ------------------------------------------------------------ compute + overlay
-function clearOverlay() { if (overlay) { map.removeLayer(overlay); overlay = null; } $("layerbox").classList.add("hidden"); }
+// ------------------------------------------------------------ compute + overlay (client-side compositing)
+// Each station is computed once on the server (cached) and delivered as a small data image
+// (R = level dBm+200, G = LOS class | roof visibility << 2). The browser stacks the enabled
+// stations itself, so ticking stations, switching views and the reserve slider need no server.
+const stationData = {};   // "key@factor" -> {px: Uint8ClampedArray, w, h}
+let runStations = {};     // station id -> entry from /api/coverage
+let covLayer = null;
+
+const CanvasOverlay = L.ImageOverlay.extend({
+  initialize(canvas, bounds, options) { this._canvas = canvas; L.ImageOverlay.prototype.initialize.call(this, "", bounds, options); },
+  _initImage() {
+    const c = this._image = this._canvas;
+    L.DomUtil.addClass(c, "leaflet-image-layer");
+    if (this._zoomAnimated) L.DomUtil.addClass(c, "leaflet-zoom-animated");
+    if (this.options.className) L.DomUtil.addClass(c, this.options.className);
+    c.onselectstart = L.Util.falseFn; c.onmousemove = L.Util.falseFn;
+    this._updateOpacity();
+  },
+});
+
+function clearOverlay() { if (covLayer) { map.removeLayer(covLayer); covLayer = null; } $("layerbox").classList.add("hidden"); }
+
+function computeBody(ids) {
+  return isAdmin ? { project, station_ids: ids } : { project_id: project.id, station_ids: ids };
+}
+
+async function loadStationData(e) {
+  const k = `${e.key}@${lastRun.factor}`;
+  if (stationData[k]) return stationData[k];
+  const img = new Image();
+  img.src = e.png;
+  await img.decode();
+  const c = document.createElement("canvas");
+  c.width = img.naturalWidth; c.height = img.naturalHeight;
+  const g = c.getContext("2d", { willReadFrequently: true });
+  g.drawImage(img, 0, 0);
+  const d = { px: g.getImageData(0, 0, c.width, c.height).data, w: c.width, h: c.height };
+  stationData[k] = d;
+  return d;
+}
 
 async function compute(auto = false) {
   const act = project.stations.filter((s) => s.enabled !== false);
-  if (!act.length) { clearOverlay(); lastRun = null; status(auto ? "Keine aktive Station." : "Keine aktive Station.", auto ? "" : "err"); return; }
+  if (!act.length) { clearOverlay(); status("Keine aktive Station."); return; }
+  if (!isAdmin && !project.id) return;
   if (computing) { pending = true; return; }
   computing = true;
   $("btnCompute").disabled = true;
   status(`Berechne ${act.length} Station(en) … (beim ersten Mal werden Höhendaten geladen)`, "busy");
   const t0 = performance.now();
   try {
-    const r = await api("/api/coverage", { method: "POST", body: project });
+    const r = await api("/api/coverage", { method: "POST", body: computeBody(act.map((s) => s.id)) });
+    if (lastRun && lastRun.factor !== r.factor) runStations = {};
     lastRun = r;
-    const sel = $("layerSel");
-    const prev = sel.value;
-    sel.innerHTML = r.layers.map((l) => `<option value="${l.id}">${esc(l.label)}</option>`).join("") +
-      r.stations.map((s) => `<option value="station:${esc(s.id)}">Nur: ${esc(s.name)}</option>`).join("");
-    if ([...sel.options].some((o) => o.value === prev)) sel.value = prev;
-    showLayer();
+    for (const e of r.stations) runStations[e.id] = e;
+    await Promise.all(r.stations.map(loadStationData));
+    composite();
     renderResults(r);
-    status(`Fertig in ${((performance.now() - t0) / 1000).toFixed(1)} s.` + (r.downsample > 1 ? ` (Anzeige um Faktor ${r.downsample} vergröbert)` : ""));
+    status(`Fertig in ${((performance.now() - t0) / 1000).toFixed(1)} s.` + (r.factor > 1 ? ` (Anzeige ${fmt(r.cell_m * Math.cos(map.getCenter().lat * Math.PI / 180), 0)} m Raster)` : ""));
   } catch (e) {
     status("Fehler: " + e.message, "err");
   } finally {
@@ -391,22 +440,84 @@ async function compute(auto = false) {
   }
 }
 
-function showLayer() {
-  if (!lastRun) return;
+function activeEntries() {
+  if (!lastRun) return [];
+  return project.stations.filter((s) => s.enabled !== false && runStations[s.id])
+    .map((s) => ({ st: s, e: runStations[s.id], d: stationData[`${runStations[s.id].key}@${lastRun.factor}`] }))
+    .filter((x) => x.d);
+}
+
+function hexRgb(h) { h = (h || "#3388ff").replace("#", ""); return [parseInt(h.slice(0, 2), 16), parseInt(h.slice(2, 4), 16), parseInt(h.slice(4, 6), 16)]; }
+
+function composite() {
+  const list = activeEntries();
+  if (!list.length) { clearOverlay(); return; }
   const layer = $("layerSel").value || "margin";
-  const bounds = layer.startsWith("station:") ? lastRun.station_bounds[layer.slice(8)] : lastRun.bounds;
-  if (overlay) map.removeLayer(overlay);
   const req = +project.settings.min_margin_db || 0;
-  overlay = L.imageOverlay(`/api/run/${lastRun.run_id}/${encodeURIComponent(layer)}.png?req=${req}`, bounds,
-    { opacity: +$("opacity").value, interactive: false, className: "cov" }).addTo(map);
+  let gx0 = Infinity, gy0 = Infinity, gx1 = -Infinity, gy1 = -Infinity;
+  for (const { e } of list) { gx0 = Math.min(gx0, e.gx0); gy0 = Math.min(gy0, e.gy0); gx1 = Math.max(gx1, e.gx0 + e.w); gy1 = Math.max(gy1, e.gy0 + e.h); }
+  const W = gx1 - gx0, H = gy1 - gy0, N = W * H;
+  const best = new Float32Array(N).fill(-1e9);
+  const idx = new Int16Array(N).fill(-1);
+  const cnt = new Uint8Array(N);
+  const los = new Uint8Array(N);
+  list.forEach(({ e, d }, k) => {
+    const sens = e.sensitivity_dbm, ox = e.gx0 - gx0, oy = e.gy0 - gy0, px = d.px;
+    for (let y = 0; y < d.h; y++) {
+      let si = y * d.w * 4, di = (y + oy) * W + ox;
+      for (let x = 0; x < d.w; x++, si += 4, di++) {
+        const R = px[si];
+        if (!R) continue;
+        const m = R - 200 - sens;
+        if (m > best[di]) { best[di] = m; idx[di] = k; }
+        if (m >= req) cnt[di]++;
+        const G = px[si + 1], cls = G & 3, vis = G >> 2;
+        const v = cls === 2 ? 3 : cls === 1 ? 2 : vis ? 1 : 0;
+        if (v > los[di]) los[di] = v;
+      }
+    }
+  });
+  const lows = req > 0 ? [0, req, req + 6, req + 12, req + 20] : [0, 6, 12, 20, 30];
+  const mcol = lastRun.legend.margin.map((x) => hexRgb(x.color));
+  const ocol = lastRun.legend.overlap.map((x) => hexRgb(x.color));
+  const scol = list.map(({ st }) => hexRgb(st.color));
+  const lcol = [null, [127, 179, 255], [255, 210, 0], [0, 170, 90]];
+  const canvas = document.createElement("canvas");
+  canvas.width = W; canvas.height = H;
+  const g = canvas.getContext("2d");
+  const out = g.createImageData(W, H), o = out.data;
+  for (let i = 0, j = 0; i < N; i++, j += 4) {
+    let c = null;
+    if (layer === "margin") {
+      const m = best[i];
+      if (m >= lows[0]) { let b = 0; while (b + 1 < lows.length && m >= lows[b + 1]) b++; c = mcol[b]; }
+    } else if (layer === "overlap") {
+      if (cnt[i]) c = ocol[Math.min(cnt[i], ocol.length) - 1];
+    } else if (layer === "server") {
+      if (idx[i] >= 0 && best[i] >= req) c = scol[idx[i]];
+    } else if (layer === "los") {
+      if (los[i]) c = lcol[los[i]];
+    }
+    if (c) { o[j] = c[0]; o[j + 1] = c[1]; o[j + 2] = c[2]; o[j + 3] = 255; }
+  }
+  g.putImageData(out, 0, 0);
+  // grid -> lat/lon bounds (web mercator)
+  const cm = lastRun.cell_m, R = 6378137;
+  const toLat = (y) => (2 * Math.atan(Math.exp(y / R)) - Math.PI / 2) * 180 / Math.PI;
+  const toLon = (x) => x / R * 180 / Math.PI;
+  const bounds = [[toLat(-gy1 * cm), toLon(gx0 * cm)], [toLat(-gy0 * cm), toLon(gx1 * cm)]];
+  if (covLayer) map.removeLayer(covLayer);
+  covLayer = new CanvasOverlay(canvas, bounds, { opacity: +$("opacity").value, interactive: false, className: "cov" }).addTo(map);
   $("layerbox").classList.remove("hidden");
   renderLegend(layer);
 }
 
+function showLayer() { composite(); }
+
 function renderLegend(layer) {
   const lg = lastRun.legend;
   let h = "";
-  if (layer === "margin" || layer.startsWith("station:")) {
+  if (layer === "margin") {
     const req = +project.settings.min_margin_db || 0;
     const lows = req > 0 ? [0, req, req + 6, req + 12, req + 20] : [0, 6, 12, 20, 30];
     const b = lg.margin.map((x, i) => ({ color: x.color, from: lows[i] }));
@@ -439,27 +550,38 @@ function renderResults(r) {
 }
 
 // ------------------------------------------------------------ inspect + profile
-async function inspectAt(latlng) {
-  const pop = L.popup({ maxWidth: 360 }).setLatLng(latlng).setContent("…").openOn(map);
-  let rows = "";
-  if (lastRun) {
-    try {
-      const r = await api("/api/inspect", { method: "POST", body: { run_id: lastRun.run_id, lat: latlng.lat, lon: latlng.lng } });
-      rows = r.stations.map((s) => `<tr><td><span style="color:${esc(s.color)}">●</span> ${esc(s.name)}</td>
-        <td>${fmt(s.distance_km, 2)} km</td>
-        <td>${s.in_range ? `${fmt(s.prx_dbm)} dBm` : "außerhalb"}</td>
-        <td class="${s.in_range && s.margin_db >= (project.settings.min_margin_db || 0) ? "ok" : "no"}">${s.in_range ? (s.margin_db >= 0 ? "+" : "") + fmt(s.margin_db) + " dB" : ""}</td>
-        <td title="Sicht Empfänger / Dach">${s.in_range ? ["–", "LOS", "LOS+F"][s.los] + (s.roof_visible ? " · Dach✓" : "") : ""}</td>
-        <td><button data-prof="${esc(s.id)}">Profil</button></td></tr>`).join("");
-    } catch (e) { rows = `<tr><td>${esc(e.message)}</td></tr>`; }
-  } else {
-    rows = project.stations.map((s) => `<tr><td><span style="color:${esc(s.color)}">●</span> ${esc(s.name)}</td><td><button data-prof="${esc(s.id)}">Profil</button></td></tr>`).join("");
-  }
+function sampleStation(e, d, lat, lon) {
+  const R = 6378137, cm = lastRun.cell_m;
+  const x = lon * Math.PI / 180 * R, y = Math.log(Math.tan(Math.PI / 4 + lat * Math.PI / 360)) * R;
+  const col = Math.floor(x / cm) - e.gx0, row = Math.floor(-y / cm) - e.gy0;
+  if (col < 0 || row < 0 || col >= d.w || row >= d.h) return null;
+  const i = (row * d.w + col) * 4;
+  if (!d.px[i]) return null;
+  const prx = d.px[i] - 200, G = d.px[i + 1];
+  return { prx, margin: prx - e.sensitivity_dbm, los: G & 3, roof: !!(G >> 2) };
+}
+function distKm(a, b, c, d) {
+  const r = Math.PI / 180, x = Math.sin((c - a) * r / 2) ** 2 + Math.cos(a * r) * Math.cos(c * r) * Math.sin((d - b) * r / 2) ** 2;
+  return 12742 * Math.asin(Math.sqrt(x));
+}
+
+function inspectAt(latlng) {
+  const req = project.settings.min_margin_db || 0;
+  const rows = project.stations.filter((s) => s.enabled !== false).map((s) => {
+    const e = runStations[s.id], d = e && lastRun && stationData[`${e.key}@${lastRun.factor}`];
+    const v = d ? sampleStation(e, d, latlng.lat, latlng.lng) : null;
+    return `<tr><td><span style="color:${esc(s.color)}">●</span> ${esc(s.name)}</td>
+      <td>${fmt(distKm(s.lat, s.lon, latlng.lat, latlng.lng), 2)} km</td>
+      <td>${v ? `${fmt(v.prx, 0)} dBm` : (d ? "außerhalb" : "–")}</td>
+      <td class="${v && v.margin >= req ? "ok" : "no"}">${v ? (v.margin >= 0 ? "+" : "") + fmt(v.margin, 0) + " dB" : ""}</td>
+      <td title="Sicht Empfänger / Dach">${v ? ["–", "LOS", "LOS+F"][v.los] + (v.roof ? " · Dach✓" : "") : ""}</td>
+      <td><button data-prof="${esc(s.id)}">Profil</button></td></tr>`;
+  }).join("");
   const div = document.createElement("div");
   div.className = "popup";
-  div.innerHTML = `<div class="note">${latlng.lat.toFixed(5)}, ${latlng.lng.toFixed(5)}</div><table>${rows}</table>`;
+  div.innerHTML = `<div class="note">${latlng.lat.toFixed(5)}, ${latlng.lng.toFixed(5)}</div><table>${rows || "<tr><td>Keine aktive Station</td></tr>"}</table>`;
   div.querySelectorAll("[data-prof]").forEach((b) => b.addEventListener("click", () => showProfile(b.dataset.prof, latlng)));
-  pop.setContent(div);
+  L.popup({ maxWidth: 380 }).setLatLng(latlng).setContent(div).openOn(map);
 }
 
 let profLine = null;
@@ -471,7 +593,7 @@ async function showProfile(sid, latlng) {
   if (profLine) map.removeLayer(profLine);
   profLine = L.polyline([[st.lat, st.lon], [latlng.lat, latlng.lng]], { color: st.color, dashArray: "6 4", weight: 2 }).addTo(map);
   try {
-    const p = await api("/api/profile", { method: "POST", body: { project, station_id: sid, lat: latlng.lat, lon: latlng.lng } });
+    const p = await api("/api/profile", { method: "POST", body: { ...(isAdmin ? { project } : { project_id: project.id }), station_id: sid, lat: latlng.lat, lon: latlng.lng } });
     $("profMeta").textContent = `${fmt(p.distance_m / 1000, 2)} km · Azimut ${fmt(p.azimuth_deg, 0)}° · Elevation ${fmt(p.elevation_deg, 2)}° · ` +
       ["keine Sichtlinie", "Sichtlinie, Fresnelzone verletzt", "Fresnelzone ≥ 60 % frei"][p.los_class] +
       (p.worst_at_m != null ? ` · engste Stelle bei ${fmt(p.worst_at_m / 1000, 2)} km (Freiraum ${fmt(p.worst_clearance_ratio * 100, 0)} % F1)` : "");
@@ -635,7 +757,7 @@ function wire() {
   $("btnCompute").onclick = compute;
   document.addEventListener("keydown", (e) => { if (e.key === "Escape") setPlacing(false); });
   map.on("click", (e) => {
-    if (placing) {
+    if (placing && isAdmin) {
       const st = defaultStation(e.latlng.lat, e.latlng.lng);
       project.stations.push(st); drawStation(st); setPlacing(false); select(st.id); changed();
       return;
@@ -643,16 +765,33 @@ function wire() {
     inspectAt(e.latlng);
   });
   $("layerSel").onchange = showLayer;
-  $("opacity").oninput = () => overlay && overlay.setOpacity(+$("opacity").value);
+  $("opacity").oninput = () => covLayer && covLayer.setOpacity(+$("opacity").value);
   $("reqSlider").oninput = () => { $("reqVal").textContent = $("reqSlider").value; };
   $("reqSlider").onchange = () => {
     project.settings.min_margin_db = +$("reqSlider").value;
     $("s_min_margin_db").value = $("reqSlider").value;
-    setDirty(); showLayer();
+    if (isAdmin) setDirty();
+    composite();
   };
   $("autoCalc").onchange = () => { if ($("autoCalc").checked) scheduleAuto(); };
   $("profClose").onclick = () => { $("profile").classList.add("hidden"); if (profLine) { map.removeLayer(profLine); profLine = null; } };
   $("projName").onchange = () => { project.name = $("projName").value; setDirty(); };
+  $("projPublic").onchange = () => { project.public = $("projPublic").checked; setDirty(); };
+  $("btnShare").onclick = async () => {
+    if (!project.id) { status("Projekt zuerst speichern.", "err"); return; }
+    const url = `${location.origin}${location.pathname}?p=${encodeURIComponent(project.id)}`;
+    try { await navigator.clipboard.writeText(url); status("Link kopiert" + (project.public ? "." : " – Achtung: Projekt ist privat, Besucher sehen es nicht.")); }
+    catch { prompt("Link zum Projekt:", url); }
+  };
+  $("btnLogin").onclick = () => (isAdmin ? logout() : $("loginDlg").showModal());
+  $("loginForm").onsubmit = async (e) => {
+    e.preventDefault();
+    try {
+      await api("/api/login", { method: "POST", body: { user: $("loginUser").value, password: $("loginPw").value } });
+      location.reload();
+    } catch (er) { $("loginErr").textContent = er.message; }
+  };
+  $("loginCancel").onclick = () => $("loginDlg").close();
   $("btnSave").onclick = () => saveProject().catch((e) => status("Fehler: " + e.message, "err"));
   $("btnNew").onclick = () => { if (!dirty || confirm("Ungespeicherte Änderungen verwerfen?")) newProject(); };
   $("projList").onchange = async (e) => {
@@ -683,13 +822,36 @@ function wire() {
   window.addEventListener("resize", () => { /* profile redraw on next open */ });
 }
 
+async function logout() {
+  if (dirty && !confirm("Ungespeicherte Änderungen verwerfen?")) return;
+  dirty = false;
+  await api("/api/logout", { method: "POST" });
+  location.reload();
+}
+
+function applyRole() {
+  document.body.classList.toggle("readonly", !isAdmin);
+  $("btnLogin").textContent = isAdmin ? `Abmelden (${cfg.auth.user})` : "Anmelden";
+  if (!isAdmin && document.querySelector(".tabs button.active")?.dataset.tab === "settings") activateTab("stations");
+}
+
 async function init() {
   cfg = await api("/api/config");
+  isAdmin = !!cfg.auth?.admin;
   $("ver").textContent = !cfg.version ? "" : /^\d/.test(cfg.version) ? "v" + cfg.version : cfg.version;
-  wire(); bindSettings();
+  wire(); applyRole();
+  if (isAdmin) bindSettings();
   newProject();
-  refreshProjectList().catch(() => {});
-  status("Bereit. „＋ Station platzieren“, dann „▶ Berechnen“.");
+  if (!isAdmin && !cfg.auth.public_read) { status("Bitte anmelden."); $("loginDlg").showModal(); return; }
+  const list = await refreshProjectList().catch(() => []);
+  const want = new URLSearchParams(location.search).get("p");
+  const pick = want || (!isAdmin && list && list.length ? list[0].id : null);
+  if (pick) {
+    try { loadProject(await api(`/api/projects/${encodeURIComponent(pick)}`)); }
+    catch (e) { status("Projekt nicht gefunden oder nicht öffentlich.", "err"); }
+  } else {
+    status(isAdmin ? "Bereit. „＋ Station platzieren“, dann „▶ Berechnen“." : "Noch keine öffentlichen Projekte.");
+  }
 }
 init().catch((e) => status("Start fehlgeschlagen: " + e.message, "err"));
 })();

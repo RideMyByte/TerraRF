@@ -1,7 +1,16 @@
 # Changelog
 
 ## [Unreleased]
-- Projekt heißt jetzt **TerraRF** (Image `ghcr.io/<owner>/terrarf`, Unraid-Template `terrarf.xml`), neues Logo
+
+## 0.4.0
+- **Admin-Login** (#13): ein Admin aus der Konfiguration (`RFP_ADMIN_USER`/`RFP_ADMIN_PASSWORD`),
+  Besucher sehen öffentliche Projekte nur lesend; Projekte privat/öffentlich, „Link teilen“
+- **Stationen ein-/ausblenden ohne Neuberechnung** (#12): jede Station wird einmal berechnet und als
+  eigenes Datenbild geliefert; der Browser setzt die Ansichten selbst zusammen, Haken, Ansicht und
+  Reserve-Regler wirken sofort. Auswahl „Nur: Station …“ entfernt
+- Basiskarte OpenStreetMap in Graustufen
+- Abfrage per Klick in die Karte ohne Serveranfrage
+- Projekt heißt jetzt **TerraRF**, neues Logo
 
 ## 0.3.0
 - Lokaler NRW-Kachelspeicher (5 m), Vorladen von ganz NRW beim Start, fortsetzbar

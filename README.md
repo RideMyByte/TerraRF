@@ -26,6 +26,8 @@ und weltweit Copernicus GLO-30.
 - Haken an der Station blendet sie ein/aus; Änderungen werden automatisch aus dem Cache nachgerechnet
 - Regler für Deckkraft und Mindest-Reserve direkt an der Karte
 - Projekte speichern, laden, als JSON exportieren/importieren
+- Ein Admin-Login zum Bearbeiten; Besucher sehen öffentliche Projekte nur lesend (Teilen per Link)
+- Basiskarten inkl. OpenStreetMap in Graustufen
 
 ## Installation
 
@@ -51,12 +53,20 @@ oder `docker compose up -d` mit der beiliegenden `docker-compose.yml`.
 ### Konfiguration (Umgebungsvariablen)
 | Variable | Standard | Bedeutung |
 |---|---|---|
+| `RFP_ADMIN_USER` | `admin` | Benutzer für den Login (Bearbeiten, Speichern, Downloads) |
+| `RFP_ADMIN_PASSWORD` | – | Passwort; leer = wird beim ersten Start erzeugt und ins Log sowie nach `data/admin_password.txt` geschrieben |
+| `RFP_PUBLIC_READ` | `true` | Besucher dürfen als „öffentlich“ markierte Projekte ohne Login ansehen |
 | `RFP_PRELOAD` | `nrw_dgm,nrw_dom` | NRW-Modelle beim Start komplett laden (leer = nur bei Bedarf) |
 | `RFP_NRW_RES` | `5` | Rasterweite des lokalen NRW-Speichers (m) |
 | `RFP_PRELOAD_CENTER` | `51.48,7.55` | Startpunkt des Vorladens (lat,lon), nahe Kacheln zuerst |
 | `RFP_REGION_WORKERS` | `2` | parallele Anfragen beim Vorladen |
 | `PUID` / `PGID` | – | Dateien in `/data` gehören diesem Benutzer (Unraid-Template: 99/100) |
 | `RFP_WCS_MAX_NATIVE_MB` | `400` | Limit, falls ein WCS nicht serverseitig skaliert |
+
+**Zugriff:** Ohne Login sieht man nur Projekte mit Haken „öffentlich sichtbar“ – Stationen
+ein-/ausblenden, Ansicht und Reserve-Regler, Profile ansehen, aber nichts ändern oder speichern.
+„🔗 Link teilen“ kopiert einen direkten Link (`?p=<id>`). Wer TerraRF im Internet erreichbar macht,
+sollte es hinter einen Reverse Proxy mit HTTPS stellen (das Session-Cookie wird dann als `Secure` gesetzt).
 
 Updates: Neue Versionen erscheinen als `:latest`. Unraid zeigt im Docker-Tab „Update verfügbar“.
 Wer immer den neuesten Stand von `main` will, nimmt `:edge`.

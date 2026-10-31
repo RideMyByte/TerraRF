@@ -90,6 +90,7 @@ def hex_rgba(h, a=255):
 class StationResult:
     def __init__(self, sid, grid, prx, vmain, sens, info, vis=None):
         self.vis = vis
+        self.key = None
         self.sid = sid
         self.grid = grid
         self.prx = prx  # float32, NaN outside radius
@@ -156,6 +157,7 @@ def compute_station(st, s, cs):
         grid = Grid(*[float(z["grid"][0])] + [int(v) for v in z["grid"][1:]])
         info = json.loads(str(z["info"]))
         res = StationResult(st["id"], grid, z["prx"], z["vmain"], 0.0, info, z["vis"])
+        res.key = key
         _remember(key, res)
         return res, True
 
@@ -229,6 +231,7 @@ def compute_station(st, s, cs):
         "t_terrain_s": round(t_terrain, 2), "t_kernel_s": round(t_kernel, 2), "t_total_s": round(time.time() - t0, 2), "warnings": warn,
     }
     res = StationResult(st["id"], grid, prx.astype(np.float32), vm, 0.0, info, vis)
+    res.key = key
     np.savez(path, grid=np.array([grid.cs, grid.ix0, grid.iy0, grid.nx, grid.ny], dtype=np.float64),
              prx=res.prx, vmain=res.vmain, vis=vis, info=json.dumps(info))
     _remember(key, res)
@@ -246,10 +249,6 @@ def _remember(key, res):
 # --------------------------------------------------------------------------
 # Runs (composite of all stations)
 # --------------------------------------------------------------------------
-_runs: "OrderedDict[str, dict]" = OrderedDict()
-_runs_lock = threading.Lock()
-
-
 def project_cs(project, s):
     sts = project.get("stations") or []
     lat_ref = np.mean([float(x["lat"]) for x in sts]) if sts else 51.5
@@ -257,9 +256,15 @@ def project_cs(project, s):
     return float(s["res_m"]) / math.cos(math.radians(lat_ref))
 
 
-def run_coverage(project):
+MAX_DIM = int(os.environ.get("RFP_MAX_LAYER_PX", "3000"))  # max. edge length of one station image
+
+
+def run_coverage(project, station_ids=None):
+    """Compute (or fetch from cache) all requested stations. No server-side compositing:
+    the browser stacks the per-station data images itself."""
     s = merged_settings(project)
-    stations = [st for st in project.get("stations") or [] if st.get("enabled", True)]
+    stations = [st for st in project.get("stations") or []
+                if (st["id"] in station_ids if station_ids is not None else st.get("enabled", True))]
     if not stations:
         raise ValueError("Keine aktive Station")
     cs = project_cs(project, s)
@@ -268,94 +273,29 @@ def run_coverage(project):
     with _compute_lock:  # one heavy computation at a time
         for st in stations:
             r, cached = compute_station(st, s, cs)
-            r.sens = prop.sensitivity_dbm(st, s.get("noise_rise_db", 0.0))
-            r.sid = st["id"]
             results.append((st, r, cached))
-
-    U = Grid.union([r.grid for _, r, _ in results])
-    f = max(1, math.ceil(math.sqrt(U.nx * U.ny / MAX_COMPOSITE_CELLS)))
-    C = Grid(U.cs * f, U.ix0 // f, U.iy0 // f, math.ceil((U.ix0 + U.nx) / f) - U.ix0 // f,
-             math.ceil((U.iy0 + U.ny) / f) - U.iy0 // f)
-
-    best = np.full((C.ny, C.nx), -np.inf, dtype=np.float32)
-    count = np.zeros((C.ny, C.nx), dtype=np.int16)
-    best_idx = np.full((C.ny, C.nx), -1, dtype=np.int16)
-    los = np.zeros((C.ny, C.nx), dtype=np.int8)
-    vis = np.zeros((C.ny, C.nx), dtype=np.int8)
-    per_station = []  # (slices, margin float16) for live re-thresholding
-    min_margin = float(s["min_margin_db"])
-    stats = []
-    for k, (st, r, cached) in enumerate(results):
+    # one common downsampling factor keeps all station images on the same pixel grid
+    f = max(1, max(math.ceil(max(r.grid.nx, r.grid.ny) / MAX_DIM) for _, r, _ in results))
+    out = []
+    for st, r, cached in results:
         g = r.grid
-        # map composite cell centres to station grid indices
-        cx = ((C.ix0 + np.arange(C.nx) + 0.5) * C.cs - g.x0) / g.cs
-        cy = ((C.iy0 + np.arange(C.ny) + 0.5) * C.cs - g.iy0 * g.cs) / g.cs
-        ci = np.floor(cx).astype(np.int64)
-        ri = np.floor(cy).astype(np.int64)
-        okc = np.where((ci >= 0) & (ci < g.nx))[0]
-        okr = np.where((ri >= 0) & (ri < g.ny))[0]
-        if len(okc) == 0 or len(okr) == 0:
-            continue
-        sub_m = (r.prx[np.ix_(ri[okr], ci[okc])] - r.sens).astype(np.float32)
-        sub_v = r.vmain[np.ix_(ri[okr], ci[okc])]
-        valid = ~np.isnan(sub_m)
-        sl = np.ix_(okr, okc)
-        bm = best[sl]
-        bidx = best_idx[sl]
-        better = valid & (sub_m > bm)
-        bm[better] = sub_m[better]
-        bidx[better] = k
-        best[sl] = bm
-        best_idx[sl] = bidx
-        cnt = count[sl]
-        cnt[valid & (sub_m >= min_margin)] += 1
-        count[sl] = cnt
-        lc = np.where(valid, prop.los_class(np.nan_to_num(sub_v, nan=1e9)), 0).astype(np.int8)
-        los[sl] = np.maximum(los[sl], lc)
-        if r.vis is not None:
-            vis[sl] = np.maximum(vis[sl], r.vis[np.ix_(ri[okr], ci[okc])])
-        per_station.append((okr, okc, sub_m.astype(np.float16)))
-
+        dg = _down_grid(g, f)
         kscale = math.cos(math.radians(float(st["lat"])))
-        m_full = r.prx - r.sens
-        covered = np.nan_to_num(m_full, nan=-999) >= min_margin
+        sens = prop.sensitivity_dbm(st, s.get("noise_rise_db", 0.0))
         cell_area = (g.cs * kscale) ** 2
-        stats.append({
-            "id": st["id"], "name": st.get("name"), "sensitivity_dbm": round(r.sens, 1),
+        covered = np.nan_to_num(r.prx - sens, nan=-999) >= float(s["min_margin_db"])
+        out.append({
+            "id": st["id"], "name": st.get("name"), "key": r.key, "sensitivity_dbm": round(sens, 1),
+            "png": f"/api/station/{r.key}/{f}.png",
+            "gx0": dg.ix0, "gy0": dg.iy0, "w": dg.nx, "h": dg.ny, "bounds": dg.latlon_bounds(),
             "area_km2": round(float(covered.sum()) * cell_area / 1e6, 2),
             "los_area_km2": round(float((np.nan_to_num(r.vmain, nan=1e9) <= 0).sum()) * cell_area / 1e6, 2),
             "cached": cached, **r.info,
         })
-
-    run_id = hashlib.sha1(json.dumps([project.get("stations"), s, time.time()], sort_keys=True, default=str)
-                          .encode()).hexdigest()[:16]
-    run = {
-        "id": run_id, "grid": C, "best": best, "count": count, "best_idx": best_idx, "los": los, "vis": vis,
-        "per_station": per_station,
-        "stations": results, "settings": s, "colors": [hex_rgba(st.get("color")) for st, _, _ in results],
-        "png": {},
-    }
-    with _runs_lock:
-        _runs[run_id] = run
-        while len(_runs) > 4:
-            _runs.popitem(last=False)
-    layers = [
-        {"id": "margin", "label": "Bester Pegel (Reserve über Empfindlichkeit)"},
-        {"id": "overlap", "label": "Überlappung (Anzahl Stationen)"},
-        {"id": "server", "label": "Bester Server (Stationsfarbe)"},
-        {"id": "los", "label": "Sichtlinie / Fresnelzone"},
-    ]
     return {
-        "run_id": run_id,
-        "bounds": C.latlon_bounds(),
-        "downsample": f,
-        "layers": layers,
-        "stations": stats,
-        "station_bounds": {st["id"]: r.grid.latlon_bounds() for st, r, _ in results},
-        "t_total_s": round(time.time() - t0, 2),
+        "factor": f, "cell_m": round(cs * f, 3), "stations": out, "t_total_s": round(time.time() - t0, 2),
         "legend": {
             "margin": [{"from": b, "color": "#%02x%02x%02x" % c[:3]} for b, c in margin_bins(s["min_margin_db"])],
-            "required_margin_db": float(s["min_margin_db"]),
             "overlap": [{"n": i + 1, "color": "#%02x%02x%02x" % c[:3]} for i, c in enumerate(OVERLAP_COLORS)],
             "los": [{"cls": 3, "label": "Dach/Baumkrone sichtbar", "color": "#7fb3ff"},
                     {"cls": 1, "label": "Empfänger: Sichtlinie, Fresnelzone verletzt", "color": "#ffd200"},
@@ -364,90 +304,73 @@ def run_coverage(project):
     }
 
 
-def get_run(run_id):
-    with _runs_lock:
-        return _runs.get(run_id)
+def _down_grid(g, f):
+    if f == 1:
+        return g
+    ix0 = -(-g.ix0 // f)  # ceil
+    iy0 = -(-g.iy0 // f)
+    nx = (g.ix0 + g.nx - 1) // f - ix0 + 1
+    ny = (g.iy0 + g.ny - 1) // f - iy0 + 1
+    return Grid(g.cs * f, ix0, iy0, max(nx, 1), max(ny, 1))
 
 
-def _margin_rgba(m, req=0.0):
-    out = np.zeros(m.shape + (4,), dtype=np.uint8)
-    m = np.nan_to_num(m, nan=-np.inf, neginf=-np.inf)
-    for lo, col in margin_bins(req):
-        out[m >= lo] = col
-    return out
+_png_cache: "OrderedDict[str, bytes]" = OrderedDict()
+_png_lock = threading.Lock()
 
 
-def render_layer(run, layer, req=None):
-    req = float(run["settings"]["min_margin_db"] if req is None else req)
-    key = f"{layer}|{req:.1f}"
-    if key in run["png"]:
-        return run["png"][key]
-    C = run["grid"]
-    if layer == "margin":
-        rgba = _margin_rgba(run["best"], req)
-    elif layer in ("overlap", "server"):
-        if layer == "overlap":
-            c = np.zeros((C.ny, C.nx), dtype=np.int16)
-            for okr, okc, m in run["per_station"]:
-                sl = np.ix_(okr, okc)
-                c[sl] += (np.nan_to_num(m.astype(np.float32), nan=-999) >= req)
-            rgba = np.zeros(c.shape + (4,), dtype=np.uint8)
-            for i, col in enumerate(OVERLAP_COLORS):
-                rgba[c >= i + 1] = col
-        else:
-            idx = run["best_idx"]
-            ok = run["best"] >= req
-            rgba = np.zeros(idx.shape + (4,), dtype=np.uint8)
-            for k, col in enumerate(run["colors"]):
-                rgba[(idx == k) & ok] = col
-    elif layer == "los":
-        l = run["los"]
-        rgba = np.zeros(l.shape + (4,), dtype=np.uint8)
-        rgba[run["vis"] > 0] = VIS_COLOR
-        for cls, col in LOS_COLORS.items():
-            rgba[l == cls] = col
-    elif layer.startswith("station:"):
-        sid = layer.split(":", 1)[1]
-        for st, r, _ in run["stations"]:
-            if st["id"] == sid:
-                rgba = _margin_rgba(r.prx - r.sens, req)
-                break
-        else:
-            raise KeyError(layer)
+def station_png(key, f):
+    """Data image of one station: R = Pegel (dBm + 200, 0 = außerhalb), G = Sichtklasse | Dachsicht << 2."""
+    ck = f"{key}@{f}"
+    with _png_lock:
+        if ck in _png_cache:
+            _png_cache.move_to_end(ck)
+            return _png_cache[ck]
+    r = load_station(key)
+    if r is None:
+        raise KeyError(key)
+    g = r.grid
+    if f > 1:
+        dg = _down_grid(g, f)
+        rows = dg.iy0 * f - g.iy0 + np.arange(dg.ny) * f
+        cols = dg.ix0 * f - g.ix0 + np.arange(dg.nx) * f
+        rows = np.clip(rows, 0, g.ny - 1)
+        cols = np.clip(cols, 0, g.nx - 1)
+        prx = r.prx[np.ix_(rows, cols)]
+        vm = r.vmain[np.ix_(rows, cols)]
+        vis = r.vis[np.ix_(rows, cols)] if r.vis is not None else np.zeros_like(prx, dtype=np.int8)
     else:
-        raise KeyError(layer)
+        prx, vm = r.prx, r.vmain
+        vis = r.vis if r.vis is not None else np.zeros_like(prx, dtype=np.int8)
+    valid = ~np.isnan(prx)
+    R = np.where(valid, np.clip(np.rint(np.nan_to_num(prx) + 200), 1, 255), 0).astype(np.uint8)
+    los = prop.los_class(np.nan_to_num(vm, nan=1e9)).astype(np.uint8)
+    G = np.where(valid, los | (vis.astype(np.uint8) << 2), 0).astype(np.uint8)
+    rgba = np.dstack([R, G, np.zeros_like(R), np.full_like(R, 255)])
     buf = io.BytesIO()
-    Image.fromarray(rgba, "RGBA").save(buf, "PNG", optimize=False, compress_level=3)
+    Image.fromarray(rgba, "RGBA").save(buf, "PNG", compress_level=6)
     data = buf.getvalue()
-    if len(run["png"]) > 40:
-        run["png"].clear()
-    run["png"][key] = data
+    with _png_lock:
+        _png_cache[ck] = data
+        while len(_png_cache) > 64:
+            _png_cache.popitem(last=False)
     return data
 
 
-# --------------------------------------------------------------------------
-# Inspect + profile
-# --------------------------------------------------------------------------
-def inspect_point(run, lat, lon):
-    x, y = lonlat_to_merc(lon, lat)
-    out = []
-    for st, r, _ in run["stations"]:
-        g = r.grid
-        c = int(math.floor((x - g.x0) / g.cs))
-        rr = int(math.floor((g.y1 - y) / g.cs))
-        entry = {"id": st["id"], "name": st.get("name"), "color": st.get("color")}
-        if 0 <= c < g.nx and 0 <= rr < g.ny and not np.isnan(r.prx[rr, c]):
-            p = float(r.prx[rr, c])
-            v = float(r.vmain[rr, c])
-            entry.update({"prx_dbm": round(p, 1), "margin_db": round(p - r.sens, 1),
-                          "los": int(prop.los_class(v)), "in_range": True,
-                          "roof_visible": bool(r.vis[rr, c]) if r.vis is not None else None})
-        else:
-            entry["in_range"] = False
-        sx, sy = lonlat_to_merc(float(st["lon"]), float(st["lat"]))
-        entry["distance_km"] = round(math.hypot(x - sx, y - sy) * math.cos(math.radians(lat)) / 1000, 2)
-        out.append(entry)
-    return out
+def load_station(key):
+    with _station_cache_lock:
+        if key in _station_cache:
+            return _station_cache[key]
+    if not all(c in "0123456789abcdef" for c in key):
+        return None
+    path = os.path.join(COV_DIR, key + ".npz")
+    if not os.path.exists(path):
+        return None
+    z = np.load(path, allow_pickle=False)
+    grid = Grid(*[float(z["grid"][0])] + [int(v) for v in z["grid"][1:]])
+    res = StationResult("?", grid, z["prx"], z["vmain"], 0.0, json.loads(str(z["info"])), z["vis"])
+    res.key = key
+    _remember(key, res)
+    return res
 
 
 def profile(project, station_id, lat, lon, rx_height=None):
@@ -563,5 +486,4 @@ def point_elevation(project, lat, lon):
     return {"ground_m": round(float(prop.sample(G, fx, fy)), 1), "surface_m": round(float(prop.sample(S, fx, fy)), 1)}
 
 
-__all__ = ["run_coverage", "get_run", "render_layer", "inspect_point", "profile", "point_elevation",
-           "DEFAULT_SETTINGS", "merc_to_lonlat"]
+__all__ = ["run_coverage", "station_png", "profile", "point_elevation", "DEFAULT_SETTINGS"]

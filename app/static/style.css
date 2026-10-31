@@ -85,3 +85,11 @@ label.chk { display:flex; align-items:center; gap:6px; margin-top:20px; color:va
 .job { background:#fff; border:1px solid var(--line); border-radius:5px; padding:5px 7px; margin:5px 0; font-size:12px; }
 .bar { height:6px; background:#e5e7eb; border-radius:3px; overflow:hidden; margin:3px 0; }
 .bar > div { height:100%; background:var(--acc); }
+.brand .login { margin-left:auto; font-size:12px; font-weight:400; padding:3px 8px; }
+body.readonly .admin-only { display:none !important; }
+body.readonly .admin-ro { pointer-events:none; background:transparent; border-color:transparent; }
+.osm-gray { filter: grayscale(1) contrast(1.05) brightness(1.03); }
+dialog { border:1px solid var(--line); border-radius:8px; padding:14px 16px; width:300px; box-shadow:0 8px 30px rgba(0,0,0,.25); }
+dialog::backdrop { background:rgba(15,23,42,.35); }
+dialog h3 { margin-top:0; }
+input:disabled, select:disabled, textarea:disabled { color:var(--mut); background:#f3f4f6; }
