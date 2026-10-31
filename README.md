@@ -59,6 +59,7 @@ oder `docker compose up -d` mit der beiliegenden `docker-compose.yml`.
 | `RFP_ADMIN_PASSWORD` | – | Passwort; leer = wird beim ersten Start erzeugt und ins Log sowie nach `data/admin_password.txt` geschrieben |
 | `RFP_PUBLIC_READ` | `true` | Besucher dürfen als „öffentlich“ markierte Projekte ohne Login ansehen |
 | `RFP_CORESCOPE_URL` | – | CoreScope-Instanz für den Tab „Netz“, z. B. `https://corescope.meshrheinland.de` |
+| `RFP_GRID_LAT` | `51.5` | Bezugsbreite des Rechengitters; nur ändern, wenn das Einsatzgebiet weit von 51,5° N liegt |
 | `RFP_CORESCOPE_SYNC_H` | `24` | Repeater-Liste alle n Stunden neu holen (0 = nur per Knopf) |
 | `RFP_PRELOAD` | `nrw_dgm,nrw_dom` | NRW-Modelle beim Start komplett laden (leer = nur bei Bedarf) |
 | `RFP_NRW_RES` | `5` | Rasterweite des lokalen NRW-Speichers (m) |

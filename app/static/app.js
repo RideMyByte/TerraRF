@@ -429,7 +429,9 @@ async function compute(auto = false) {
   if (computing) { pending = true; return; }
   computing = true;
   $("btnCompute").disabled = true;
-  status(`Berechne ${act.length} Station(en) … (beim ersten Mal werden Höhendaten geladen)`, "busy");
+  const known = act.filter((s) => runStations[s.id]).length;
+  status(known === act.length ? `Aktualisiere ${act.length} Station(en) …`
+    : `Berechne ${act.length - known} neue/geänderte Station(en), übrige aus dem Cache … (beim ersten Mal werden Höhendaten geladen)`, "busy");
   const t0 = performance.now();
   try {
     const r = await api("/api/coverage", { method: "POST", body: computeBody(act.map((s) => s.id)) });
@@ -439,7 +441,8 @@ async function compute(auto = false) {
     await Promise.all(r.stations.map(loadStationData));
     composite();
     renderResults(r);
-    status(`Fertig in ${((performance.now() - t0) / 1000).toFixed(1)} s.` + (r.factor > 1 ? ` (Anzeige ${fmt(r.cell_m * Math.cos(map.getCenter().lat * Math.PI / 180), 0)} m Raster)` : ""));
+    const nNew = r.stations.filter((e) => !e.cached).length;
+    status(`Fertig in ${((performance.now() - t0) / 1000).toFixed(1)} s – ${nNew} berechnet, ${r.stations.length - nNew} aus dem Cache.` + (r.factor > 1 ? ` (Anzeige ${fmt(r.cell_m * Math.cos(map.getCenter().lat * Math.PI / 180), 0)} m Raster)` : ""));
   } catch (e) {
     status("Fehler: " + e.message, "err");
   } finally {

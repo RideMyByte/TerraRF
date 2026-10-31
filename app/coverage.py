@@ -250,11 +250,13 @@ def _remember(key, res):
 # --------------------------------------------------------------------------
 # Runs (composite of all stations)
 # --------------------------------------------------------------------------
+GRID_LAT = float(os.environ.get("RFP_GRID_LAT", "51.5"))  # fixed reference latitude of the calculation grid
+
+
 def project_cs(project, s):
-    sts = project.get("stations") or []
-    lat_ref = np.mean([float(x["lat"]) for x in sts]) if sts else 51.5
-    lat_ref = round(float(lat_ref) * 2) / 2  # quantise so the grid stays stable
-    return float(s["res_m"]) / math.cos(math.radians(lat_ref))
+    """Cell size of the common grid. Deliberately independent of the stations: if it followed their mean
+    latitude, adding a far-away station could change it and invalidate the cache of all other stations."""
+    return float(s["res_m"]) / math.cos(math.radians(GRID_LAT))
 
 
 MAX_DIM = int(os.environ.get("RFP_MAX_LAYER_PX", "3000"))  # max. edge length of one station image

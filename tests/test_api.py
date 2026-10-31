@@ -102,3 +102,11 @@ def test_projects_crud(admin, project):
 def test_logout(admin):
     admin.post("/api/logout")
     assert admin.get("/api/me").json()["admin"] is False
+
+
+def test_adding_station_keeps_cache_of_others(admin, project, station):
+    k1 = admin.post("/api/coverage", json={"project": project, "station_ids": ["a"]}).json()["stations"][0]["key"]
+    far = {**station, "id": "b", "lat": 52.4, "lon": 7.02}  # weit nördlich: verschob früher das Rechengitter
+    project["stations"].append(far)
+    r = admin.post("/api/coverage", json={"project": project, "station_ids": ["a"]}).json()["stations"][0]
+    assert r["key"] == k1 and r["cached"] is True
