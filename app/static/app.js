@@ -104,7 +104,7 @@ function setupBasemaps(proxy) {
   };
   // Esri nur ohne Proxy: dessen Nutzungsbedingungen zum Zwischenspeichern sind nicht geprüft
   if (!proxy) base["Satellit (Esri)"] = L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}", { maxZoom: 19, attribution: "Tiles © Esri, Maxar, Earthstar Geographics" });
-  base["OpenStreetMap"].addTo(map);
+  base["OpenStreetMap (Graustufen)"].addTo(map);
   // Datengrundlage der Rechnung als Ebenen (nur lokal vorhandene Höhendaten, ab Zoom 11)
   if (!map.getPane("datapane")) { map.createPane("datapane"); map.getPane("datapane").style.zIndex = 450; map.getPane("datapane").style.pointerEvents = "none"; }
   const ov = (kind) => L.tileLayer("", { pane: "datapane", minZoom: 11, maxZoom: 20, maxNativeZoom: 18, opacity: kind === "relief" ? 0.85 : 1, className: "ov-" + kind,
@@ -451,6 +451,8 @@ function renderSettings() {
       .map((x) => `<option value="${esc(x.id)}" ${x.id === cur ? "selected" : ""}>${esc(x.label)}</option>`).join("");
   $("s_ground_source").innerHTML = srcOpts("ground", s.ground_source, false);
   $("s_surface_source").innerHTML = srcOpts("surface", s.surface_source, true);
+  $("s_fallback_source").innerHTML = `<option value="none" ${s.fallback_source === "none" ? "selected" : ""}>keine</option>` +
+    cfg.sources.map((x) => `<option value="${esc(x.id)}" ${x.id === (s.fallback_source || "copernicus") ? "selected" : ""}>${esc(x.label)}</option>`).join("");
   $("s_diffraction_model").value = s.diffraction_model || "bullington";
   $("s_clutter_mode").value = s.clutter_mode || "auto";
   $("s_clutter_floor").value = s.clutter_floor || "none";
@@ -462,7 +464,7 @@ function renderSettings() {
   for (const k of ["res_m", "k_factor", "max_profile_points", "max_rays", "rx_height_m", "rx_gain_dbi", "rx_cable_db", "min_margin_db", "rx_extra_loss_db", "noise_rise_db", "clutter_exclude_m"]) $("s_" + k).value = s[k] ?? cfg.defaults[k];
 }
 function bindSettings() {
-  for (const k of ["ground_source", "surface_source", "diffraction_model", "clutter_mode", "clutter_floor", "two_ray", "veg_mode", "veg_gamma_db_m", "veg_max_db", ...["res_m", "k_factor", "max_profile_points", "max_rays", "rx_height_m", "rx_gain_dbi", "rx_cable_db", "min_margin_db", "rx_extra_loss_db", "noise_rise_db", "clutter_exclude_m"]]) {
+  for (const k of ["ground_source", "surface_source", "fallback_source", "diffraction_model", "clutter_mode", "clutter_floor", "two_ray", "veg_mode", "veg_gamma_db_m", "veg_max_db", ...["res_m", "k_factor", "max_profile_points", "max_rays", "rx_height_m", "rx_gain_dbi", "rx_cable_db", "min_margin_db", "rx_extra_loss_db", "noise_rise_db", "clutter_exclude_m"]]) {
     $("s_" + k).addEventListener("change", (e) => {
       const el = e.target;
       project.settings[k] = el.type === "checkbox" ? el.checked : el.tagName === "SELECT" ? el.value : (el.value === "" ? null : +el.value);
@@ -1365,7 +1367,7 @@ function wire() {
     const c = $("layerbox").classList.toggle("collapsed");
     $("layerToggle").setAttribute("aria-expanded", String(!c));
   };
-  if (narrow()) $("layerbox").classList.add("collapsed");
+  $("layerbox").classList.add("collapsed"); $("layerToggle").setAttribute("aria-expanded", "false");
   $("lnkInstall").onclick = (e) => {
     e.preventDefault();
     const secure = location.protocol === "https:" || ["localhost", "127.0.0.1"].includes(location.hostname);

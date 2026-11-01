@@ -16,7 +16,7 @@ from PIL import Image
 
 from . import propagation as prop
 from . import sysstat, terrain
-from .terrain import CACHE_DIR, Grid, fill_nans, load_terrain, lonlat_to_merc, merc_to_lonlat
+from .terrain import CACHE_DIR, Grid, SourceError, fill_nans, get_source, load_terrain, lonlat_to_merc, merc_to_lonlat
 
 log = logging.getLogger("terrarf.coverage")
 
@@ -24,7 +24,7 @@ RE_EARTH = 6371000.0
 MAX_COMPOSITE_CELLS = int(os.environ.get("RFP_MAX_COMPOSITE_CELLS", "30000000"))
 COV_DIR = os.path.join(CACHE_DIR, "coverage")
 os.makedirs(COV_DIR, exist_ok=True)
-MODEL_VERSION = "7"
+MODEL_VERSION = "8"
 
 DEFAULT_SETTINGS = {
     "ground_source": "nrw_dgm",
@@ -40,6 +40,7 @@ DEFAULT_SETTINGS = {
     "max_profile_points": 500,
     "max_rays": 7200,
     "diffraction_model": "deygout",
+    "fallback_source": "copernicus",
     "clutter_mode": "auto",
     "clutter_floor": "none",
     "clutter_exclude_m": 60.0,
@@ -118,7 +119,7 @@ _compute_lock = threading.Lock()
 def _station_key(st, s, cs):
     relevant = {k: st.get(k) for k in (
         "lat", "lon", "height_m", "height_ref", "tx_power_dbm", "freq_mhz", "cable_loss_db", "antenna", "radius_km")}
-    rs = {k: s[k] for k in ("ground_source", "surface_source", "rx_height_m", "rx_gain_dbi", "rx_cable_db",
+    rs = {k: s.get(k) for k in ("ground_source", "surface_source", "fallback_source", "rx_height_m", "rx_gain_dbi", "rx_cable_db",
                             "rx_extra_loss_db", "k_factor", "max_profile_points", "max_rays", "diffraction_model",
                             "clutter_mode", "clutter_floor", "clutter_exclude_m", "two_ray", "veg_mode",
                             "veg_gamma_db_m", "veg_max_db")}
@@ -127,17 +128,40 @@ def _station_key(st, s, cs):
 
 
 def terrain_pair(s, grid):
+    """Gelände und Oberfläche für das Rechengitter. Lücken der Hauptquelle (z. B. außerhalb NRW) werden mit der
+    Ersatzquelle (Standard Copernicus GLO-30, 30 m) gefüllt – im Grenzgebiet werden also beide kombiniert."""
     G = load_terrain(s["ground_source"], grid, "ground")
     surf_id = s.get("surface_source") or "none"
     S = load_terrain(surf_id, grid, "surface") if surf_id != "none" else None
     warn = []
     if G is None:
         raise ValueError("Keine Gelände-Quelle gewählt")
+    for sid in {s["ground_source"], surf_id}:
+        src = get_source(sid)
+        if getattr(src, "failed_tiles", 0):
+            warn.append(f"{src.label}: {src.failed_tiles} Kachel(n) nicht geladen (Netzfehler?) – dort Ersatzdaten")
+    fb_id = s.get("fallback_source", "copernicus")
+    holes = np.isnan(G).any() or (S is not None and np.isnan(S).any())
+    if holes and fb_id not in ("", "none", s["ground_source"], surf_id):
+        frac = float(np.isnan(G).mean())
+        try:
+            C = load_terrain(fb_id, grid, "surface")
+        except SourceError as e:
+            C = None
+            warn.append(f"Ersatzquelle nicht verfügbar ({e}) – Lücken mit Nachbarwerten gefüllt")
+        if C is not None:
+            C = np.asarray(C, dtype=np.float32)
+            G = np.where(np.isnan(G), C, G)
+            if S is not None:
+                S = np.where(np.isnan(S), C, S)
+            if frac > 0.005:
+                warn.append(f"{frac*100:.0f} % des Gebiets außerhalb der Hauptquelle: dort {get_source(fb_id).label} "
+                            "(gröber, Oberflächenmodell auch als Gelände – Hindernisse dort kaum erkennbar)")
     nan_frac = float(np.isnan(G).mean())
     if nan_frac > 0.02:
-        warn.append(f"Gelände: {nan_frac*100:.0f} % ohne Daten (außerhalb der Quelle?) – dort Ersatzwerte")
+        warn.append(f"Gelände: {nan_frac*100:.0f} % ohne Daten – dort Ersatzwerte")
     if S is not None and np.isnan(G).any():
-        G = fill_nans(G, S)  # e.g. outside NRW: use surface model as ground
+        G = fill_nans(G, S)
     else:
         G = fill_nans(G, None)
     if S is None:

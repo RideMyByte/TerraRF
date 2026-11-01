@@ -175,6 +175,9 @@
         <select id="s_ground_source"></select></label>
       <label>Hindernisse (Oberfläche: Gebäude, Bäume)
         <select id="s_surface_source"></select></label>
+      <label>Ersatz außerhalb der Hauptquelle (z. B. jenseits der NRW-Grenze)
+        <select id="s_fallback_source"></select></label>
+      <p class="note">Wo die Hauptquelle keine Daten hat, füllt die Ersatzquelle die Lücken – im Grenzgebiet rechnet TerraRF also mit beiden. Copernicus ist ein 30-m-Oberflächenmodell: Gebäude und Bäume stecken dort in der „Geländehöhe“ und werden nicht als Hindernis erkannt. Für Gebiete jenseits der Grenze einen Mindest-Clutter setzen.</p>
       <div class="row tight">
         <button id="btnTestGround">Gelände-Quelle testen</button>
         <button id="btnTestSurface">Oberfl.-Quelle testen</button>

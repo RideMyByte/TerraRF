@@ -136,6 +136,11 @@ class _NeedNative(Exception):
     pass
 
 
+class OutsideCoverage(SourceError):
+    """Der Dienst hat die Anfrage mit einem Client-Fehler (4xx) abgelehnt – typisch für Bereiche außerhalb
+    seines Gebiets (z. B. NRW-WCS jenseits der Landesgrenze)."""
+
+
 class BaseSource:
     id = "base"
     label = "base"
@@ -171,8 +176,10 @@ class WCSSource(BaseSource):
     """OGC WCS 2.0.1 GetCoverage in chunks. Tries server-side downscaling first
     (SCALESIZE, then SCALEFACTOR) and falls back to native resolution."""
 
-    def __init__(self, sid, label, url, coverage, epsg, native_res, kind="ground", chunk_px=2000):
+    def __init__(self, sid, label, url, coverage, epsg, native_res, kind="ground", chunk_px=2000, bbox=None):
         self.id = sid
+        self.bbox = bbox  # (x0, y0, x1, y1) im Quell-KBS: außerhalb gar nicht erst anfragen
+        self.failed_tiles = 0
         self.label = label
         self.url = url
         self.coverage = coverage
@@ -261,6 +268,8 @@ class WCSSource(BaseSource):
             if name != "native" and r.status_code < 500:
                 http_answers += 1
         self.last_error = "; ".join(errors)
+        if errors and all(re.search(r": HTTP 4\d\d ", e) for e in errors):
+            raise OutsideCoverage(f"WCS {self.id}: kein Gebiet des Dienstes ({len(errors)}× HTTP 4xx)")
         raise SourceError(f"WCS {self.id} lieferte keine Daten: {self.last_error}")
 
     @staticmethod
@@ -348,11 +357,19 @@ class WCSSource(BaseSource):
             if st == "empty":
                 return None
             os.makedirs(self.store_dir, exist_ok=True)
+            if self.bbox and (x0 + TILE_M <= self.bbox[0] or x0 >= self.bbox[2] or y0 + TILE_M <= self.bbox[1] or y0 >= self.bbox[3]):
+                open(p + ".empty", "w").close()  # sicher außerhalb des Dienstgebiets
+                return None
             own = client is None
             client = client or httpx.Client(timeout=HTTP_TIMEOUT, follow_redirects=True)
             try:
                 tmp = p + ".dl.tif"
-                self.fetch_tile(x0, y0, x0 + TILE_M, y0 + TILE_M, TILE_RES, tmp, client)
+                try:
+                    self.fetch_tile(x0, y0, x0 + TILE_M, y0 + TILE_M, TILE_RES, tmp, client)
+                except OutsideCoverage as e:
+                    log.info("%s – Kachel %d/%d als leer markiert", e, x0, y0)
+                    open(p + ".empty", "w").close()
+                    return None
                 if recompress_tile(tmp):
                     os.replace(tmp, p)
                     return p
@@ -382,8 +399,19 @@ class WCSSource(BaseSource):
         if missing:
             log.info("WCS %s: lade %d fehlende Kacheln (%g m)", self.id, len(missing), TILE_RES)
             from concurrent.futures import ThreadPoolExecutor
+            def safe(t):
+                try:
+                    self.ensure_tile(*t)
+                    return None
+                except SourceError as e:  # einzelne Kachel: weiterrechnen, Lücke füllt die Ersatzquelle
+                    return str(e)
             with ThreadPoolExecutor(max_workers=TILE_WORKERS) as ex:
-                list(ex.map(lambda t: self.ensure_tile(*t), missing))
+                errs = [e for e in ex.map(safe, missing) if e]
+            self.failed_tiles = len(errs)
+            if errs:
+                log.warning("WCS %s: %d Kachel(n) nicht geladen: %s", self.id, len(errs), errs[0])
+        else:
+            self.failed_tiles = 0
         dst = np.full((grid.ny, grid.nx), np.nan, dtype=np.float32)
         for t in tiles:
             if self.tile_state(*t) == "ok":
@@ -558,14 +586,18 @@ def _tile_lock(path):
         return lk
 
 
+# NRW umschließendes Rechteck in EPSG:25832 (großzügig); exakte Grenze liefert der Dienst selbst
+NRW_BBOX_25832 = (270000.0, 5550000.0, 540000.0, 5840000.0)
+
+
 def builtin_sources():
     if not _SOURCES:
         _SOURCES["nrw_dgm"] = WCSSource(
-            "nrw_dgm", "NRW DGM (Geobasis NRW, Gelände, lokal gespeichert)", NRW_WCS_URL, NRW_WCS_COVERAGE, 25832, 1.0, kind="ground"
-        )
+            "nrw_dgm", "NRW DGM (Geobasis NRW, Gelände, lokal gespeichert)", NRW_WCS_URL, NRW_WCS_COVERAGE, 25832, 1.0, kind="ground",
+            bbox=NRW_BBOX_25832)
         _SOURCES["nrw_dom"] = WCSSource(
             "nrw_dom", "NRW DOM1 (Geobasis NRW, Oberfläche, lokal gespeichert)", NRW_DOM_URL, NRW_DOM_COVERAGE,
-            25832, 1.0, kind="surface")
+            25832, 1.0, kind="surface", bbox=NRW_BBOX_25832)
         _SOURCES["copernicus"] = CopernicusSource()
     return _SOURCES
 
