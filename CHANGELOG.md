@@ -2,6 +2,26 @@
 
 ## [Unreleased]
 
+## 0.4.4
+### Neu
+- PDF-Bericht je Station: Karte, Parameter, Kennzahlen nach Reserve und Entfernung, MeshCore-Nachbarn und Abgleich
+- Ergebnis-Reiter ausführlich: Reserveklassen, Versorgung nach Entfernung, Median-/90-%-Reserve, letzter Abgleich
+- Stationen werden nacheinander gerechnet, Fortschrittsring an der Station; ▶ je Station erzwingt eine Neuberechnung
+- Zweiter Zugang „Benutzer“ (lesen + eigene Stationen anlegen/ändern/speichern), Passwort unter ⚙ im Klartext
+- ⚙ Webseite & Zugang: „Diese Seite gehört zu …“, GitHub-Link, Impressum erzeugen/verlinken/aus, Datenschutz erzeugen/verlinken
+- MeshCore: dünne Linien zu den Nachbarn nach SNR (Deckkraft einstellbar), Filter nach SNR sowie Tx- und Rx-Anzahl
+- Rechtsklick bzw. langes Tippen auf die Karte: Pegel, Profil, „Station hier platzieren“
+- Seitenleiste breiter, in der Breite ziehbar und ausblendbar
+### Geändert
+- Klick auf eine Station öffnet ein Kurzfenster statt der Einstellungen; Editor über ✎
+- „automatisch berechnen“ entfällt; geänderte Stationen sind markiert
+- Karte startet mit OSM Graustufen, „Ansicht & Legende“ anfangs eingeklappt
+- Menüs und Popups schließen bei Klick woanders
+### Behoben
+- Rand von NRW: WCS-Ablehnung außerhalb brach die Berechnung ab; Lücken wurden mit 0 m gefüllt (Artefakte) –
+  jetzt füllt die Ersatzquelle (Standard Copernicus GLO-30), im Grenzgebiet werden beide kombiniert
+- Griff der Richtantenne verdeckte herausgezoomt die Station
+
 ## 0.4.3
 ### Neu
 - Einstellungen als Dialog hinter dem Zahnrad (⚙) statt eigenem Reiter
