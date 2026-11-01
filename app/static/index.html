@@ -87,7 +87,11 @@
           <summary class="cardhead">Filter für Nachbarn <span id="csFilterShort" class="note"></span></summary>
           <label class="chk" style="margin-top:6px"><input type="checkbox" id="csBidir" checked> nur beidseitig beobachtete</label>
           <label class="chk" style="margin-top:2px"><input type="checkbox" id="csMeas" checked> gemessene Partner immer zeigen</label>
-          <label>Mindestens <b id="csMinVal">20</b> Beobachtungen<input type="range" id="csMin" min="1" max="500" value="20"></label>
+          <label title="Wie oft der Nachbar den gewählten Repeater gehört hat (→)">Tx mindestens <b id="csMinTxVal"></b>×<input type="range" id="csMinTx" min="0" max="500" value="10"></label>
+          <label title="Wie oft der gewählte Repeater den Nachbarn gehört hat (←)">Rx mindestens <b id="csMinRxVal"></b>×<input type="range" id="csMinRx" min="0" max="500" value="10"></label>
+          <label>SNR mindestens <b id="csSnrVal"></b><input type="range" id="csSnr" min="-21" max="15" step="1" value="-21"></label>
+          <label class="chk" style="margin-top:2px"><input type="checkbox" id="csLines" checked> Linien zu den Nachbarn</label>
+          <label>Deckkraft der Linien <b id="csLineOpVal"></b><input type="range" id="csLineOp" min="0.1" max="1" step="0.05" value="0.6"></label>
           <p class="note">Kurze Hop-Präfixe können falsche Nachbarn erzeugen; „beidseitig“ und eine Mindestanzahl blenden die meisten aus. Derselbe Filter gilt für den Abgleich.</p>
         </details>
 

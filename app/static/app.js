@@ -120,6 +120,7 @@ function setupBasemaps(proxy) {
   map.on("overlayadd overlayremove", renderOvLegend);
 }
 L.control.scale({ imperial: false }).addTo(map);
+map.on("zoomend", () => { if (project) project.stations.forEach((st) => { if (st.antenna?.type === "directional") drawStation(st); }); });
 if (location.hash === "#debug") window.trfMap = map;  // für automatische Tests
 
 function stationIcon(st) {
@@ -162,7 +163,9 @@ function drawStation(st) {
   markers[st.id] = m;
   const a = st.antenna || {};
   if (a.type === "directional") {
-    const len = Math.min(3000, (st.radius_km || 5) * 1000 * 0.35);
+    // Länge in Bildschirm-Pixeln, damit der Griff bei jeder Zoomstufe neben (nicht auf) der Station liegt
+    const mpp = 40075016 * Math.cos(st.lat * Math.PI / 180) / (256 * 2 ** map.getZoom());
+    const len = 80 * mpp;
     const geo = (az) => {
       const hb = (a.hbw_deg || 60) / 2;
       return { line: [[st.lat, st.lon], destPoint(st.lat, st.lon, az, len)],
@@ -926,6 +929,7 @@ function bindRegions() {
 // csFocusPk: angetippter Knoten (groß markiert, Popup mit Infos). csSelPk: Knoten, dessen Nachbarn gezeigt werden.
 const csRenderer = L.canvas({ padding: 0.3 });
 const csLayer = L.layerGroup();
+let csLinksErr = null;
 let csNodes = [], csSelPk = null, csFocusPk = null, csLinks = null, csTimer = null, csSelMarker = null, csOvr = {}, csLoading = null;
 const csMeta = {};  // pk -> Metadaten aus CoreScope
 
@@ -960,17 +964,23 @@ async function csLoadNodes() {
 }
 
 /** Nachbarn des Knotens csSelPk nach den Filtern. Dieselbe Auswahl gilt für Karte, Liste und Abgleich. */
+/** Nachbarn nach den Filtern im Reiter. Tx = Nachbar hört den gewählten Repeater (→), Rx = umgekehrt (←). */
 function csVisibleLinks() {
   if (!csLinks) return [];
-  const min = +$("csMin").value, bidir = $("csBidir").checked, keepMeas = $("csMeas").checked;
+  const bidir = $("csBidir").checked, keepMeas = $("csMeas").checked;
+  const minRx = +$("csMinRx").value, minTx = +$("csMinTx").value, snrMin = +$("csSnr").value;
   return csLinks.links.filter((l) => {
     if (keepMeas && l.snr != null) return true;
-    const obs = bidir ? Math.min(l.we_hear, l.they_hear) : Math.max(l.we_hear, l.they_hear, l.count || 0, l.snr_n || 0);
-    return (!bidir || l.bidir) && obs >= min;
+    if (bidir && !l.bidir) return false;
+    if (l.we_hear < minRx || l.they_hear < minTx) return false;
+    const sn = l.snr ?? l.snr_any;
+    if (snrMin > -21 && (sn == null || sn < snrMin)) return false;
+    return true;
   });
 }
 function csFilterSummary() {
-  $("csFilterShort").textContent = `${$("csBidir").checked ? "beidseitig, " : ""}≥ ${$("csMin").value}`;
+  const sn = +$("csSnr").value;
+  $("csFilterShort").textContent = `${$("csBidir").checked ? "beidseitig · " : ""}Tx ≥ ${$("csMinTx").value} · Rx ≥ ${$("csMinRx").value}${sn > -21 ? ` · SNR ≥ ${sn}` : ""}`;
 }
 
 function csSnrText(l) {
@@ -1009,8 +1019,17 @@ function csDrawNodes() {
   csSelMarker = bigLayer.addTo(map);
   const drawn = new Set(big);
   if (csSelPk && csLinks) {
-    // Nachbar-Modus: nur die Nachbarn nach Filter, eingefärbt nach SNR
-    for (const l of csVisibleLinks()) {
+    // Nachbar-Modus: nur die Nachbarn nach Filter, eingefärbt nach SNR, mit dünnen Linien zum Zentrum
+    const c = csNodePos(csSelPk), vis = csVisibleLinks();
+    if (c && $("csLines").checked) {
+      const op = +$("csLineOp").value;
+      for (const l of vis) {
+        const sn = l.snr ?? l.snr_any;
+        csLayer.addLayer(L.polyline([c, [l.lat, l.lon]], { renderer: csRenderer, interactive: false, weight: l.snr != null ? 2 : 1.2,
+          color: sn != null ? snrColor(sn) : "#9ca3af", opacity: op }));
+      }
+    }
+    for (const l of vis) {
       if (csStationOf(l.pk) || drawn.has(l.pk)) continue;
       const s = l.snr ?? l.snr_any, meas = l.snr != null;
       const m = L.circleMarker([l.lat, l.lon], { renderer: csRenderer, radius: meas ? 7 : 6, weight: meas ? 2.5 : 1.5,
@@ -1056,7 +1075,7 @@ async function csLoadMeta(pk) {
 /** Nachbarn eines Knotens laden und anzeigen (alle anderen ausblenden). */
 async function csShowNeighbors(pk) {
   if (!cfg.corescope?.enabled) return;
-  csSelPk = pk; csLinks = null; csLoading = pk;
+  csSelPk = pk; csLinks = null; csLoading = pk; csLinksErr = null;
   if (csFocusPk === pk) csFocusPk = null;
   map.closePopup(); csDrawNodes(); csRenderSel();
   status("MeshCore: lade Nachbarn …", "busy");
@@ -1066,7 +1085,7 @@ async function csShowNeighbors(pk) {
     csLinks = r;
     status(`MeshCore: ${csVisibleLinks().length} Nachbarn (nach Filter).`);
   } catch (e) {
-    if (csSelPk === pk) status("MeshCore: " + e.message, "err");
+    if (csSelPk === pk) { status("MeshCore: " + e.message, "err"); csLinksErr = e.message; }
   } finally {
     if (csLoading === pk) csLoading = null;
   }
@@ -1159,7 +1178,7 @@ function csRenderSel() {
     const n = csNode(csSelPk) || {};
     const name = csLinks?.name || n.name || csStationOf(csSelPk)?.name || csSelPk.slice(0, 8);
     html += `<div class="selhead" style="margin-top:${csFocusPk ? 12 : 0}px"><b>Nachbarn von ${esc(name)}</b><button class="iconbtn" data-cs-x="nb" title="Nachbarn ausblenden">✕</button></div>`;
-    if (!csLinks) html += `<div class="note cs-wait">lade Nachbarn …</div>`;
+    if (!csLinks) html += csLinksErr ? `<div class="note warn">Nachbarn nicht abrufbar: ${esc(csLinksErr)}</div>` : `<div class="note cs-wait">lade Nachbarn …</div>`;
     else {
       const vis = csVisibleLinks().sort((a, b) => ((b.snr ?? b.snr_any ?? -99) - (a.snr ?? a.snr_any ?? -99)));
       html += `<div class="note">${vis.length} von ${csLinks.links.length} nach Filter · Fenster ${csLinks.window_days ?? "?"} Tage</div>
@@ -1266,8 +1285,10 @@ async function csInit() {
   const refilter = () => { csDrawNodes(); csRenderSel(); };
   $("btnCalRun").onclick = () => { const st = byId($("calSt").value); if (st) csCalibrate(st); };
   csFillCalStations();
-  $("csBidir").onchange = refilter; $("csMeas").onchange = refilter;
-  $("csMin").oninput = () => { $("csMinVal").textContent = $("csMin").value; refilter(); };
+  $("csBidir").onchange = refilter; $("csMeas").onchange = refilter; $("csLines").onchange = refilter;
+  const num = (id, fmtv) => { $(id).oninput = () => { $(id + "Val").textContent = fmtv($(id).value); refilter(); }; $(id + "Val").textContent = fmtv($(id).value); };
+  num("csMinTx", (v) => v); num("csMinRx", (v) => v); num("csSnr", (v) => +v <= -21 ? "aus" : `${v} dB`);
+  num("csLineOp", (v) => `${Math.round(v * 100)} %`);
   csRenderSel();
   $("btnCsSync").onclick = async () => {
     try { await api("/api/corescope/sync", { method: "POST" }); } catch (e) { status("Fehler: " + e.message, "err"); return; }
