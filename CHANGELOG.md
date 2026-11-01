@@ -2,6 +2,20 @@
 
 ## [Unreleased]
 
+## 0.4.3
+### Neu
+- Einstellungen als Dialog hinter dem Zahnrad (⚙) statt eigenem Reiter
+- Stations-Editor als Fenster über der Karte mit aufklappbaren Abschnitten; „Strecke zu anderer Station“ ganz oben
+- Kartenebenen aus der Rechengrundlage: Gelände (Höhe + Schummerung), Oberfläche, Hindernishöhe über Grund
+- MeshCore-Reiter neu gegliedert; Klick auf einen Repeater zeigt Metadaten (Rolle, zuletzt gehört, Akku,
+  Temperatur, Funkparameter falls verfügbar), Nachbarn erst auf Wunsch; Nachbarliste mit Beobachtungen je Richtung
+- Abgleich mit eigenem Knopf „▶ Abgleich rechnen“ und Stationsauswahl
+### Geändert
+- Klicks auf der Karte wechseln den Reiter nicht mehr
+- Knopf „Nachbarn zeigen“ im Stations-Editor entfernt (Antippen der Station zeigt sie)
+### Behoben
+- Abgleich startete nicht zuverlässig, wenn die Nachbarn der Station gerade noch geladen wurden
+
 ## 0.4.2
 ### Neu
 - Reiter „Netz“ heißt jetzt „MeshCore“
