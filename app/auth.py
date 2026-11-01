@@ -1,4 +1,5 @@
-"""Single admin login. Everyone else gets read-only access to public projects.
+"""Logins: ein Admin (alles) und optional ein Benutzer „user“ (lesen + eigene Stationen anlegen).
+Alle anderen sehen öffentliche Projekte nur lesend. Der Benutzer wird in den Einstellungen gepflegt.
 
 Config (environment):
   RFP_ADMIN_USER       default "admin"
@@ -69,8 +70,15 @@ def _sign(payload: bytes) -> str:
     return hmac.new(_secret, payload, hashlib.sha256).hexdigest()
 
 
-def make_token(user: str) -> str:
-    payload = f"{user}|{int(time.time()) + SESSION_S}".encode()
+def _pwtag(role):
+    """Kurzer Fingerabdruck des aktuellen Passworts: ändert der Admin es, werden alte Sitzungen ungültig."""
+    from . import appconfig
+    pw = _password if role == "admin" else appconfig.get()["user_password"]
+    return hashlib.sha256((pw or "").encode()).hexdigest()[:10]
+
+
+def make_token(user: str, role: str = "admin") -> str:
+    payload = f"{user}|{int(time.time()) + SESSION_S}|{role}|{_pwtag(role)}".encode()
     return base64.urlsafe_b64encode(payload).decode() + "." + _sign(payload)
 
 
@@ -84,17 +92,40 @@ def verify(token: str | None) -> str | None:
         return None
     if not hmac.compare_digest(_sign(payload), sig):
         return None
+    parts = payload.decode(errors="replace").split("|")
+    if len(parts) == 2:          # Sitzung aus älteren Versionen: nur Admin
+        parts += ["admin", _pwtag("admin")]
+    if len(parts) != 4:
+        return None
+    user, exp, role, tag = parts
     try:
-        user, exp = payload.decode().split("|")
+        if int(exp) < time.time():
+            return None
     except ValueError:
         return None
-    if int(exp) < time.time() or user != ADMIN_USER:
+    if not hmac.compare_digest(tag, _pwtag(role)):
         return None
-    return user
+    if role == "admin" and user == ADMIN_USER:
+        return "admin"
+    if role == "user":
+        from . import appconfig
+        c = appconfig.get()
+        if c["user_enabled"] and c["user_password"] and user == c["user_name"]:
+            return "user"
+    return None
+
+
+def role(request: Request) -> str | None:
+    return verify(request.cookies.get(COOKIE))
 
 
 def is_admin(request: Request) -> bool:
-    return verify(request.cookies.get(COOKIE)) is not None
+    return role(request) == "admin"
+
+
+def can_edit_any(request: Request) -> bool:
+    """Admin oder Benutzer: darf rechnen, ungespeicherte Projekte schicken, Stationen anlegen."""
+    return role(request) in ("admin", "user")
 
 
 def require_admin(request: Request):
@@ -102,12 +133,18 @@ def require_admin(request: Request):
         raise HTTPException(401, "Anmeldung erforderlich")
 
 
-def require_read(request: Request):
-    if not PUBLIC_READ and not is_admin(request):
+def require_member(request: Request):
+    if not can_edit_any(request):
         raise HTTPException(401, "Anmeldung erforderlich")
 
 
-def check_login(request: Request, user: str, password: str) -> bool:
+def require_read(request: Request):
+    if not PUBLIC_READ and not can_edit_any(request):
+        raise HTTPException(401, "Anmeldung erforderlich")
+
+
+def check_login(request: Request, user: str, password: str) -> str | None:
+    """Gibt die Rolle zurück ("admin"/"user") oder None."""
     ip = request.client.host if request.client else "?"
     now = time.time()
     with _lock:
@@ -115,13 +152,20 @@ def check_login(request: Request, user: str, password: str) -> bool:
         _fail[ip] = recent
         if len(recent) >= 10:
             raise HTTPException(429, "Zu viele Fehlversuche, bitte später erneut versuchen")
-    ok = hmac.compare_digest(user.encode(), ADMIN_USER.encode()) & hmac.compare_digest(
-        (password or "").encode(), (_password or "").encode())
-    if not ok:
+    from . import appconfig
+    c = appconfig.get()
+    got = None
+    if hmac.compare_digest(user.encode(), ADMIN_USER.encode()) & hmac.compare_digest(
+            (password or "").encode(), (_password or "").encode()):
+        got = "admin"
+    elif c["user_enabled"] and c["user_password"] and hmac.compare_digest(user.encode(), c["user_name"].encode()) \
+            & hmac.compare_digest((password or "").encode(), c["user_password"].encode()):
+        got = "user"
+    if not got:
         with _lock:
             _fail.setdefault(ip, []).append(now)
         time.sleep(0.8)
-    return bool(ok)
+    return got
 
 
 def is_https(request: Request) -> bool:

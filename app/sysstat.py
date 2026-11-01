@@ -13,13 +13,14 @@ _cpu_last = {"t": None, "usage": None}
 
 
 @contextmanager
-def activity(what):
+def activity(what, **extra):
+    """Laufende Arbeit melden. Das zurückgegebene dict kann aktualisiert werden (progress, stage)."""
     with _lock:
         _next[0] += 1
         i = _next[0]
-        _active[i] = {"what": what, "since": time.time()}
+        h = _active[i] = {"what": what, "since": time.time(), **extra}
     try:
-        yield
+        yield h
     finally:
         with _lock:
             _active.pop(i, None)
@@ -29,7 +30,14 @@ def busy():
     now = time.time()
     with _lock:
         items = sorted(_active.values(), key=lambda x: x["since"])
-    return [{"what": x["what"], "seconds": round(now - x["since"], 1)} for x in items]
+    out = []
+    for x in items:
+        o = {"what": x["what"], "seconds": round(now - x["since"], 1)}
+        for k in ("station", "progress", "stage"):
+            if x.get(k) is not None:
+                o[k] = round(x[k], 3) if k == "progress" else x[k]
+        out.append(o)
+    return out
 
 
 def _read(path):

@@ -172,7 +172,25 @@ def terrain_pair(s, grid):
     return G, S, warn
 
 
-def compute_station(st, s, cs):
+def drop_station_cache(st, s, cs):
+    """Ergebnis einer Station verwerfen (erzwungene Neuberechnung)."""
+    key = _station_key(st, s, cs)
+    with _station_cache_lock:
+        _station_cache.pop(key, None)
+    for f in os.listdir(COV_DIR):
+        if f.startswith(key):
+            try:
+                os.remove(os.path.join(COV_DIR, f))
+            except OSError:
+                pass
+    with _png_lock:
+        for k in [k for k in _png_cache if k.startswith(key + "@")]:
+            _png_cache.pop(k, None)
+
+
+def compute_station(st, s, cs, progress=None):
+    """progress(frac, stage) wird während der Rechnung aufgerufen (0…1)."""
+    progress = progress or (lambda f, stage: None)
     key = _station_key(st, s, cs)
     with _station_cache_lock:
         if key in _station_cache:
@@ -195,7 +213,9 @@ def compute_station(st, s, cs):
     r_true = float(st.get("radius_km", 10.0)) * 1000.0
     res_true = cs * kscale
     grid = Grid.around(x, y, r_true / kscale + 3 * cs, cs)
+    progress(0.02, "Höhendaten")
     G, S, warn = terrain_pair(s, grid)
+    progress(0.15, "Strahlen")
     t_terrain = time.time() - t0
 
     fx = (x - grid.x0) / cs - 0.5
@@ -216,9 +236,17 @@ def compute_station(st, s, cs):
     cm, excl, clR, clT, flR, flT = prop.clutter_params(s)
     vg, vam = prop.veg_params(s, f_mhz)
     t1 = time.time()
-    loss, vmain, dz, lclut, lpe, lveg, vis_rays = prop.coverage_rays(
-        G, S, fx, fy, cs, kscale, ztx, ztx - g0, float(s["rx_height_m"]), lam, f_mhz, n_rays, n_bins, step, sub,
-        re, _model(s), cm, excl, clR, clT, flR, flT, bool(s.get("two_ray", True)), vg, vam)
+    parts = []
+    nblk = 20 if n_rays >= 2000 else 5
+    edges = np.linspace(0, n_rays, nblk + 1).astype(int)
+    for bi_ in range(nblk):  # in Blöcken, damit der Fortschritt sichtbar wird
+        parts.append(prop.coverage_rays(
+            G, S, fx, fy, cs, kscale, ztx, ztx - g0, float(s["rx_height_m"]), lam, f_mhz, n_rays, n_bins, step, sub,
+            re, _model(s), cm, excl, clR, clT, flR, flT, bool(s.get("two_ray", True)), vg, vam,
+            int(edges[bi_]), int(edges[bi_ + 1])))
+        progress(0.15 + 0.75 * (bi_ + 1) / nblk, "Strahlen")
+    loss, vmain, dz, lclut, lpe, lveg, vis_rays = (np.concatenate([p_[i] for p_ in parts]) for i in range(7))
+    progress(0.92, "Raster")
     t_kernel = time.time() - t1
     loss = loss + lclut + lpe + lveg
     vis_rays[:, 0] = 1
@@ -289,7 +317,7 @@ def project_cs(project, s):
 MAX_DIM = int(os.environ.get("RFP_MAX_LAYER_PX", "3000"))  # max. edge length of one station image
 
 
-def run_coverage(project, station_ids=None, max_dim=None):
+def run_coverage(project, station_ids=None, max_dim=None, force=None):
     """Compute (or fetch from cache) all requested stations. No server-side compositing:
     the browser stacks the per-station data images itself."""
     s = merged_settings(project)
@@ -300,11 +328,16 @@ def run_coverage(project, station_ids=None, max_dim=None):
     cs = project_cs(project, s)
     t0 = time.time()
     results = []
-    with sysstat.activity(f"Abdeckung ({len(stations)} Station{'en' if len(stations) != 1 else ''})"), \
-            _compute_lock:  # one heavy computation at a time
-        for st in stations:
-            r, cached = compute_station(st, s, cs)
-            results.append((st, r, cached))
+    for st in stations:
+        if st["id"] in (force or ()):
+            drop_station_cache(st, s, cs)
+    for st in stations:
+        with sysstat.activity(f"Abdeckung {st.get('name') or st['id']}", station=st["id"], progress=0.0, stage="wartet") as h:
+            with _compute_lock:  # eine schwere Rechnung zur Zeit
+                def prog(f, stage, h=h):
+                    h["progress"], h["stage"] = f, stage
+                r, cached = compute_station(st, s, cs, progress=prog)
+        results.append((st, r, cached))
     # one common downsampling factor keeps all station images on the same pixel grid
     md = max_dim or MAX_DIM
     f = max(1, max(math.ceil(max(r.grid.nx, r.grid.ny) / md) for _, r, _ in results))

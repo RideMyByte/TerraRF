@@ -151,7 +151,7 @@ function drawStation(st) {
   if (markers[st.id]) { map.removeLayer(markers[st.id]); delete markers[st.id]; }
   if (azLines[st.id]) { map.removeLayer(azLines[st.id]); delete azLines[st.id]; }
   if (st.enabled === false) return;  // deactivated stations are not shown on the map
-  const m = L.marker([st.lat, st.lon], { draggable: isAdmin, icon: stationIcon(st), title: st.name });
+  const m = L.marker([st.lat, st.lon], { draggable: canEdit(st), icon: stationIcon(st), title: st.name });
   m.on("click", (e) => { L.DomEvent.stopPropagation(e); select(st.id); stationPopup(st); csStationClicked(st); });
   m.on("contextmenu", (e) => { L.DomEvent.stopPropagation(e); select(st.id); stationPopup(st); });
   m.on("dragend", () => {
@@ -175,7 +175,7 @@ function drawStation(st) {
     const wedge = L.polygon(g0.wedge, { color: st.color, weight: 1, fillOpacity: 0.12, interactive: false });
     const line = L.polyline(g0.line, { color: st.color, weight: 3, interactive: false });
     const layers = [wedge, line];
-    if (isAdmin) {
+    if (canEdit(st)) {
       // Griff am Ende der Hauptstrahlrichtung: mit der Maus/dem Finger drehen
       const h = L.marker(g0.line[1], { draggable: true, zIndexOffset: 500, title: "Antenne drehen",
         icon: L.divIcon({ className: "", iconSize: [18, 18], iconAnchor: [9, 9], html: `<div class="az-handle" style="border-color:${st.color}"></div>` }) });
@@ -204,6 +204,7 @@ function defaultStation(lat, lon) {
     antenna: { preset: "omni5", ...stripLabel(ANT_PRESETS.omni5), azimuth_deg: 0, tilt_deg: 0, hbw_deg: 60 },
   };
   const n = project.stations.length;
+  if (isUser) tmpl.owner = "user"; else delete tmpl.owner;
   return { ...tmpl, id: uid(), name: `Station ${n + 1}`, color: COLORS[n % COLORS.length], enabled: true,
     lat: +lat.toFixed(6), lon: +lon.toFixed(6), notes: "" };
 }
@@ -233,7 +234,7 @@ function loadProject(p) {
   if (csNodes.length) csDrawNodes();
   csFillCalStations(); overlaySources();
   status(`Projekt „${p.name}“ geladen. Rechtsklick (Handy: lange tippen) zeigt Pegel und Profil an einem Punkt.`);
-  if ((!isAdmin || $("autoCalc").checked) && project.stations.some((x) => x.enabled !== false)) compute(true);
+  if (project.stations.some((x) => x.enabled !== false)) compute();  // aus dem Cache, ggf. Erstberechnung
 }
 
 async function saveProject() {
@@ -243,6 +244,12 @@ async function saveProject() {
   project.view = { center: [map.getCenter().lat, map.getCenter().lng], zoom: map.getZoom() };
   const r = await api(`/api/projects/${project.id}`, { method: "PUT", body: project });
   project.updated = r.updated;
+  if (isUser && r.project) {  // der Server übernimmt nur eigene Stationen – Stand von dort anzeigen
+    project.stations = r.project.stations; project.name = r.project.name; project.public = r.project.public;
+    for (const k of Object.keys(markers)) { map.removeLayer(markers[k]); delete markers[k]; }
+    for (const k of Object.keys(azLines)) { map.removeLayer(azLines[k]); delete azLines[k]; }
+    project.stations.forEach(drawStation); renderAll();
+  }
   setDirty(false); status(project.public ? "Gespeichert – öffentlich sichtbar." : "Gespeichert (privat)."); refreshProjectList();
   history.replaceState(null, "", `?p=${encodeURIComponent(project.id)}`);
 }
@@ -268,13 +275,15 @@ function renderList() {
     <div class="st ${st.id === selected ? "sel" : ""} ${st.enabled === false ? "off" : ""}" data-id="${st.id}">
       <input type="checkbox" class="en" ${st.enabled !== false ? "checked" : ""} title="In Berechnung einbeziehen">
       <span class="dot" style="background:${esc(st.color)}"></span>
+      ${canAdd() && st.enabled !== false ? `<button class="run" title="Diese Station neu berechnen (auch wenn im Cache)" ${busy[st.id] ? "disabled" : ""}>${busy[st.id] ? (busy[st.id].state === "queued" ? "⏳" : "⟳") : "▶"}</button>` : ""}
       <button class="ed" title="${canEdit(st) ? "Bearbeiten" : "Details"}">✎</button>
-      <span class="nm">${esc(st.name)}<br><span class="sub">${fmt(st.freq_mhz, 3)} MHz · ${fmt(st.tx_power_dbm, 0)} dBm · ${fmt(st.height_m, 0)} m · ${esc((ANT_PRESETS[st.antenna?.preset] || {}).label || st.antenna?.type)}</span></span>
+      <span class="nm">${esc(st.name)}${stale.has(st.id) ? ` <span class="stale" title="geändert, noch nicht neu berechnet">geändert</span>` : ""}${busy[st.id]?.state === "run" ? ` <span class="note">${Math.round((busy[st.id].progress || 0) * 100)} %${busy[st.id].stage ? " · " + esc(busy[st.id].stage) : ""}</span>` : ""}<br><span class="sub">${fmt(st.freq_mhz, 3)} MHz · ${fmt(st.tx_power_dbm, 0)} dBm · ${fmt(st.height_m, 0)} m · ${esc((ANT_PRESETS[st.antenna?.preset] || {}).label || st.antenna?.type)}</span></span>
     </div>`).join("");
   el.querySelectorAll(".st").forEach((d) => {
     d.addEventListener("click", (e) => {
       if (e.target.classList.contains("en")) return;
       if (e.target.classList.contains("ed")) { openEditor(d.dataset.id); return; }
+      if (e.target.classList.contains("run")) { runStations_force(d.dataset.id); return; }
       const st = byId(d.dataset.id); select(st.id, true); stationPopup(st);
       if (narrow()) closeSide();
     });
@@ -283,7 +292,7 @@ function renderList() {
       drawStation(st); renderList();
       if (isAdmin) setDirty();
       composite();                                   // instant, from cached station images
-      if (st.enabled && !runStations[st.id]) compute(true);  // only stations never computed
+      if (st.enabled && !runStations[st.id]) compute({ only: [st.id] });  // nur nie gerechnete
     });
   });
 }
@@ -333,8 +342,19 @@ function autoVbw(a) {
 }
 
 // Platzhalter, werden weiter unten ersetzt (Einzel-Berechnung, PDF)
-let runStations_force = (id) => compute(true);
+let runStations_force = (id) => compute({ only: [id], force: [id] });
 let exportPdf = (id) => status("PDF-Export folgt.");
+
+/** Fußzeile: Impressum, Datenschutz, Zugehörigkeit, GitHub (aus den Einstellungen der Instanz). */
+function renderSite() {
+  const s = cfg.site || {}, parts = [];
+  if (s.imprint) parts.push(`<a href="${esc(s.imprint)}" target="_blank" rel="noopener">Impressum</a>`);
+  parts.push(`<a href="${esc(s.privacy || "/datenschutz")}" target="_blank" rel="noopener">Datenschutz</a>`);
+  if (s.github) parts.push(`<a href="${esc(s.github)}" target="_blank" rel="noopener">GitHub</a>`);
+  parts.push(`<a href="#" id="lnkInstall">Als App installieren</a>`);
+  $("legalLinks").innerHTML = parts.join(" · ");
+  $("parentLink").innerHTML = s.parent ? `Diese Seite gehört zu ${s.parent.url ? `<a href="${esc(s.parent.url)}" target="_blank" rel="noopener">${esc(s.parent.name || s.parent.url)}</a>` : esc(s.parent.name)}` : "";
+}
 
 function canAdd() { return isAdmin || isUser; }
 function canEdit(st) { return isAdmin || (isUser && st && st.owner === "user"); }
@@ -368,7 +388,7 @@ function renderEditor() {
     ${others.length ? sec("ptp", "Strecke zu anderer Station", `
       <div class="row tight"><select id="ptpSel">${others.map((x) => `<option value="${x.id}">${esc(x.name)} (${fmt(distKm(st.lat, st.lon, x.lat, x.lon), 1)} km)</option>`).join("")}</select>
         <button id="btnPtp" title="Profil und Linkbudget mit beiden Antennen (Höhe, Gewinn in Richtung, Kabel)">Strecke zeigen</button></div>
-      ${isAdmin ? `<button id="btnAim" title="Richtantennen beider Stationen auf die jeweils andere drehen und neigen">Richtantennen aufeinander ausrichten</button>` : ""}`) : ""}
+      ${canEdit(st) ? `<button id="btnAim" title="Richtantennen beider Stationen auf die jeweils andere drehen und neigen">Richtantennen aufeinander ausrichten</button>` : ""}`) : ""}
     ${sec("loc", "Standort", `
       <div class="grid2">
         <label>Breite<input type="number" step="0.000001" data-k="lat" value="${st.lat}"></label>
@@ -410,7 +430,7 @@ function renderEditor() {
         <label>Neigung, + = abwärts (°)<input type="number" step="0.5" data-k="antenna.tilt_deg" value="${a.tilt_deg ?? 0}"></label>
         <label>Vor/Rück (dB)<input type="number" step="1" data-k="antenna.fb_db" value="${a.fb_db ?? 25}"></label>
       </div>
-      ${a.type === "directional" && isAdmin ? `<p class="note">Tipp: Den weißen Griff am Ende der Richtung auf der Karte ziehen, um die Antenne zu drehen.</p>` : ""}`,
+      ${a.type === "directional" && canEdit(st) ? `<p class="note">Tipp: Den weißen Griff am Ende der Richtung auf der Karte ziehen, um die Antenne zu drehen.</p>` : ""}`,
       `${a.type === "directional" ? `Richt ${fmt(a.gain_dbi, 0)} dBi · ${fmt(a.azimuth_deg ?? 0, 0)}°` : `Rund ${fmt(a.gain_dbi, 1)} dBi`}`)}
     ${cfg.corescope?.enabled ? sec("mc", "MeshCore", st.corescope_pk ? `
       <div>Verknüpft mit <b>${esc(csName)}</b>. Antippen der Station zeigt seine Nachbarn.</div>
@@ -437,10 +457,10 @@ function renderEditor() {
   };
   if ($("btnCalSt")) $("btnCalSt").onclick = () => { activateTab("net"); if (narrow()) openSide(); $("calSt").value = st.id; csCalibrate(st); };
   el.querySelectorAll("[data-k]").forEach((inp) => {
-    if (!isAdmin) { inp.disabled = true; return; }
+    if (!canEdit(st)) { inp.disabled = true; return; }
     inp.addEventListener("change", () => onField(st, inp));
   });
-  if (!isAdmin) { $("btnDel").remove(); if ($("elevInfo")) $("elevInfo").remove(); return; }
+  if (!canEdit(st)) { $("btnDel").remove(); if ($("elevInfo")) $("elevInfo").remove(); return; }
   $("btnDel").onclick = () => {
     if (!confirm(`Station „${st.name}“ löschen?`)) return;
     project.stations = project.stations.filter((x) => x.id !== st.id);
@@ -476,12 +496,15 @@ function onField(st, inp) {
   changed(st); drawStation(st); renderList(); renderEditor();
 }
 
-let autoTimer = null, computing = false, pending = false, retries = 0;
-function changed() { if (!isAdmin) return; setDirty(); scheduleAuto(); }
-function scheduleAuto() {
-  if (!$("autoCalc").checked) { if (lastRun) status("Geändert – „▶ Berechnen“ aktualisiert die Karte."); return; }
-  clearTimeout(autoTimer);
-  autoTimer = setTimeout(() => compute(true), 900);
+let computing = false, pending = false;
+/** Nach einer Änderung: merken, aber nicht automatisch rechnen. */
+function changed(st) {
+  if (!canAdd()) return;
+  setDirty();
+  if (st && st.id) stale.add(st.id);
+  else if (editing) stale.add(editing);
+  renderList();
+  if (lastRun) status("Geändert – „▶ Berechnen“ oder ▶ an der Station aktualisiert die Karte.");
 }
 
 // ------------------------------------------------------------ settings
@@ -548,7 +571,7 @@ const CanvasOverlay = L.ImageOverlay.extend({
 function clearOverlay() { if (covLayer) { map.removeLayer(covLayer); covLayer = null; } $("layerbox").classList.add("hidden"); }
 
 function computeBody(ids) {
-  const b = isAdmin ? { project, station_ids: ids } : { project_id: project.id, station_ids: ids };
+  const b = canAdd() ? { project, station_ids: ids } : { project_id: project.id, station_ids: ids };
   if (narrow()) b.max_px = 1600;  // Handy: gröberes Bild, weniger Speicher beim Zusammensetzen
   return b;
 }
@@ -568,42 +591,82 @@ async function loadStationData(e) {
   return d;
 }
 
-async function compute(auto = false) {
+const busy = {};          // station id -> {state: "queued"|"run", progress, stage}
+const busyMarkers = {};
+const stale = new Set();  // geändert seit der letzten Berechnung
+
+/** Fortschrittsring/Sanduhr an der Station. */
+function drawBusy(id) {
+  const st = byId(id), b = busy[id];
+  if (busyMarkers[id]) { map.removeLayer(busyMarkers[id]); delete busyMarkers[id]; }
+  if (!st || !b) return;
+  const p = Math.max(0, Math.min(1, b.progress || 0)), C = 2 * Math.PI * 17;
+  const html = b.state === "queued"
+    ? `<div class="busyq" title="wartet">⏳</div>`
+    : `<svg class="busyring${p > 0 ? "" : " spin"}" width="44" height="44" viewBox="0 0 44 44"><circle cx="22" cy="22" r="17" class="bg"/>
+       <circle cx="22" cy="22" r="17" class="fg" stroke-dasharray="${p > 0 ? `${(C * p).toFixed(1)} ${C.toFixed(1)}` : `${(C * 0.25).toFixed(1)} ${C.toFixed(1)}`}"/></svg>
+       ${p > 0 ? `<span class="busypct">${Math.round(p * 100)}</span>` : ""}`;
+  busyMarkers[id] = L.marker([st.lat, st.lon], { interactive: false, zIndexOffset: 2000, keyboard: false,
+    icon: L.divIcon({ className: "busyicon", iconSize: [44, 44], iconAnchor: [22, 36], html }) }).addTo(map);
+}
+function setBusy(id, b) { if (b) busy[id] = b; else delete busy[id]; drawBusy(id); renderList(); }
+
+/** Stationen nacheinander rechnen (jede einzeln, mit Fortschritt), danach alle zusammen anzeigen.
+ *  opts.only: nur diese ids; opts.force: diese ids neu rechnen, auch wenn ein Ergebnis im Cache liegt. */
+async function compute(opts = {}) {
+  if (opts instanceof Event) opts = {};
   const act = project.stations.filter((s) => s.enabled !== false);
   if (!act.length) { clearOverlay(); status("Keine aktive Station."); return; }
-  if (!isAdmin && !project.id) return;
-  if (computing) { pending = true; return; }
+  if (!canAdd() && !project.id) return;
+  if (computing) { pending = pending || opts; return; }
   computing = true;
   $("btnCompute").disabled = true;
+  const queue = opts.only ? act.filter((s) => opts.only.includes(s.id)) : act;
+  const force = new Set(opts.force || []);
+  queue.forEach((st) => setBusy(st.id, { state: "queued" }));
   setTimeout(pollStatus, 300);
-  const known = act.filter((s) => runStations[s.id]).length;
-  status(known === act.length ? `Aktualisiere ${act.length} Station(en) …`
-    : `Berechne ${act.length - known} neue/geänderte Station(en), übrige aus dem Cache … (beim ersten Mal werden Höhendaten geladen)`, "busy");
   const t0 = performance.now();
+  let nNew = 0, done = 0;
   try {
-    const r = await api("/api/coverage", { method: "POST", body: computeBody(act.map((s) => s.id)) });
+    for (const st of queue) {
+      setBusy(st.id, { state: "run", progress: 0 });
+      status(`Berechne „${st.name}“ (${done + 1}/${queue.length}) …`, "busy");
+      const r = await apiRetry("/api/coverage", { method: "POST", body: { ...computeBody([st.id]), force: force.has(st.id) ? [st.id] : [] } });
+      if (r.stations[0] && !r.stations[0].cached) nNew++;
+      stale.delete(st.id);
+      setBusy(st.id, null);
+      done++;
+    }
+    // Anzeige: alle aktiven Stationen gemeinsam (gleiches Raster), jetzt alles aus dem Cache
+    const r = await apiRetry("/api/coverage", { method: "POST", body: computeBody(act.map((s) => s.id)) });
     if (lastRun && lastRun.factor !== r.factor) runStations = {};
     lastRun = r;
     for (const e of r.stations) runStations[e.id] = e;
     await Promise.all(r.stations.map(loadStationData));
     composite();
     renderResults(r);
-    const nNew = r.stations.filter((e) => !e.cached).length;
-    status(`Fertig in ${((performance.now() - t0) / 1000).toFixed(1)} s – ${nNew} berechnet, ${r.stations.length - nNew} aus dem Cache.` + (r.factor > 1 ? ` (Anzeige ${fmt(r.cell_m * Math.cos(map.getCenter().lat * Math.PI / 180), 0)} m Raster)` : ""));
-    retries = 0;
+    status(`Fertig in ${((performance.now() - t0) / 1000).toFixed(1)} s – ${nNew} berechnet, ${act.length - nNew} aus dem Cache.` + (r.factor > 1 ? ` (Anzeige ${fmt(r.cell_m * Math.cos(map.getCenter().lat * Math.PI / 180), 0)} m Raster)` : ""));
   } catch (e) {
-    if ([502, 503, 504].includes(e.status) && retries < 30) {
-      // Zeitlimit eines Reverse-Proxys: der Server rechnet weiter und legt das Ergebnis in den Cache
-      retries++;
-      status(`Die Berechnung läuft auf dem Server noch … neuer Versuch in 10 s (${retries})`, "busy");
-      setTimeout(() => compute(true), 10000);
-    } else {
-      retries = 0;
-      status("Fehler: " + e.message, "err");
-    }
+    status("Fehler: " + e.message, "err");
   } finally {
+    queue.forEach((st) => { if (busy[st.id]) setBusy(st.id, null); });
     $("btnCompute").disabled = false; computing = false;
-    if (pending) { pending = false; compute(true); }
+    renderList();
+    if (pending) { const p = pending; pending = false; compute(p === true ? {} : p); }
+  }
+}
+
+/** Wie api(), überbrückt aber Zeitlimits eines Reverse-Proxys: der Server rechnet weiter und legt das Ergebnis
+ *  in den Cache, ein späterer Versuch bekommt es dann sofort. */
+async function apiRetry(path, opts) {
+  for (let i = 0; ; i++) {
+    try { return await api(path, opts); }
+    catch (e) {
+      if (![502, 503, 504].includes(e.status) || i >= 30) throw e;
+      status(`Die Berechnung läuft auf dem Server noch … neuer Versuch in 10 s (${i + 1})`, "busy");
+      await new Promise((res) => setTimeout(res, 10000));
+      if (opts.body && opts.body.force) opts = { ...opts, body: { ...opts.body, force: [] } };  // nicht nochmal verwerfen
+    }
   }
 }
 
@@ -774,7 +837,7 @@ async function showProfile(sid, latlng, opts = {}) {
   if (profLine) map.removeLayer(profLine);
   profLine = L.polyline([[st.lat, st.lon], [latlng.lat, latlng.lng]], { color: st.color, dashArray: "6 4", weight: 2 }).addTo(map);
   try {
-    const p = await api("/api/profile", { method: "POST", body: { ...(isAdmin ? { project } : { project_id: project.id }), station_id: sid, lat: latlng.lat, lon: latlng.lng,
+    const p = await api("/api/profile", { method: "POST", body: { ...(canAdd() ? { project } : { project_id: project.id }), station_id: sid, lat: latlng.lat, lon: latlng.lng,
       ...(rxSt ? { rx_station_id: rxSt.id } : { rx_height_m: +$("profRxH").value, rx_gain_dbi: +$("profRxG").value, rx_cable_db: opts.rx?.c }) } });
     $("profMeta").textContent = `${fmt(p.distance_m / 1000, 2)} km · Azimut ${fmt(p.azimuth_deg, 0)}° · Elevation ${fmt(p.elevation_deg, 2)}° · ` +
       ["keine Sichtlinie", "Sichtlinie, Fresnelzone verletzt", "Fresnelzone ≥ 60 % frei"][p.los_class] +
@@ -1244,7 +1307,7 @@ async function csCalibrate(st) {
   status(`Abgleich: rechne ${partners.length} Strecken …`, "busy");
   try {
     const r = await api("/api/corescope/calibrate", { method: "POST", body: {
-      ...(isAdmin ? { project } : { project_id: project.id }), station_id: st.id, partners,
+      ...(canAdd() ? { project } : { project_id: project.id }), station_id: st.id, partners,
       rx_height_m: +$("calH").value, rx_gain_dbi: +$("calG").value, rx_cable_db: +$("calC").value } });
     const s = r.stats;
     let hint = "";
@@ -1307,20 +1370,27 @@ const fmtGB = (b) => b == null ? "?" : b >= 1e9 ? `${fmt(b / 1e9, 1)} GB` : `${f
 async function pollStatus() {
   clearTimeout(sysTimer);
   if (document.hidden) { sysTimer = setTimeout(pollStatus, 10000); return; }
-  let busy = false;
+  let isBusy = false;
   try {
     const r = await api("/api/status");
     const items = r.busy || [];
+    let touched = false;
+    for (const it of items) {  // Fortschritt an den Stationen
+      if (it.station && busy[it.station] && busy[it.station].state === "run" && it.progress != null) {
+        busy[it.station].progress = it.progress; busy[it.station].stage = it.stage; drawBusy(it.station); touched = true;
+      }
+    }
+    if (touched) renderList();
     if (computing && !items.length) items.push({ what: "warte auf Server …" });
-    busy = items.length > 0;
-    $("sysbox").className = busy ? "busy" : "";
-    $("sysText").textContent = busy ? "rechnet: " + items.map((x) => x.what + (x.seconds != null ? ` ${fmt(x.seconds, 0)} s` : "")).join(" · ") : "bereit";
+    isBusy = items.length > 0;
+    $("sysbox").className = isBusy ? "busy" : "";
+    $("sysText").textContent = isBusy ? "rechnet: " + items.map((x) => x.what + (x.seconds != null ? ` ${fmt(x.seconds, 0)} s` : "")).join(" · ") : "bereit";
     const res = r.res;
     $("sysRes").textContent = res ? `CPU ${res.cpu_pct == null ? "…" : fmt(res.cpu_pct, 0) + " %"} (${fmt(res.cpus, 0)} Kerne) · RAM ${fmtGB(res.mem_used)} / ${fmtGB(res.mem_limit)}` : "";
   } catch (e) {
     $("sysbox").className = "off"; $("sysText").textContent = "Server nicht erreichbar"; $("sysRes").textContent = "";
   }
-  sysTimer = setTimeout(pollStatus, busy || computing ? 1500 : 4000);
+  sysTimer = setTimeout(pollStatus, isBusy || computing ? 700 : 4000);
 }
 document.addEventListener("visibilitychange", () => { if (!document.hidden) pollStatus(); });
 
@@ -1340,14 +1410,32 @@ function setPlacing(v) {
 function wire() {
   document.querySelectorAll(".tabs button").forEach((b) => (b.onclick = () => activateTab(b.dataset.tab)));
   $("btnAdd").onclick = () => setPlacing(!placing);
-  $("btnCompute").onclick = compute;
+  $("btnCompute").onclick = () => compute();
   document.addEventListener("keydown", (e) => { if (e.key === "Escape") setPlacing(false); });
   map.on("zoomend", renderOvLegend);
-  $("btnSettings").onclick = () => { renderSettings(); $("settingsDlg").showModal(); };
+  const AC = ["user_enabled", "user_name", "user_password", "parent_name", "parent_url", "show_github", "imprint_mode", "imprint_url",
+    "imprint_name", "imprint_email", "imprint_address", "privacy_mode", "privacy_url", "privacy_extra"];
+  $("btnSettings").onclick = async () => {
+    renderSettings(); $("settingsDlg").showModal();
+    try {
+      const c = await api("/api/admin/appconfig");
+      for (const k of AC) { const el = $("ac_" + k); if (el.type === "checkbox") el.checked = !!c[k]; else el.value = c[k] ?? ""; }
+      $("acOut").textContent = "";
+    } catch (e) { $("acOut").textContent = "Fehler: " + e.message; }
+  };
+  $("btnAcSave").onclick = async () => {
+    const body = {};
+    for (const k of AC) { const el = $("ac_" + k); body[k] = el.type === "checkbox" ? el.checked : el.value; }
+    try {
+      await api("/api/admin/appconfig", { method: "PUT", body });
+      cfg = await api("/api/config"); renderSite(); wireInstall();
+      $("acOut").textContent = "Gespeichert.";
+    } catch (e) { $("acOut").textContent = "Fehler: " + e.message; }
+  };
   $("settingsClose").onclick = () => $("settingsDlg").close();
   $("settingsDlg").addEventListener("close", overlaySources);
   map.on("click", (e) => {
-    if (placing && isAdmin) {
+    if (placing && canAdd()) {
       const st = defaultStation(e.latlng.lat, e.latlng.lng);
       project.stations.push(st); drawStation(st); setPlacing(false); openEditor(st.id); changed();
       return;
@@ -1361,10 +1449,9 @@ function wire() {
   $("reqSlider").onchange = () => {
     project.settings.min_margin_db = +$("reqSlider").value;
     $("s_min_margin_db").value = $("reqSlider").value;
-    if (isAdmin) setDirty();
+    if (canAdd()) setDirty();
     composite();
   };
-  $("autoCalc").onchange = () => { if ($("autoCalc").checked) scheduleAuto(); };
   $("profClose").onclick = () => {
     $("profile").classList.add("hidden"); if (profLine) { map.removeLayer(profLine); profLine = null; }
     document.body.classList.remove("profile-open"); lastProfile = null;
@@ -1381,7 +1468,7 @@ function wire() {
     try { await navigator.clipboard.writeText(url); status("Link kopiert" + (project.public ? "." : " – Achtung: Projekt ist privat, Besucher sehen es nicht.")); }
     catch { prompt("Link zum Projekt:", url); }
   };
-  $("btnLogin").onclick = () => (isAdmin ? logout() : $("loginDlg").showModal());
+  $("btnLogin").onclick = () => (canAdd() ? logout() : $("loginDlg").showModal());
   $("loginForm").onsubmit = async (e) => {
     e.preventDefault();
     try {
@@ -1449,6 +1536,9 @@ function wire() {
     $("layerToggle").setAttribute("aria-expanded", String(!c));
   };
   $("layerbox").classList.add("collapsed"); $("layerToggle").setAttribute("aria-expanded", "false");
+  wireInstall();
+}
+function wireInstall() {
   $("lnkInstall").onclick = (e) => {
     e.preventDefault();
     const secure = location.protocol === "https:" || ["localhost", "127.0.0.1"].includes(location.hostname);
@@ -1466,21 +1556,24 @@ async function logout() {
 }
 
 function applyRole() {
-  document.body.classList.toggle("readonly", !isAdmin);
-  $("btnLogin").textContent = isAdmin ? `Abmelden (${cfg.auth.user})` : "Anmelden";
+  document.body.classList.toggle("readonly", !canAdd());
+  document.body.classList.toggle("role-user", isUser);
+  $("btnLogin").textContent = canAdd() ? `Abmelden (${cfg.auth.user})` : "Anmelden";
 }
 
 async function init() {
   cfg = await api("/api/config");
   setupBasemaps(!!cfg.tile_proxy);
-  isAdmin = !!cfg.auth?.admin;
+  isAdmin = cfg.auth?.role === "admin" || (!!cfg.auth?.admin && !cfg.auth?.role);
+  isUser = cfg.auth?.role === "user";
+  renderSite();
   $("ver").textContent = !cfg.version ? "" : /^\d/.test(cfg.version) ? "v" + cfg.version : cfg.version;
   wire(); applyRole();
   csInit().catch((e) => console.warn("CoreScope", e));
   pollStatus();
   if (isAdmin) bindSettings();
   newProject();
-  if (!isAdmin && !cfg.auth.public_read) { status("Bitte anmelden."); $("loginDlg").showModal(); return; }
+  if (!canAdd() && !cfg.auth.public_read) { status("Bitte anmelden."); $("loginDlg").showModal(); return; }
   const list = await refreshProjectList().catch(() => []);
   const want = new URLSearchParams(location.search).get("p");
   const pick = want || (isAdmin ? cfg.last_project : (list && list.length ? list[0].id : null));
@@ -1488,7 +1581,7 @@ async function init() {
     try { loadProject(await api(`/api/projects/${encodeURIComponent(pick)}`)); }
     catch (e) { status("Projekt nicht gefunden oder nicht öffentlich.", "err"); }
   } else {
-    status(isAdmin ? "Bereit. „＋ Station platzieren“, dann „▶ Berechnen“. Rechtsklick (Handy: lange tippen) zeigt Pegel und Profil an einem Punkt." : "Noch keine öffentlichen Projekte.");
+    status(canAdd() ? "Bereit. „＋ Station platzieren“, dann „▶ Berechnen“. Rechtsklick (Handy: lange tippen) zeigt Pegel und Profil an einem Punkt." : "Noch keine öffentlichen Projekte.");
   }
 }
 init().catch((e) => status("Start fehlgeschlagen: " + e.message, "err"));

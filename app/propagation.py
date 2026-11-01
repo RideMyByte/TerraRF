@@ -225,10 +225,10 @@ def endpoint_terms(d, z, zt, zg, nd, gsum, j, ztx, tx_agl, rx_h, lam, f_mhz, mod
 
 @njit(parallel=True, cache=True, fastmath=True)
 def coverage_rays(G, S, sx, sy, cs, kscale, ztx_abs, tx_agl, rx_h, lam, f_mhz, n_rays, n_bins, step, sub, re,
-                  model, clut_mode, excl_m, cl_R, cl_typ, fl_R, fl_typ, two_ray, veg_g, veg_am):
+                  model, clut_mode, excl_m, cl_R, cl_typ, fl_R, fl_typ, two_ray, veg_g, veg_am, a0, a1):
     """Radial sweep. Returns per (ray, bin): diffraction, v_main, dz, clutter, reflection,
     obstacle/vegetation loss, and visibility of the surface (roof/tree top) from the antenna."""
-    shape = (n_rays, n_bins + 1)
+    shape = (a1 - a0, n_bins + 1)  # nur Strahlen a0..a1-1 (Fortschritt in Blöcken)
     o_diff = np.zeros(shape, dtype=np.float32)
     o_v = np.full(shape, -1e9, dtype=np.float32)
     o_dz = np.zeros(shape, dtype=np.float32)
@@ -236,7 +236,8 @@ def coverage_rays(G, S, sx, sy, cs, kscale, ztx_abs, tx_agl, rx_h, lam, f_mhz, n
     o_pe = np.zeros(shape, dtype=np.float32)
     o_veg = np.zeros(shape, dtype=np.float32)
     o_vis = np.zeros(shape, dtype=np.int8)
-    for a in prange(n_rays):
+    for r in prange(a1 - a0):
+        a = a0 + r
         th = 2.0 * math.pi * a / n_rays
         ux = math.sin(th) / (kscale * cs)
         uy = -math.cos(th) / (kscale * cs)
@@ -274,19 +275,19 @@ def coverage_rays(G, S, sx, sy, cs, kscale, ztx_abs, tx_agl, rx_h, lam, f_mhz, n
         for j in range(1, n_bins + 1):
             # optical visibility of the surface (+1 m) at bin j from the antenna
             if (z[j] + 1.0 - ztx_abs) / d[j] >= max_slope:
-                o_vis[a, j] = 1
+                o_vis[r, j] = 1
             sl = (z[j] - ztx_abs) / d[j]
             ldiff, v1, lcl, lpe, _r, lveg, _dv = endpoint_terms(
                 d, z, zt, zg, nd, gsum, j, ztx_abs, tx_agl, rx_h, lam, f_mhz,
                 model, clut_mode, excl_m, cl_R, cl_typ, fl_R, fl_typ, two_ray, veg_g, veg_am)
             if sl > max_slope:
                 max_slope = sl
-            o_veg[a, j] = lveg
-            o_diff[a, j] = ldiff
-            o_v[a, j] = v1
-            o_dz[a, j] = zg[j] + rx_h - ztx_abs
-            o_cl[a, j] = lcl
-            o_pe[a, j] = lpe
+            o_veg[r, j] = lveg
+            o_diff[r, j] = ldiff
+            o_v[r, j] = v1
+            o_dz[r, j] = zg[j] + rx_h - ztx_abs
+            o_cl[r, j] = lcl
+            o_pe[r, j] = lpe
     return o_diff, o_v, o_dz, o_cl, o_pe, o_veg, o_vis
 
 
@@ -409,4 +410,4 @@ def clutter_params(s):
 def warmup():
     G = np.zeros((20, 20), dtype=np.float32)
     coverage_rays(G, G, 10.0, 10.0, 10.0, 0.6, 10.0, 10.0, 1.5, 0.35, 869.0, 8, 5, 10.0, 2, 8.5e6,
-                  0, 1, 30.0, 0.0, 0, 10.0, 0, True, 0.17, 26.5)
+                  0, 1, 30.0, 0.0, 0, 10.0, 0, True, 0.17, 26.5, 0, 8)

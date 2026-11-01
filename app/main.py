@@ -14,10 +14,10 @@ import httpx
 import numpy as np
 from fastapi import Body, Depends, FastAPI, HTTPException, Request
 from fastapi.concurrency import run_in_threadpool
-from fastapi.responses import JSONResponse, Response
+from fastapi.responses import JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 
-from . import auth, corescope, legal, overlay, regions, sysstat, terrain, tiles
+from . import appconfig, auth, corescope, legal, overlay, regions, sysstat, terrain, tiles
 from . import coverage as cov
 from . import propagation as prop
 from .version import VERSION
@@ -42,6 +42,7 @@ async def lifespan(_app):
 
 app = FastAPI(title="TerraRF", version=VERSION, lifespan=lifespan)
 ADMIN = [Depends(auth.require_admin)]
+MEMBER = [Depends(auth.require_member)]
 READ = [Depends(auth.require_read)]
 
 
@@ -58,8 +59,22 @@ def health():
 
 @app.get("/api/me")
 def me(request: Request):
-    return {"admin": auth.is_admin(request), "user": auth.ADMIN_USER if auth.is_admin(request) else None,
-            "public_read": auth.PUBLIC_READ}
+    role = auth.role(request)
+    name = auth.ADMIN_USER if role == "admin" else appconfig.get()["user_name"] if role == "user" else None
+    return {"admin": role == "admin", "role": role, "user": name, "public_read": auth.PUBLIC_READ}
+
+
+@app.get("/api/admin/appconfig", dependencies=ADMIN)
+def get_appconfig():
+    return appconfig.get()
+
+
+@app.put("/api/admin/appconfig", dependencies=ADMIN)
+def put_appconfig(body: dict = Body(...)):
+    try:
+        return appconfig.update(body)
+    except ValueError as e:
+        _err(e)
 
 
 @app.get("/api/status")
@@ -81,11 +96,12 @@ def status(request: Request):
 
 @app.post("/api/login")
 def login(request: Request, body: dict = Body(...)):
-    if not auth.check_login(request, str(body.get("user", "")), str(body.get("password", ""))):
+    role = auth.check_login(request, str(body.get("user", "")), str(body.get("password", "")))
+    if not role:
         raise HTTPException(401, "Benutzer oder Passwort falsch")
-    resp = JSONResponse({"ok": True, "admin": True})
+    resp = JSONResponse({"ok": True, "admin": role == "admin", "role": role})
     # Standard: Sitzungscookie (endet mit dem Browser); "angemeldet bleiben" nur auf ausdrücklichen Wunsch
-    resp.set_cookie(auth.COOKIE, auth.make_token(auth.ADMIN_USER),
+    resp.set_cookie(auth.COOKIE, auth.make_token(str(body.get("user", "")), role),
                     max_age=auth.SESSION_S if body.get("remember") else None, httponly=True,
                     samesite="lax", secure=auth.is_https(request), path="/")
     return resp
@@ -109,6 +125,7 @@ def config(request: Request):
         "corescope": {"enabled": corescope.enabled(), "url": corescope.BASE or None},
         "tile_proxy": tiles.ENABLED,
         "legal": {"imprint": legal.configured()},
+        "site": appconfig.public(),
         "last_project": _last_project() if auth.is_admin(request) else None,
     }
 
@@ -143,9 +160,9 @@ def _visible_project(request: Request, pid):
 
 def _project_for(request: Request, body: dict):
     """Admin may send an unsaved project; visitors only reference a saved public one."""
-    if auth.is_admin(request) and body.get("project"):
+    if auth.can_edit_any(request) and body.get("project"):
         return body["project"]
-    if auth.is_admin(request) and "stations" in body:
+    if auth.can_edit_any(request) and "stations" in body:
         return body
     pid = body.get("project_id")
     if not pid:
@@ -197,9 +214,27 @@ def _last_project():
         return None
 
 
-@app.put("/api/projects/{pid}", dependencies=ADMIN)
-def save_project(pid: str, project: dict = Body(...)):
+def _merge_user_changes(stored, sent):
+    """Benutzer „user“: nur eigene Stationen (owner = "user") anlegen, ändern, löschen. Alles andere bleibt,
+    wie es gespeichert ist – auch wenn der Browser etwas anderes schickt."""
+    own = [s_ for s_ in sent.get("stations") or [] if s_.get("owner") == "user"]
+    foreign_ids = {s_["id"] for s_ in stored.get("stations") or [] if s_.get("owner") != "user"}
+    own = [s_ for s_ in own if s_.get("id") not in foreign_ids]
+    merged = dict(stored)
+    merged["stations"] = [s_ for s_ in stored.get("stations") or [] if s_.get("owner") != "user"] + own
+    return merged
+
+
+@app.put("/api/projects/{pid}", dependencies=MEMBER)
+def save_project(request: Request, pid: str, project: dict = Body(...)):
     p = _ppath(pid)
+    if not auth.is_admin(request):
+        if not os.path.exists(p):
+            raise HTTPException(403, "Neue Projekte darf nur der Admin anlegen")
+        stored = _load_project(pid)
+        if not stored.get("public"):
+            raise HTTPException(404, "Projekt nicht gefunden")
+        project = _merge_user_changes(stored, project)
     project["id"] = pid
     project["updated"] = time.strftime("%Y-%m-%dT%H:%M:%S")
     tmp = p + ".tmp"
@@ -208,7 +243,7 @@ def save_project(pid: str, project: dict = Body(...)):
     os.replace(tmp, p)
     if project.get("public"):
         threading.Thread(target=_warm, args=(project,), daemon=True).start()
-    return {"ok": True, "id": pid, "updated": project["updated"]}
+    return {"ok": True, "id": pid, "updated": project["updated"], "project": project}
 
 
 def _warm(project):
@@ -245,7 +280,10 @@ async def coverage(request: Request, body: dict = Body(...)):
     try:
         max_px = body.get("max_px")
         max_px = int(min(max(int(max_px), 500), cov.MAX_DIM)) if max_px else None
-        return await run_in_threadpool(cov.run_coverage, project, ids, max_px)
+        force = body.get("force") or []
+        if force and not auth.can_edit_any(request):
+            force = []  # Besucher dürfen keine Neuberechnung erzwingen
+        return await run_in_threadpool(cov.run_coverage, project, ids, max_px, force)
     except (ValueError, terrain.SourceError, KeyError) as e:
         _err(e)
 
@@ -353,7 +391,7 @@ async def cs_calibrate(request: Request, body: dict = Body(...)):
         _err(e)
 
 
-@app.post("/api/elevation", dependencies=ADMIN)
+@app.post("/api/elevation", dependencies=MEMBER)
 async def elevation(body: dict = Body(...)):
     try:
         return await run_in_threadpool(cov.point_elevation, body["project"], float(body["lat"]), float(body["lon"]))
@@ -502,11 +540,19 @@ async def overlay_tile(kind: str, z: int, x: int, y: int, g: str = "nrw_dgm", s:
 
 @app.get("/impressum")
 def impressum():
+    c = appconfig.get()
+    if c["imprint_mode"] == "off":
+        raise HTTPException(404, "Kein Impressum hinterlegt")
+    if c["imprint_mode"] == "link" and c["imprint_url"]:
+        return RedirectResponse(c["imprint_url"], status_code=302)
     return Response(legal.page("impressum"), media_type="text/html")
 
 
 @app.get("/datenschutz")
 def datenschutz():
+    c = appconfig.get()
+    if c["privacy_mode"] == "link" and c["privacy_url"]:
+        return RedirectResponse(c["privacy_url"], status_code=302)
     return Response(legal.page("datenschutz"), media_type="text/html")
 
 

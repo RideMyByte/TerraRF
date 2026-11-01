@@ -30,7 +30,7 @@
         <span id="dirty" title="Ungespeicherte Änderungen"></span>
       </div>
       <div class="row tight">
-        <button id="btnSave" class="admin-only" title="Projekt auf dem Server speichern">💾 Speichern</button>
+        <button id="btnSave" class="member-only" title="Projekt auf dem Server speichern">💾 Speichern</button>
         <select id="projList" title="Projekt laden"><option value="">Laden …</option></select>
         <button id="btnNew" class="admin-only" title="Neues Projekt">Neu</button>
         <button id="btnMore" class="admin-only" title="Import/Export">⋯</button>
@@ -55,10 +55,10 @@
 
     <section id="tab-stations" class="tab active">
       <div class="row">
-        <button id="btnAdd" class="primary admin-only">＋ Station platzieren</button>
+        <button id="btnAdd" class="primary member-only">＋ Station platzieren</button>
         <button id="btnCompute" class="go">▶ Berechnen</button>
       </div>
-      <label class="chk admin-only" style="margin-top:0"><input type="checkbox" id="autoCalc" checked> automatisch neu berechnen (aus Cache, nur Geändertes wird gerechnet)</label>
+      <p class="note" style="margin:2px 0 6px">▶ an einer Station rechnet nur diese neu. „Berechnen“ rechnet alle, was unverändert ist, kommt aus dem Cache.</p>
       <div id="stationList"></div>
     </section>
 
@@ -121,7 +121,7 @@
     </section>
     <div id="preloadInfo" class="note" style="padding:0 12px"></div>
     <footer id="status">Bereit.</footer>
-    <div class="legal"><a href="/impressum" target="_blank">Impressum</a> · <a href="/datenschutz" target="_blank">Datenschutz</a> · <a href="#" id="lnkInstall">Als App installieren</a></div>
+    <div class="legal"><div id="parentLink"></div><div id="legalLinks"><a href="#" id="lnkInstall">Als App installieren</a></div></div>
   </aside>
 
   <div id="sideResize" title="Breite ziehen"></div>
@@ -175,7 +175,42 @@
 </dialog>
 <dialog id="settingsDlg" class="wide">
   <div class="dlghead"><h3>Einstellungen</h3><button type="button" id="settingsClose" class="iconbtn" aria-label="Schließen">✕</button></div>
-  <div class="dlgbody">    
+  <div class="dlgbody">
+      <details class="esec" open><summary>Webseite &amp; Zugang</summary><div class="esbody">
+      <h3>Zweiter Zugang („Benutzer“)</h3>
+      <p class="note">Darf alles ansehen, Stationen anlegen und eigene Stationen ändern und speichern – an fremden Stationen, Einstellungen und Projekten ändert er nichts.</p>
+      <label class="chk" style="margin-top:2px"><input type="checkbox" id="ac_user_enabled"> Benutzer-Zugang aktiv</label>
+      <div class="grid2">
+        <label>Name<input id="ac_user_name" autocomplete="off"></label>
+        <label>Passwort (Klartext)<input id="ac_user_password" autocomplete="off" spellcheck="false"></label>
+      </div>
+      <h3>Zugehörigkeit</h3>
+      <div class="grid2">
+        <label>„Diese Seite gehört zu …“<input id="ac_parent_name" placeholder="z. B. funk.nrw"></label>
+        <label>Link dazu<input id="ac_parent_url" placeholder="https://…"></label>
+      </div>
+      <label class="chk" style="margin-top:2px"><input type="checkbox" id="ac_show_github"> Link zum Quellcode (GitHub) zeigen</label>
+      <h3>Impressum</h3>
+      <label>Art<select id="ac_imprint_mode">
+        <option value="generated">aus den Angaben hier erzeugen</option>
+        <option value="link">auf eine andere Seite verlinken</option>
+        <option value="off">kein Impressum</option></select></label>
+      <label>Link (bei „verlinken“)<input id="ac_imprint_url" placeholder="https://forum…/impressum"></label>
+      <div class="grid2">
+        <label>Name<input id="ac_imprint_name"></label>
+        <label>E-Mail<input id="ac_imprint_email"></label>
+      </div>
+      <label>Anschrift (Zeilen mit | trennen)<input id="ac_imprint_address" placeholder="Musterstr. 1|45964 Gladbeck"></label>
+      <h3>Datenschutz</h3>
+      <label>Art<select id="ac_privacy_mode">
+        <option value="generated">passend zu TerraRF erzeugen</option>
+        <option value="link">auf eine andere Seite verlinken</option></select></label>
+      <label>Link (bei „verlinken“)<input id="ac_privacy_url" placeholder="https://…/datenschutz"></label>
+      <label>Zusatz zur Datenschutzerklärung (z. B. Reverse-Proxy-Logs)<input id="ac_privacy_extra"></label>
+      <div class="row"><button id="btnAcSave" class="primary">Webseite &amp; Zugang speichern</button></div>
+      <div id="acOut" class="note"></div>
+      </div></details>
+      <details class="esec" open><summary>Projekt &amp; Rechnung</summary><div class="esbody">    
       <h3>Höhendaten</h3>
       <label>Gelände (Boden, für Antennen-/Empfängerhöhe)
         <select id="s_ground_source"></select></label>
@@ -261,7 +296,8 @@
       </div>
       <p class="note">Richtwerte: Handgerät am Körper 3–6 dB, im Gebäude 10–20 dB. Die Reserve deckt die Streuung über Standorte und Fading ab; als „versorgt“ zählt nur, was darüber liegt.</p>
       <p class="note">Die Empfindlichkeit des Empfängers kommt aus den Funkparametern der jeweiligen Station (Bandbreite, SF, Rauschzahl). Man nimmt also an, dass auf beiden Seiten dasselbe Funkmodul sitzt.</p>
-    </div>
+    </div></details>
+  </div>
 </dialog>
 <dialog id="installDlg">
   <h3>TerraRF als App</h3>

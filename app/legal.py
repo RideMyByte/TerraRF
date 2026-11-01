@@ -9,18 +9,17 @@ from __future__ import annotations
 import html
 import os
 
-from . import auth, corescope, terrain, tiles
+from . import appconfig, auth, corescope, terrain, tiles
 
 LEGAL_DIR = os.path.join(terrain.DATA_DIR, "legal")
-NAME = os.environ.get("RFP_IMPRINT_NAME", "").strip()
-ADDRESS = os.environ.get("RFP_IMPRINT_ADDRESS", "").strip()
-EMAIL = os.environ.get("RFP_IMPRINT_EMAIL", "").strip()
-EXTRA = os.environ.get("RFP_IMPRINT_EXTRA", "").strip()
-PRIVACY_EXTRA = os.environ.get("RFP_PRIVACY_EXTRA", "").strip()
+
+
+def _c(k):
+    return (appconfig.get().get(k) or "").strip()
 
 
 def configured():
-    return bool(NAME or os.path.exists(os.path.join(LEGAL_DIR, "impressum.html")))
+    return bool(_c("imprint_name") or os.path.exists(os.path.join(LEGAL_DIR, "impressum.html")))
 
 
 def _lines(s):
@@ -36,6 +35,7 @@ def _override(name):
 
 
 def _contact():
+    NAME, ADDRESS, EMAIL = _c("imprint_name"), _c("imprint_address"), _c("imprint_email")
     parts = [html.escape(NAME)] if NAME else []
     if ADDRESS:
         parts.append(_lines(ADDRESS))
@@ -49,11 +49,11 @@ def impressum_body():
     o = _override("impressum.html")
     if o is not None:
         return o
-    if not NAME:
+    if not _c("imprint_name"):
         return ("<h1>Impressum</h1><p>Der Betreiber dieser Instanz hat noch keine Angaben hinterlegt.</p>"
-                "<p class='hint'>Betreiber: Umgebungsvariablen <code>RFP_IMPRINT_NAME</code>, "
-                "<code>RFP_IMPRINT_ADDRESS</code> und <code>RFP_IMPRINT_EMAIL</code> setzen oder "
-                "<code>data/legal/impressum.html</code> anlegen.</p>")
+                "<p class='hint'>Betreiber: in TerraRF unter ⚙ Einstellungen → Webseite &amp; Zugang eintragen, "
+                "auf eine bestehende Impressumsseite verlinken oder <code>data/legal/impressum.html</code> anlegen.</p>")
+    EXTRA = _c("imprint_extra")
     extra = f"<p>{_lines(EXTRA)}</p>" if EXTRA else ""
     return f"<h1>Impressum</h1><h2>Angaben gemäß § 5 DDG</h2><p>{_contact()}</p>{extra}"
 
@@ -85,6 +85,7 @@ def datenschutz_body():
               f"(<a href='{html.escape(corescope.BASE)}'>{html.escape(corescope.BASE)}</a>): Knotennamen, Standorte, wie sie "
               "die Knoten selbst aussenden, und Verbindungsstatistiken. Diese Daten ruft der Server ab; Ihr Browser "
               "verbindet sich nicht mit dem Dienst.</p>")
+    PRIVACY_EXTRA = _c("privacy_extra")
     extra = f"<h2>Weitere Hinweise</h2><p>{_lines(PRIVACY_EXTRA)}</p>" if PRIVACY_EXTRA else ""
     return f"""<h1>Datenschutzerklärung</h1>
 <h2>Verantwortlicher</h2><p>{who}</p>
