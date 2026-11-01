@@ -29,6 +29,11 @@ def _handler(req: httpx.Request):
             else [_node(2000, role="room")]
         page = allnodes[off:off + lim]
         return httpx.Response(200, json={"nodes": page, "has_more": off + lim < len(allnodes), "counts": {"repeaters": 451}})
+    if p == f"/api/nodes/{PK}":
+        return httpx.Response(200, json={"node": {"public_key": PK, "name": "DE-NW-GE-HaldeScholven", "role": "repeater",
+                                                  "battery_mv": 4010, "last_seen": "2026-10-31T18:00:00Z"}, "recentAdverts": [{}, {}]})
+    if p == "/api/rf-params":
+        return httpx.Response(404)
     if p == f"/api/nodes/{PK}/reach":
         return httpx.Response(200, json=REACH)
     if p == f"/api/nodes/{PK}/neighbors":
@@ -140,3 +145,12 @@ def test_profile_to_station_uses_far_end_antenna(project, station):
         assert towards["budget"]["rx_station"] == "B" and towards["budget"]["rx_gain_dbi"] > 17
         assert away["budget"]["rx_gain_dbi"] < 0
         assert towards["budget"]["prx_dbm"] - away["budget"]["prx_dbm"] > 15
+
+
+def test_node_meta_without_height(mocked):
+    with TestClient(app) as c:
+        r = c.get(f"/api/corescope/node/{PK}")
+        assert r.status_code == 200, r.text
+        d = r.json()
+        assert d["node"]["battery_mv"] == 4010 and d["adverts"] == 2 and d["rf"] is None
+        assert "height_m" not in d["node"]  # MeshCore sendet keine Höhe/Antenne/Leistung

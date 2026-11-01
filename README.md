@@ -28,6 +28,7 @@ und weltweit Copernicus GLO-30.
 - Projekte speichern, laden, als JSON exportieren/importieren
 - Ein Admin-Login zum Bearbeiten; Besucher sehen öffentliche Projekte nur lesend (Teilen per Link)
 - Basiskarten inkl. OpenStreetMap in Graustufen
+- Kartenebenen aus der Rechengrundlage: Gelände (Höhe + Schummerung), Oberfläche, Hindernishöhe (Gebäude/Bäume)
 - Statusanzeige auf der Karte: was der Server gerade rechnet, für den Admin dazu CPU und RAM des Containers
 - Richtfunk: Antenne mit der Maus drehen, Strecke Station → Station mit beiden Antennen, gegenseitig ausrichten
 - Handytauglich und als App installierbar (Startbildschirm, öffnet ohne Browserleiste)
@@ -91,6 +92,14 @@ Wer immer den neuesten Stand von `main` will, nimmt `:edge`.
 | Copernicus GLO-30 | Oberflächenmodell 30 m, weltweit | Rückfall außerhalb NRW |
 | Lokal | eigene GeoTIFFs in `data/dem/<ordner>/` | erscheinen als „Lokal: …“ |
 
+## Bedienung
+- **⚙** oben links öffnet die Einstellungen (Höhendaten, Offline-Download, Modell, Empfänger) – nur für den Admin.
+- Eine Station anklicken öffnet ihren Editor als Fenster über der Karte; die Abschnitte (Strecke, Standort, Funk,
+  Antenne, MeshCore, Berechnung) lassen sich auf- und zuklappen. Klicks auf der Karte wechseln nie den Reiter.
+- **Kartenebenen** (Ebenen-Knopf oben rechts, ab Zoomstufe 11): „Daten: Gelände“, „Oberfläche“ und „Hindernishöhe
+  über Grund“ zeigen die Höhendaten, mit denen gerechnet wird. Gezeigt wird nur, was lokal vorliegt (vorgeladene
+  NRW-Kacheln, eigene GeoTIFFs); das Ansehen löst keine Downloads aus.
+
 ## Auf dem Handy / als App
 Unter 800 px Breite wird die Seitenleiste zur Schublade (☰), Profil und Legende passen sich an, Meldungen erscheinen
 kurz auf der Karte. Auf dem Startbildschirm: Android/Chrome Menü ⋮ → „App installieren“, iPhone/Safari Teilen →
@@ -111,10 +120,13 @@ oder lässt sich dort abschalten.
 
 ## MeshCore-Netz (CoreScope)
 Mit `RFP_CORESCOPE_URL` holt TerraRF die Repeater einer CoreScope-Instanz (nur lesend, serverseitig, zwischengespeichert)
-und zeigt sie im Reiter „MeshCore“. Ein Klick auf einen Repeater blendet alle anderen aus und zeigt nur seine
-Nachbarn (nach den Filtern im Reiter), eingefärbt nach SNR; erneuter Klick hebt die Auswahl auf. Ein Klick auf eine
-verknüpfte Station zeigt ebenso deren Nachbarn. Im Popup lassen sich Repeater als Station übernehmen oder Höhe/Gewinn
-für den Abgleich hinterlegen; eigene Stationen lassen sich im Editor mit einem Repeater verknüpfen. Bedeutung der Farben:
+und zeigt sie im Reiter „MeshCore“. Ein Klick auf einen Repeater zeigt, was CoreScope über ihn weiß (Rolle, zuletzt
+gehört, Akku, Temperatur, ggf. Funkparameter – Antennenhöhe, Antennentyp und Sendeleistung sendet MeshCore nicht aus),
+und bietet an: Nachbarn anzeigen, als Station hinzufügen, Höhe/Gewinn für den Abgleich hinterlegen. „Nachbarn anzeigen“
+blendet alle anderen aus und färbt die Nachbarn nach SNR; die Liste im Reiter zeigt die Beobachtungen je Richtung.
+Erneuter Klick hebt die Auswahl auf. Ein Klick auf eine verknüpfte Station zeigt sofort deren Nachbarn; eigene
+Stationen lassen sich im Editor mit einem Repeater verknüpfen. Der Abgleich startet mit „▶ Abgleich rechnen“.
+Bedeutung der Farben:
 - **dunkler Rand** – gemessenes SNR: Der Partner ist selbst Observer und hat den Repeater direkt gehört.
 - **gestrichelter Rand** – Mittel über andere Observer; sagt über die Strecke selbst wenig. Kurze Hop-Präfixe können
   falsche Nachbarn erzeugen; der Filter „nur beidseitig“ + Mindestanzahl blendet die meisten aus.

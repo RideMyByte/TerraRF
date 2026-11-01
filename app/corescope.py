@@ -298,3 +298,57 @@ def set_override(pk, data):
             json.dump(o, f)
         os.replace(tmp, OVERRIDES_FILE)
     return clean
+
+
+# ---------------------------------------------------------------- Metadaten eines Knotens
+NODE_TTL_S = 3600
+RF_TTL_S = 6 * 3600
+_rf_cache = {"t": 0, "data": None}
+META_KEYS = ("name", "role", "last_seen", "first_seen", "advert_count", "battery_mv", "temperature_c",
+             "relay_count_1h", "relay_count_24h", "flood_advert_count_7d", "usefulness_score", "traffic_share_score",
+             "bridge_score", "declared_regions")
+
+
+def _rf_params(c):
+    if time.time() - _rf_cache["t"] < RF_TTL_S:
+        return _rf_cache["data"]
+    try:
+        d = _get(c, "/api/rf-params")
+    except httpx.HTTPError:
+        d = None
+    _rf_cache.update(t=time.time(), data=d)
+    return d
+
+
+def _rf_for(d, pk):
+    """Antwortformat von /api/rf-params ist in der Spezifikation nicht beschrieben – defensiv suchen."""
+    if not isinstance(d, dict) or d.get("enabled") is False:
+        return None
+    for k in ("nodes", "params", "rf", "data"):
+        v = d.get(k)
+        if isinstance(v, dict) and isinstance(v.get(pk), dict):
+            return v[pk]
+    v = d.get(pk)
+    return v if isinstance(v, dict) else None
+
+
+def node_meta(pk):
+    """Was CoreScope über einen Knoten weiß. Höhe, Antenne und Sendeleistung sendet MeshCore nicht aus."""
+    if not PK.match(pk):
+        raise ValueError("ungültiger Schlüssel")
+    p = os.path.join(DIR, f"node_{pk}.json")
+    if os.path.exists(p) and time.time() - os.path.getmtime(p) < NODE_TTL_S:
+        with open(p) as f:
+            return {**json.load(f), "override": overrides().get(pk)}
+    if not enabled():
+        raise ValueError("RFP_CORESCOPE_URL ist nicht gesetzt")
+    with _client() as c:
+        d = _get(c, f"/api/nodes/{pk}")
+        rf = _rf_for(_rf_params(c), pk)
+    n = d.get("node") if isinstance(d, dict) and isinstance(d.get("node"), dict) else d
+    out = {"pk": pk, "node": {k: n.get(k) for k in META_KEYS if n.get(k) is not None}, "rf": rf,
+           "adverts": len(d.get("recentAdverts") or []) if isinstance(d, dict) else 0}
+    with open(p, "w") as f:
+        json.dump(out, f)
+    return {**out, "override": overrides().get(pk)}
+

@@ -21,6 +21,7 @@
   <aside id="side">
     <header>
       <div class="brand"><img src="/static/icon.svg" alt="" class="logo"> Terra<span class="rf">RF</span> <span id="ver" class="note"></span>
+        <button id="btnSettings" class="iconbtn admin-only" title="Einstellungen" aria-label="Einstellungen">⚙</button>
         <button id="btnLogin" class="login">Anmelden</button>
         <button id="btnSideClose" class="sideclose" aria-label="Menü schließen">✕</button></div>
       <div class="proj">
@@ -47,7 +48,6 @@
 
     <nav class="tabs">
       <button data-tab="stations" class="active">Stationen</button>
-      <button data-tab="settings" class="admin-only">Einstellungen</button>
       <button data-tab="net" id="tabNetBtn">MeshCore</button>
       <button data-tab="results">Ergebnis</button>
     </nav>
@@ -59,10 +59,117 @@
       </div>
       <label class="chk admin-only" style="margin-top:0"><input type="checkbox" id="autoCalc" checked> automatisch neu berechnen (aus Cache, nur Geändertes wird gerechnet)</label>
       <div id="stationList"></div>
-      <div id="editor" class="hidden"></div>
     </section>
 
-    <section id="tab-settings" class="tab">
+
+
+    <section id="tab-net" class="tab">
+      <div id="csOff" class="note">Keine CoreScope-Instanz eingerichtet. Setze im Container <code>RFP_CORESCOPE_URL</code>, z. B. <code>https://corescope.meshrheinland.de</code>.</div>
+      <div id="csOn" class="hidden">
+        <div class="card">
+          <div class="cardhead">Karte <span id="csSrcShort" class="note"></span></div>
+          <label class="chk"><input type="checkbox" id="csShow"> alle Repeater zeigen</label>
+          <div class="grid2">
+            <label>Zuletzt gehört innerhalb<select id="csAge">
+              <option value="1">1 Tag</option><option value="7" selected>7 Tagen</option><option value="30">30 Tagen</option><option value="0">egal</option></select></label>
+            <label>Rolle<select id="csRole"><option value="">alle</option><option value="repeater">Repeater</option><option value="room">Room</option></select></label>
+          </div>
+          <p class="note">Repeater oder verknüpfte Station antippen: Infos und Aktionen. Erneut antippen hebt die Auswahl auf.</p>
+        </div>
+
+        <div class="card" id="csSelCard">
+          <div class="cardhead">Auswahl</div>
+          <div id="csSel"></div>
+        </div>
+
+        <details class="card" id="csFilterCard">
+          <summary class="cardhead">Filter für Nachbarn <span id="csFilterShort" class="note"></span></summary>
+          <label class="chk" style="margin-top:6px"><input type="checkbox" id="csBidir" checked> nur beidseitig beobachtete</label>
+          <label class="chk" style="margin-top:2px"><input type="checkbox" id="csMeas" checked> gemessene Partner immer zeigen</label>
+          <label>Mindestens <b id="csMinVal">20</b> Beobachtungen<input type="range" id="csMin" min="1" max="500" value="20"></label>
+          <p class="note">Kurze Hop-Präfixe können falsche Nachbarn erzeugen; „beidseitig“ und eine Mindestanzahl blenden die meisten aus. Derselbe Filter gilt für den Abgleich.</p>
+        </details>
+
+        <div class="card">
+          <div class="cardhead">Abgleich Modell ↔ Messung</div>
+          <label>Station (mit Repeater verknüpft)<select id="calSt"></select></label>
+          <details><summary class="note">Standardwerte für Partner ohne eigene Angaben</summary>
+            <div class="grid3">
+              <label>Höhe (m)<input id="calH" type="number" value="10" step="1"></label>
+              <label>Gewinn (dBi)<input id="calG" type="number" value="3" step="0.5"></label>
+              <label>Kabel (dB)<input id="calC" type="number" value="1" step="0.5"></label>
+            </div></details>
+          <button id="btnCalRun" class="primary" style="width:100%;margin-top:6px">▶ Abgleich rechnen</button>
+          <div id="calOut"></div>
+        </div>
+
+        <details class="card">
+          <summary class="cardhead">Datenquelle</summary>
+          <div id="csStatus" class="note"></div>
+          <button id="btnCsSync" class="admin-only" style="margin-top:6px">Repeater jetzt synchronisieren</button>
+        </details>
+      </div>
+    </section>
+
+    <section id="tab-results" class="tab">
+      <div id="resultInfo" class="note">Noch nicht berechnet.</div>
+    </section>
+    <div id="preloadInfo" class="note" style="padding:0 12px"></div>
+    <footer id="status">Bereit.</footer>
+    <div class="legal"><a href="/impressum" target="_blank">Impressum</a> · <a href="/datenschutz" target="_blank">Datenschutz</a> · <a href="#" id="lnkInstall">Als App installieren</a></div>
+  </aside>
+
+  <div id="sideBackdrop"></div>
+  <main id="mapwrap">
+    <div id="map"></div>
+    <div id="mstatus" role="status"></div>
+    <div id="stPanel" class="hidden" role="dialog" aria-label="Station bearbeiten"><div id="editor"></div></div>
+    <div id="ovLegend" class="hidden"></div>
+    <div id="sysbox" title="Server-Status"><span class="dot"></span><span id="sysText">…</span><span id="sysRes"></span></div>
+    <button id="btnSide" class="mapbtn" title="Menü" aria-label="Menü öffnen">☰</button>
+    <div id="layerbox" class="hidden">
+      <button id="layerToggle" class="lbhead" aria-expanded="true">Ansicht &amp; Legende <span>▾</span></button>
+      <div id="layerBody">
+      <label>Anzeige
+        <select id="layerSel">
+          <option value="margin">Bester Pegel (Reserve über Empfindlichkeit)</option>
+          <option value="overlap">Überlappung (Anzahl Stationen)</option>
+          <option value="server">Bester Server (Stationsfarbe)</option>
+          <option value="los">Sichtlinie / Fresnelzone / Dächer</option></select></label>
+      <label>Deckkraft <input id="opacity" type="range" min="0" max="1" step="0.05" value="0.6"></label>
+      <label>Mindest-Reserve: <b id="reqVal">10</b> dB <input id="reqSlider" type="range" min="-10" max="40" step="1" value="10"></label>
+      <div id="legend"></div>
+      </div>
+    </div>
+    <div id="placing" class="hidden">Klicke in die Karte, um die Station zu setzen (Esc bricht ab)</div>
+    <div id="profile" class="hidden">
+      <div class="phead"><b id="profTitle">Profil</b>
+        <span id="profMeta"></span>
+        <span class="profrx" id="profRxBox" title="Gilt nur für dieses Profil, die Karte bleibt unverändert">Empfänger
+          <input id="profRxH" type="number" step="0.5" min="0" max="300"> m
+          <input id="profRxG" type="number" step="0.5" min="-10" max="40"> dBi
+          <button id="profReset" title="Auf Projektwerte zurücksetzen">↺</button></span>
+        <button id="profClose" title="Schließen">✕</button></div>
+      <div class="pbody">
+        <canvas id="profCanvas"></canvas>
+        <table id="profBudget"></table>
+      </div>
+    </div>
+  </main>
+</div>
+<dialog id="loginDlg">
+  <form id="loginForm">
+    <h3>Anmelden</h3>
+    <label>Benutzer<input id="loginUser" autocomplete="username" value="admin"></label>
+    <label>Passwort<input id="loginPw" type="password" autocomplete="current-password"></label>
+    <label class="chk" style="margin-top:6px"><input type="checkbox" id="loginRemember"> angemeldet bleiben (setzt ein dauerhaftes Cookie)</label>
+    <div id="loginErr" class="warn"></div>
+    <div class="row"><button type="button" id="loginCancel">Abbrechen</button><button type="submit" class="primary">Anmelden</button></div>
+  </form>
+</dialog>
+<dialog id="settingsDlg" class="wide">
+  <div class="dlghead"><h3>Einstellungen</h3><button type="button" id="settingsClose" class="iconbtn" aria-label="Schließen">✕</button></div>
+  <div class="dlgbody">    
       <h3>Höhendaten</h3>
       <label>Gelände (Boden, für Antennen-/Empfängerhöhe)
         <select id="s_ground_source"></select></label>
@@ -145,89 +252,7 @@
       </div>
       <p class="note">Richtwerte: Handgerät am Körper 3–6 dB, im Gebäude 10–20 dB. Die Reserve deckt die Streuung über Standorte und Fading ab; als „versorgt“ zählt nur, was darüber liegt.</p>
       <p class="note">Die Empfindlichkeit des Empfängers kommt aus den Funkparametern der jeweiligen Station (Bandbreite, SF, Rauschzahl). Man nimmt also an, dass auf beiden Seiten dasselbe Funkmodul sitzt.</p>
-    </section>
-
-    <section id="tab-net" class="tab">
-      <div id="csOff" class="note">Keine CoreScope-Instanz eingerichtet. Setze im Container <code>RFP_CORESCOPE_URL</code>, z. B. <code>https://corescope.meshrheinland.de</code>.</div>
-      <div id="csOn" class="hidden">
-        <div id="csStatus" class="note"></div>
-        <div class="row tight"><button id="btnCsSync" class="admin-only">Repeater synchronisieren</button></div>
-        <label class="chk"><input type="checkbox" id="csShow"> Repeater auf der Karte zeigen</label>
-        <div class="grid2">
-          <label>Zuletzt gehört innerhalb<select id="csAge">
-            <option value="1">1 Tag</option><option value="7" selected>7 Tagen</option><option value="30">30 Tagen</option><option value="0">egal</option></select></label>
-          <label>Rolle<select id="csRole"><option value="">alle</option><option value="repeater">Repeater</option><option value="room">Room</option></select></label>
-        </div>
-        <h3 style="margin-bottom:0">Nachbarn des gewählten Repeaters</h3>
-        <label class="chk" style="margin-top:6px"><input type="checkbox" id="csBidir" checked> nur beidseitig beobachtete</label>
-        <label class="chk" style="margin-top:2px"><input type="checkbox" id="csMeas" checked> gemessene Partner immer zeigen</label>
-        <label>Mindestens <b id="csMinVal">20</b> Beobachtungen<input type="range" id="csMin" min="1" max="500" value="20"></label>
-        <p class="note">Ein Klick auf einen Repeater blendet alle anderen aus und färbt seine Nachbarn nach SNR: dunkler Rand = gemessen (der Partner hat ihn direkt gehört), gestrichelter Rand = Mittel über andere Observer. Kurze Hop-Präfixe können falsche Nachbarn erzeugen, dagegen hilft der Filter. Erneuter Klick hebt die Auswahl auf.</p>
-        <div id="csSel"></div>
-        <h3>Abgleich Modell ↔ Messung</h3>
-        <p class="note">Für eine Station, die mit einem CoreScope-Knoten verknüpft ist: Das Modell rechnet die Strecke zu jedem Partner mit gemessenem SNR und vergleicht. Antennenwerte der Partner kennt CoreScope nicht, sie gelten hier für alle:</p>
-        <div class="grid3">
-          <label>Höhe Partner (m)<input id="calH" type="number" value="10" step="1"></label>
-          <label>Gewinn (dBi)<input id="calG" type="number" value="3" step="0.5"></label>
-          <label>Kabel (dB)<input id="calC" type="number" value="1" step="0.5"></label>
-        </div>
-        <div id="calOut"></div>
-      </div>
-    </section>
-
-    <section id="tab-results" class="tab">
-      <div id="resultInfo" class="note">Noch nicht berechnet.</div>
-    </section>
-    <div id="preloadInfo" class="note" style="padding:0 12px"></div>
-    <footer id="status">Bereit.</footer>
-    <div class="legal"><a href="/impressum" target="_blank">Impressum</a> · <a href="/datenschutz" target="_blank">Datenschutz</a> · <a href="#" id="lnkInstall">Als App installieren</a></div>
-  </aside>
-
-  <div id="sideBackdrop"></div>
-  <main id="mapwrap">
-    <div id="map"></div>
-    <div id="mstatus" role="status"></div>
-    <div id="sysbox" title="Server-Status"><span class="dot"></span><span id="sysText">…</span><span id="sysRes"></span></div>
-    <button id="btnSide" class="mapbtn" title="Menü" aria-label="Menü öffnen">☰</button>
-    <div id="layerbox" class="hidden">
-      <button id="layerToggle" class="lbhead" aria-expanded="true">Ansicht &amp; Legende <span>▾</span></button>
-      <div id="layerBody">
-      <label>Anzeige
-        <select id="layerSel">
-          <option value="margin">Bester Pegel (Reserve über Empfindlichkeit)</option>
-          <option value="overlap">Überlappung (Anzahl Stationen)</option>
-          <option value="server">Bester Server (Stationsfarbe)</option>
-          <option value="los">Sichtlinie / Fresnelzone / Dächer</option></select></label>
-      <label>Deckkraft <input id="opacity" type="range" min="0" max="1" step="0.05" value="0.6"></label>
-      <label>Mindest-Reserve: <b id="reqVal">10</b> dB <input id="reqSlider" type="range" min="-10" max="40" step="1" value="10"></label>
-      <div id="legend"></div>
-      </div>
     </div>
-    <div id="placing" class="hidden">Klicke in die Karte, um die Station zu setzen (Esc bricht ab)</div>
-    <div id="profile" class="hidden">
-      <div class="phead"><b id="profTitle">Profil</b>
-        <span id="profMeta"></span>
-        <span class="profrx" id="profRxBox" title="Gilt nur für dieses Profil, die Karte bleibt unverändert">Empfänger
-          <input id="profRxH" type="number" step="0.5" min="0" max="300"> m
-          <input id="profRxG" type="number" step="0.5" min="-10" max="40"> dBi
-          <button id="profReset" title="Auf Projektwerte zurücksetzen">↺</button></span>
-        <button id="profClose" title="Schließen">✕</button></div>
-      <div class="pbody">
-        <canvas id="profCanvas"></canvas>
-        <table id="profBudget"></table>
-      </div>
-    </div>
-  </main>
-</div>
-<dialog id="loginDlg">
-  <form id="loginForm">
-    <h3>Anmelden</h3>
-    <label>Benutzer<input id="loginUser" autocomplete="username" value="admin"></label>
-    <label>Passwort<input id="loginPw" type="password" autocomplete="current-password"></label>
-    <label class="chk" style="margin-top:6px"><input type="checkbox" id="loginRemember"> angemeldet bleiben (setzt ein dauerhaftes Cookie)</label>
-    <div id="loginErr" class="warn"></div>
-    <div class="row"><button type="button" id="loginCancel">Abbrechen</button><button type="submit" class="primary">Anmelden</button></div>
-  </form>
 </dialog>
 <dialog id="installDlg">
   <h3>TerraRF als App</h3>

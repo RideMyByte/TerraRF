@@ -17,7 +17,7 @@ from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
-from . import auth, corescope, legal, regions, sysstat, terrain, tiles
+from . import auth, corescope, legal, overlay, regions, sysstat, terrain, tiles
 from . import coverage as cov
 from . import propagation as prop
 from .version import VERSION
@@ -306,6 +306,16 @@ async def cs_links(request: Request, pk: str, refresh: bool = False):
         _err(e, 502 if not isinstance(e, ValueError) else 400)
 
 
+@app.get("/api/corescope/node/{pk}", dependencies=READ)
+async def cs_node(pk: str):
+    try:
+        return await run_in_threadpool(corescope.node_meta, pk.lower())
+    except ValueError as e:
+        _err(e)
+    except httpx.HTTPError as e:
+        _err(e, 502)
+
+
 @app.get("/api/corescope/overrides", dependencies=READ)
 def cs_overrides():
     return corescope.overrides()
@@ -477,6 +487,17 @@ MANIFEST = {
 @app.get("/manifest.webmanifest")
 def manifest():
     return JSONResponse(MANIFEST, media_type="application/manifest+json")
+
+
+@app.get("/api/overlay/{kind}/{z}/{x}/{y}.png", dependencies=READ)
+async def overlay_tile(kind: str, z: int, x: int, y: int, g: str = "nrw_dgm", s: str = "nrw_dom"):
+    if not re.fullmatch(r"[a-z0-9_:\-]{1,64}", g) or not re.fullmatch(r"[a-z0-9_:\-]{1,64}", s):
+        raise HTTPException(400, "ungültige Quelle")
+    try:
+        data = await run_in_threadpool(overlay.render, kind, z, x, y, g, s)
+    except KeyError:
+        raise HTTPException(404, "unbekannte Ebene")
+    return Response(data, media_type="image/png", headers={"Cache-Control": "public, max-age=86400"})
 
 
 @app.get("/impressum")
