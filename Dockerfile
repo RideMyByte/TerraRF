@@ -12,7 +12,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 \
 # rasterio-Wheels (manylinux) brauchen libexpat.so.1, die in python:*-slim fehlt.
 # util-linux liefert setpriv für PUID/PGID.
 RUN apt-get update \
- && apt-get install -y --no-install-recommends libexpat1 util-linux \
+ && apt-get install -y --no-install-recommends libexpat1 util-linux fonts-dejavu-core \
  && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app

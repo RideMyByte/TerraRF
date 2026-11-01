@@ -17,7 +17,7 @@ from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 
-from . import appconfig, auth, corescope, legal, overlay, regions, sysstat, terrain, tiles
+from . import appconfig, auth, corescope, legal, overlay, report, regions, sysstat, terrain, tiles
 from . import coverage as cov
 from . import propagation as prop
 from .version import VERSION
@@ -389,6 +389,29 @@ async def cs_calibrate(request: Request, body: dict = Body(...)):
         return await run_in_threadpool(work)
     except (ValueError, KeyError, terrain.SourceError, httpx.HTTPError) as e:
         _err(e)
+
+
+@app.post("/api/report/summary")
+async def report_summary(request: Request, body: dict = Body(...)):
+    project = _project_for(request, body)
+    try:
+        return await run_in_threadpool(report.summary, project, body["station_id"])
+    except (ValueError, KeyError, terrain.SourceError) as e:
+        _err(e)
+
+
+@app.post("/api/report/pdf")
+async def report_pdf(request: Request, body: dict = Body(...)):
+    project = _project_for(request, body)
+    site = appconfig.public().get("parent")
+    try:
+        data = await run_in_threadpool(report.pdf, project, body["station_id"], body.get("cal"),
+                                       site and (site.get("name") or site.get("url")))
+    except (ValueError, KeyError, terrain.SourceError) as e:
+        _err(e)
+    st = next((x for x in project.get("stations") or [] if x["id"] == body["station_id"]), {})
+    fn = re.sub(r"[^A-Za-z0-9_-]+", "_", st.get("name") or "station") + time.strftime("_%Y-%m-%d") + ".pdf"
+    return Response(data, media_type="application/pdf", headers={"Content-Disposition": f'attachment; filename="{fn}"'})
 
 
 @app.post("/api/elevation", dependencies=MEMBER)

@@ -28,6 +28,8 @@ und weltweit Copernicus GLO-30.
 - Projekte speichern, laden, als JSON exportieren/importieren
 - Ein Admin-Login zum Bearbeiten; Besucher sehen öffentliche Projekte nur lesend (Teilen per Link)
 - Basiskarten inkl. OpenStreetMap in Graustufen
+- PDF-Bericht je Station (Karte, Parameter, Kennzahlen nach Reserve und Entfernung, MeshCore-Nachbarn und Abgleich)
+- Zweiter Zugang „Benutzer“: lesen und eigene Stationen anlegen
 - Kartenebenen aus der Rechengrundlage: Gelände (Höhe + Schummerung), Oberfläche, Hindernishöhe (Gebäude/Bäume)
 - Statusanzeige auf der Karte: was der Server gerade rechnet, für den Admin dazu CPU und RAM des Containers
 - Richtfunk: Antenne mit der Maus drehen, Strecke Station → Station mit beiden Antennen, gegenseitig ausrichten
@@ -85,6 +87,11 @@ Updates: Neue Versionen erscheinen als `:latest`. Unraid zeigt im Docker-Tab „
 Wer immer den neuesten Stand von `main` will, nimmt `:edge`.
 
 ## Höhendaten
+Am Rand der Hauptquelle (z. B. jenseits der NRW-Grenze) füllt eine Ersatzquelle die Lücken, Standard Copernicus
+GLO-30 (Einstellung „Ersatz außerhalb der Hauptquelle“). Im Grenzgebiet wird also mit beiden gerechnet. Copernicus
+ist ein 30-m-Oberflächenmodell: Gebäude und Bäume stecken dort in der Geländehöhe und werden nicht als Hindernis
+erkannt – dort am besten einen Mindest-Clutter setzen.
+
 | Quelle | Art | Hinweis |
 |---|---|---|
 | **NRW DGM** (Standard Gelände) | Geländemodell, WCS `wcs_nw_dgm` | lokal als 5-m-Kacheln, dl-de/zero-2-0 |
@@ -93,9 +100,16 @@ Wer immer den neuesten Stand von `main` will, nimmt `:edge`.
 | Lokal | eigene GeoTIFFs in `data/dem/<ordner>/` | erscheinen als „Lokal: …“ |
 
 ## Bedienung
-- **⚙** oben links öffnet die Einstellungen (Höhendaten, Offline-Download, Modell, Empfänger) – nur für den Admin.
-- Eine Station anklicken öffnet ihren Editor als Fenster über der Karte; die Abschnitte (Strecke, Standort, Funk,
-  Antenne, MeshCore, Berechnung) lassen sich auf- und zuklappen. Klicks auf der Karte wechseln nie den Reiter.
+- **⚙** oben links öffnet die Einstellungen – nur für den Admin: Webseite & Zugang (Benutzer, Impressum,
+  Datenschutz, Zugehörigkeit „Diese Seite gehört zu …“, GitHub-Link), Höhendaten, Offline-Download, Modell, Empfänger.
+- **Rechtsklick** (Handy: lange tippen) in die Karte zeigt Pegel aller Stationen, Profil und „Station hier platzieren“.
+- Ein Klick auf eine Station zeigt Kurzinfo und Aktionen (✎ Bearbeiten, ▶ Rechnen, PDF); ✎ öffnet den Editor als
+  Fenster über der Karte mit aufklappbaren Abschnitten. Klicks auf der Karte wechseln nie den Reiter.
+- **Rechnen:** „▶ Berechnen“ rechnet alle Stationen nacheinander (Unverändertes kommt aus dem Cache), ▶ an einer
+  Station rechnet nur diese neu – auch wenn ein Ergebnis im Cache liegt. Ein Ring an der Station zeigt den Fortschritt.
+- Die Seitenleiste lässt sich am Rand breiter ziehen und mit « ausblenden.
+- **Rollen:** Admin (alles), Benutzer (sieht Öffentliches, legt Stationen an, ändert und speichert nur eigene;
+  Name/Passwort unter ⚙), Besucher (nur lesen, falls `RFP_PUBLIC_READ`).
 - **Kartenebenen** (Ebenen-Knopf oben rechts, ab Zoomstufe 11): „Daten: Gelände“, „Oberfläche“ und „Hindernishöhe
   über Grund“ zeigen die Höhendaten, mit denen gerechnet wird. Gezeigt wird nur, was lokal vorliegt (vorgeladene
   NRW-Kacheln, eigene GeoTIFFs); das Ansehen löst keine Downloads aus.

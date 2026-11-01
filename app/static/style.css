@@ -281,3 +281,7 @@ body.readonly .member-only { display:none !important; }
 body.role-user .admin-only { display:none !important; }
 #parentLink:not(:empty) { margin-bottom:2px; color:var(--fg); }
 #parentLink a { color:var(--acc); }
+.reshead { display:flex; align-items:center; gap:6px; margin-bottom:2px; }
+.resbtns { margin-left:auto; display:flex; gap:4px; }
+.resbtns button { padding:2px 8px; font-size:12px; }
+.resbar { display:flex; height:10px; border-radius:3px; overflow:hidden; margin:5px 0; }

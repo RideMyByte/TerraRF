@@ -343,7 +343,7 @@ function autoVbw(a) {
 
 // Platzhalter, werden weiter unten ersetzt (Einzel-Berechnung, PDF)
 let runStations_force = (id) => compute({ only: [id], force: [id] });
-let exportPdf = (id) => status("PDF-Export folgt.");
+let exportPdf = (id) => exportPdfImpl(id);
 
 /** Fußzeile: Impressum, Datenschutz, Zugehörigkeit, GitHub (aus den Einstellungen der Instanz). */
 function renderSite() {
@@ -765,18 +765,61 @@ function renderLegend(layer) {
   $("legend").innerHTML = h;
 }
 
+const summaries = {};   // station id -> Kennzahlen (Ergebnis-Reiter, PDF)
+let lastCal = {};       // station id -> letzte Abgleich-Statistik dieser Sitzung
+
 function renderResults(r) {
-  $("resultInfo").innerHTML = `<p>Gesamt ${fmt(r.t_total_s)} s. Klick in die Karte zeigt Pegel und Geländeprofil.</p>` +
-    r.stations.map((s) => {
-      const st = byId(s.id) || {};
-      return `<div class="res-st" style="border-color:${esc(st.color)}">
-        <b>${esc(s.name)}</b><br>
-        Versorgt: <b>${fmt(s.area_km2, 1)} km²</b> · Sichtlinie: ${fmt(s.los_area_km2, 1)} km²<br>
-        Empfindlichkeit ${fmt(s.sensitivity_dbm)} dBm · Antenne ${fmt(s.antenna_alt_m)} m ü. NHN (Gelände ${fmt(s.ground_m)} / Oberfl. ${fmt(s.surface_m)})<br>
-        <span class="note">${s.rays} Strahlen × ${s.bins} Punkte, Schritt ${fmt(s.step_m)} m, Raster ${fmt(s.res_m)} m · ${s.cached ? "aus Cache" : `${fmt(s.t_total_s)} s (Höhendaten ${fmt(s.t_terrain_s)} s, Rechnung ${fmt(s.t_kernel_s)} s)`}</span>
-        ${(s.warnings || []).map((w) => `<div class="warn">⚠ ${esc(w)}</div>`).join("")}
-      </div>`;
-    }).join("");
+  $("resultInfo").innerHTML = `<p class="note">Rechtsklick (Handy: lange tippen) in die Karte zeigt Pegel und Profil an einem Punkt. Der PDF-Bericht enthält Karte, Parameter, Kennzahlen und – bei MeshCore-Stationen – Nachbarn und Abgleich, zum Vergleich über die Zeit.</p>` +
+    r.stations.map((s) => `<div class="res-st" id="res-${esc(s.id)}" style="border-color:${esc((byId(s.id) || {}).color)}">${resCard(s, null)}</div>`).join("");
+  wireResults();
+  (async () => {  // ausführliche Kennzahlen nacheinander nachladen
+    for (const s of r.stations) {
+      try {
+        summaries[s.id] = await api("/api/report/summary", { method: "POST", body: { ...(canAdd() ? { project } : { project_id: project.id }), station_id: s.id } });
+        const el = document.getElementById("res-" + s.id); if (el) { el.innerHTML = resCard(s, summaries[s.id]); wireResults(); }
+      } catch { /* Kurzfassung bleibt */ }
+    }
+  })();
+}
+
+function resCard(s, sm) {
+  const st = byId(s.id) || {};
+  const total = sm ? sm.area_total_km2 : null;
+  const bar = sm ? `<div class="resbar">${sm.classes.slice(1).filter((c) => c.km2 > 0).map((c) => `<span style="background:${c.color};flex:${c.km2}" title="${esc(c.label)}: ${fmt(c.km2, 1)} km²"></span>`).join("")}<span style="background:#e5e7eb;flex:${sm.classes[0].km2}" title="kein Empfang: ${fmt(sm.classes[0].km2, 1)} km²"></span></div>` : "";
+  const cal = lastCal[s.id];
+  return `<div class="reshead"><b>${esc(s.name)}</b>
+      <span class="resbtns">${canAdd() ? `<button data-run="${esc(s.id)}" title="Neu berechnen">▶</button>` : ""}<button data-pdf="${esc(s.id)}" title="Bericht als PDF">PDF</button></span></div>
+    Versorgt (≥ ${fmt(project.settings.min_margin_db, 0)} dB): <b>${fmt(s.area_km2, 1)} km²</b>${sm ? ` = ${fmt(sm.covered_pct, 1)} % von ${fmt(total, 1)} km²` : ""} · Sichtlinie ${fmt(s.los_area_km2, 1)} km²
+    ${bar}
+    ${sm ? `<div class="note">Reserve Median ${fmt(sm.margin_p50_db, 1)} dB · 90 % ${fmt(sm.margin_p90_db, 1)} dB · EIRP ${fmt(sm.eirp_dbm, 1)} dBm · Empfindlichkeit ${fmt(sm.sensitivity_dbm, 1)} dBm</div>
+      <table class="mini"><tr><th>Entfernung</th><th>versorgt</th><th>Median</th></tr>${sm.rings.map((x) => `<tr><td>${fmt(x.from_km, 1)}–${fmt(x.to_km, 1)} km</td><td>${fmt(x.covered_pct, 0)} %</td><td>${fmt(x.median_margin_db, 0)} dB</td></tr>`).join("")}</table>`
+      : `<div class="note cs-wait">lade Kennzahlen …</div>`}
+    <div class="note">Antenne ${fmt(s.antenna_alt_m)} m ü. NHN (Gelände ${fmt(s.ground_m)} / Oberfl. ${fmt(s.surface_m)}) · ${s.rays} Strahlen, Raster ${fmt(s.res_m)} m · ${s.cached ? "aus Cache" : `${fmt(s.t_total_s)} s`}</div>
+    ${st.corescope_pk ? `<div class="note">MeshCore: verknüpft${cal ? ` · letzter Abgleich Δ ${cal.mean_db > 0 ? "+" : ""}${fmt(cal.mean_db, 1)} dB (n = ${cal.n})` : " · Abgleich im Reiter MeshCore"}</div>` : ""}
+    ${(s.warnings || []).map((w) => `<div class="warn">⚠ ${esc(w)}</div>`).join("")}`;
+}
+
+function wireResults() {
+  document.querySelectorAll("#resultInfo [data-pdf]").forEach((b) => b.onclick = () => exportPdf(b.dataset.pdf));
+  document.querySelectorAll("#resultInfo [data-run]").forEach((b) => b.onclick = () => runStations_force(b.dataset.run));
+}
+
+/** PDF-Bericht einer Station herunterladen. */
+async function exportPdfImpl(id) {
+  const st = byId(id); if (!st) return;
+  if (!canAdd() && !project.id) { status("Projekt zuerst speichern.", "err"); return; }
+  status(`Erstelle PDF für „${st.name}“ …`, "busy");
+  try {
+    const r = await fetch("/api/report/pdf", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ...(canAdd() ? { project } : { project_id: project.id }), station_id: id,
+        cal: { rx_height_m: +$("calH").value, rx_gain_dbi: +$("calG").value, rx_cable_db: +$("calC").value } }) });
+    if (!r.ok) { let d = null; try { d = await r.json(); } catch { /* */ } throw new Error((d && d.detail) || `HTTP ${r.status}`); }
+    const blob = await r.blob();
+    const name = (r.headers.get("content-disposition") || "").match(/filename="([^"]+)"/)?.[1] || "terrarf.pdf";
+    const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = name; document.body.appendChild(a); a.click();
+    setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 2000);
+    status(`PDF „${name}“ erstellt.`);
+  } catch (e) { status("PDF: " + e.message, "err"); }
 }
 
 // ------------------------------------------------------------ inspect + profile
@@ -1334,6 +1377,7 @@ async function csCalibrate(st) {
       else showProfile(st.id, L.latLng(x.lat, x.lon), { rx: { h: x.rx_height_m, g: x.rx_gain_dbi, c: x.rx_cable_db, label: x.name } });
     });
     status(`Abgleich fertig: ${r.rows.length} Strecken.`);
+    if (r.stats) { lastCal[st.id] = r.stats; const el = document.getElementById("res-" + st.id); if (el && runStations[st.id]) { el.innerHTML = resCard(runStations[st.id], summaries[st.id]); wireResults(); } }
     $("calOut").scrollIntoView({ block: "nearest", behavior: "smooth" });
   } catch (e) { $("calOut").innerHTML = `<div class="warn">Fehler: ${esc(e.message)}</div>`; status("Abgleich: " + e.message, "err"); }
 }
