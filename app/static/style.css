@@ -2,7 +2,7 @@
 * { box-sizing: border-box; }
 html, body { margin:0; height:100%; font: 13px/1.35 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; color:var(--fg); }
 #app { display:flex; height:100vh; height:100dvh; }
-#side { width:380px; min-width:320px; overflow-x:hidden; background:var(--bg); border-right:1px solid var(--line); display:flex; flex-direction:column; }
+#side { width:clamp(340px, 28vw, 460px); min-width:300px; max-width:60vw; overflow-x:hidden; background:var(--bg); border-right:1px solid var(--line); display:flex; flex-direction:column; }
 #side header { padding:10px 12px 6px; border-bottom:1px solid var(--line); position:relative; }
 .brand { font-weight:800; font-size:17px; margin-bottom:6px; display:flex; align-items:center; gap:6px; letter-spacing:-0.01em; color:#0d2236; }
 .brand .logo { width:26px; height:26px; }
@@ -251,3 +251,17 @@ table.cs-nb tr.on td { background:#dbeafe; }
   body.profile-open #stPanel { display:none; }
   #ovLegend { left:calc(8px + env(safe-area-inset-left)); bottom:calc(56px + env(safe-area-inset-bottom)); max-width:calc(100vw - 140px); }
 }
+
+/* Seitenleiste: Breite ziehen und ausblenden (Desktop) */
+#sideResize { width:6px; margin-left:-3px; cursor:col-resize; z-index:1500; position:relative; flex:none; }
+#sideResize:hover { background:rgba(37,99,235,.25); }
+.sidehide { margin-left:2px; }
+.st .ed { border:0; background:none; padding:2px 6px; font-size:14px; color:var(--mut); flex:none; }
+.st .ed:hover { color:var(--acc); }
+@media (min-width: 801px) {
+  body.side-collapsed #side, body.side-collapsed #sideResize { display:none; }
+  body.side-collapsed .mapbtn { display:block; position:absolute; z-index:1100; left:56px; top:10px; width:40px; height:40px; font-size:20px;
+                                border-radius:8px; background:#fff; border:0; box-shadow:0 2px 8px rgba(0,0,0,.3); }
+}
+@media (max-width: 800px) { #sideResize, .sidehide { display:none; } }
+.brand .sidehide { margin-left:2px; }

@@ -31,13 +31,15 @@ const COLORS = ["#e6194b", "#3cb44b", "#4363d8", "#f58231", "#911eb4", "#46c0c8"
 // ------------------------------------------------------------ state
 let cfg = null;
 let project = null;
-let selected = null;
+let selected = null;   // hervorgehobene Station
+let editing = null;    // Station im Editor-Fenster
 let lastRun = null;
 let placing = false;
 let dirty = false;
 const markers = {};
 const azLines = {};
 let isAdmin = false;
+let isUser = false;    // Rolle „user“: lesen + eigene Stationen anlegen
 
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -72,7 +74,7 @@ async function api(path, opts = {}) {
 }
 
 // ------------------------------------------------------------ map
-const map = L.map("map", { zoomControl: true, preferCanvas: false }).setView([51.575, 6.985], 12);
+const map = L.map("map", { zoomControl: true, preferCanvas: false, tapHold: true }).setView([51.575, 6.985], 12);
 const overlays = {};
 const ovLayers = {};
 let base = {};
@@ -149,7 +151,8 @@ function drawStation(st) {
   if (azLines[st.id]) { map.removeLayer(azLines[st.id]); delete azLines[st.id]; }
   if (st.enabled === false) return;  // deactivated stations are not shown on the map
   const m = L.marker([st.lat, st.lon], { draggable: isAdmin, icon: stationIcon(st), title: st.name });
-  m.on("click", (e) => { L.DomEvent.stopPropagation(e); select(st.id); csStationClicked(st); });
+  m.on("click", (e) => { L.DomEvent.stopPropagation(e); select(st.id); stationPopup(st); csStationClicked(st); });
+  m.on("contextmenu", (e) => { L.DomEvent.stopPropagation(e); select(st.id); stationPopup(st); });
   m.on("dragend", () => {
     const ll = m.getLatLng();
     st.lat = +ll.lat.toFixed(6); st.lon = +ll.lng.toFixed(6);
@@ -182,7 +185,7 @@ function drawStation(st) {
         wedge.setLatLngs(g.wedge); line.setLatLngs(g.line);
         h.setTooltipContent(`Azimut ${az}°`); h.openTooltip();
       });
-      h.on("dragend", () => { h.setLatLng(geo(a.azimuth_deg).line[1]); h.closeTooltip(); changed(st); if (selected === st.id) renderEditor(); });
+      h.on("dragend", () => { h.setLatLng(geo(a.azimuth_deg).line[1]); h.closeTooltip(); changed(st); if (editing === st.id) renderEditor(); });
       layers.push(h);
     }
     azLines[st.id] = L.layerGroup(layers).addTo(map);
@@ -207,7 +210,7 @@ function newProject() {
   project = { id: null, name: "Neues Projekt", settings: { ...cfg.defaults }, stations: [], view: null };
   for (const k of Object.keys(markers)) { map.removeLayer(markers[k]); delete markers[k]; }
   for (const k of Object.keys(azLines)) { map.removeLayer(azLines[k]); delete azLines[k]; }
-  clearOverlay(); selected = null; lastRun = null; runStations = {};
+  clearOverlay(); selected = null; editing = null; lastRun = null; runStations = {};
   $("projName").value = project.name;
   renderAll(); setDirty(false);
 }
@@ -226,7 +229,7 @@ function loadProject(p) {
   renderAll(); setDirty(false);
   if (csNodes.length) csDrawNodes();
   csFillCalStations(); overlaySources();
-  status(`Projekt „${p.name}“ geladen.`);
+  status(`Projekt „${p.name}“ geladen. Rechtsklick (Handy: lange tippen) zeigt Pegel und Profil an einem Punkt.`);
   if ((!isAdmin || $("autoCalc").checked) && project.stations.some((x) => x.enabled !== false)) compute(true);
 }
 
@@ -262,10 +265,16 @@ function renderList() {
     <div class="st ${st.id === selected ? "sel" : ""} ${st.enabled === false ? "off" : ""}" data-id="${st.id}">
       <input type="checkbox" class="en" ${st.enabled !== false ? "checked" : ""} title="In Berechnung einbeziehen">
       <span class="dot" style="background:${esc(st.color)}"></span>
+      <button class="ed" title="${canEdit(st) ? "Bearbeiten" : "Details"}">✎</button>
       <span class="nm">${esc(st.name)}<br><span class="sub">${fmt(st.freq_mhz, 3)} MHz · ${fmt(st.tx_power_dbm, 0)} dBm · ${fmt(st.height_m, 0)} m · ${esc((ANT_PRESETS[st.antenna?.preset] || {}).label || st.antenna?.type)}</span></span>
     </div>`).join("");
   el.querySelectorAll(".st").forEach((d) => {
-    d.addEventListener("click", (e) => { if (!e.target.classList.contains("en")) select(d.dataset.id, true); });
+    d.addEventListener("click", (e) => {
+      if (e.target.classList.contains("en")) return;
+      if (e.target.classList.contains("ed")) { openEditor(d.dataset.id); return; }
+      const st = byId(d.dataset.id); select(st.id, true); stationPopup(st);
+      if (narrow()) closeSide();
+    });
     d.querySelector(".en").addEventListener("change", (e) => {
       const st = byId(d.dataset.id); st.enabled = e.target.checked;
       drawStation(st); renderList();
@@ -278,14 +287,36 @@ function renderList() {
 
 const byId = (id) => project.stations.find((s) => s.id === id);
 
+/** Station hervorheben (ohne Editor). */
 function select(id, pan = false) {
   selected = id;
   const st = byId(id);
   if (pan && st) map.panTo([st.lat, st.lon]);
-  renderList(); renderEditor();   // Editor öffnet als Fenster über der Karte, der Reiter bleibt
-  if (st && narrow()) closeSide();
+  renderList();
 }
-function closeEditor() { selected = null; renderList(); renderEditor(); }
+/** Editor-Fenster für eine Station öffnen. */
+function openEditor(id) {
+  editing = id; selected = id;
+  map.closePopup(); renderList(); renderEditor();
+  if (narrow()) closeSide();
+}
+/** Kleines Fenster an der Station: Kurzinfo und Aktionen. */
+function stationPopup(st) {
+  const e = runStations[st.id], a = st.antenna || {};
+  const el = document.createElement("div");
+  el.className = "popup";
+  el.innerHTML = `<b style="color:${esc(st.color)}">●</b> <b>${esc(st.name)}</b><br>
+    <span class="note">${fmt(st.freq_mhz, 3)} MHz · ${fmt(st.tx_power_dbm, 0)} dBm · ${fmt(st.height_m, 0)} m · ${a.type === "directional" ? `Richt ${fmt(a.gain_dbi, 0)} dBi, ${fmt(a.azimuth_deg || 0, 0)}°` : `Rund ${fmt(a.gain_dbi, 1)} dBi`}</span>
+    ${e ? `<br><span class="note">versorgt ${fmt(e.area_km2, 1)} km² · Sichtlinie ${fmt(e.los_area_km2, 1)} km²</span>` : ""}
+    <div class="cs-act"><button data-a="edit">${canEdit(st) ? "✎ Bearbeiten" : "Details"}</button>
+      ${st.enabled !== false ? `<button data-a="run" title="Neu berechnen, auch wenn ein Ergebnis im Cache liegt">▶ Rechnen</button>` : ""}
+      <button data-a="pdf" title="Bericht als PDF">PDF</button></div>`;
+  el.querySelector('[data-a="edit"]').onclick = () => openEditor(st.id);
+  const run = el.querySelector('[data-a="run"]'); if (run) run.onclick = () => { map.closePopup(); runStations_force(st.id); };
+  el.querySelector('[data-a="pdf"]').onclick = () => { map.closePopup(); exportPdf(st.id); };
+  L.popup({ offset: [0, -28], maxWidth: 320 }).setLatLng([st.lat, st.lon]).setContent(el).openOn(map);
+}
+function closeEditor() { editing = null; renderList(); renderEditor(); }
 
 function sensitivity(st) {
   if (st.sens_override_dbm !== null && st.sens_override_dbm !== "" && st.sens_override_dbm !== undefined) return +st.sens_override_dbm;
@@ -298,6 +329,13 @@ function autoVbw(a) {
   return Math.max(2, Math.min(120, 32400 / ((+a.hbw_deg || 60) * 10 ** (g / 10))));
 }
 
+// Platzhalter, werden weiter unten ersetzt (Einzel-Berechnung, PDF)
+let runStations_force = (id) => compute(true);
+let exportPdf = (id) => status("PDF-Export folgt.");
+
+function canAdd() { return isAdmin || isUser; }
+function canEdit(st) { return isAdmin || (isUser && st && st.owner === "user"); }
+
 function opt(obj, cur) { return Object.entries(obj).map(([k, v]) => `<option value="${k}" ${k === cur ? "selected" : ""}>${esc(v.label)}</option>`).join(""); }
 
 const openSecs = new Set(["ptp", "loc"]);   // aufgeklappte Abschnitte im Stations-Fenster
@@ -307,7 +345,7 @@ function sec(id, title, body, extra = "") {
 
 function renderEditor() {
   const el = $("editor");
-  const st = selected && byId(selected);
+  const st = editing && byId(editing);
   if (!st) { $("stPanel").classList.add("hidden"); document.body.classList.remove("editor-open"); return; }
   $("stPanel").classList.remove("hidden"); document.body.classList.add("editor-open");
   const a = st.antenna || (st.antenna = {});
@@ -405,7 +443,7 @@ function renderEditor() {
     project.stations = project.stations.filter((x) => x.id !== st.id);
     if (markers[st.id]) { map.removeLayer(markers[st.id]); delete markers[st.id]; }
     if (azLines[st.id]) { map.removeLayer(azLines[st.id]); delete azLines[st.id]; }
-    selected = null; renderAll(); changed(); csFillCalStations();
+    selected = null; editing = null; renderAll(); changed(); csFillCalStations();
   };
   $("btnElev").onclick = async () => {
     $("elevInfo").textContent = "Frage Höhendaten ab …";
@@ -705,7 +743,10 @@ function inspectAt(latlng) {
   }).join("");
   const div = document.createElement("div");
   div.className = "popup";
-  div.innerHTML = `<div class="note">${latlng.lat.toFixed(5)}, ${latlng.lng.toFixed(5)}</div><table>${rows || "<tr><td>Keine aktive Station</td></tr>"}</table>`;
+  div.innerHTML = `<div class="note">${latlng.lat.toFixed(5)}, ${latlng.lng.toFixed(5)}</div><table>${rows || "<tr><td>Keine aktive Station</td></tr>"}</table>
+    ${canAdd() ? `<div class="cs-act"><button data-place="1">＋ Station hier platzieren</button></div>` : ""}`;
+  const pl = div.querySelector("[data-place]");
+  if (pl) pl.onclick = () => { const st = defaultStation(latlng.lat, latlng.lng); project.stations.push(st); drawStation(st); openEditor(st.id); changed(); };
   div.querySelectorAll("[data-prof]").forEach((b) => b.addEventListener("click", () => showProfile(b.dataset.prof, latlng)));
   L.popup({ maxWidth: 380 }).setLatLng(latlng).setContent(div).openOn(map);
 }
@@ -1074,7 +1115,7 @@ function csWireActions(root, pk) {
     const act = b.dataset.cs;
     if (act === "nb") csShowNeighbors(pk);
     else if (act === "hide") csDeselect();
-    else if (act === "open") { map.closePopup(); select(csStationOf(pk).id, true); }
+    else if (act === "open") { map.closePopup(); openEditor(csStationOf(pk).id); }
     else if (act === "adopt") csAdopt({ ...n, pk });
     else if (act === "ovr") {
       const body = {};
@@ -1139,7 +1180,7 @@ function csRenderSel() {
 
 function csAdopt(n) {
   const ex = csStationOf(n.pk);
-  if (ex) { select(ex.id, true); return; }
+  if (ex) { openEditor(ex.id); return; }
   const o = csOvr[n.pk] || {};
   const st = defaultStation(n.lat, n.lon);
   Object.assign(st, { name: n.name || st.name, corescope_pk: n.pk, height_m: o.height_m ?? 10, height_ref: "ground",
@@ -1148,7 +1189,7 @@ function csAdopt(n) {
   project.stations.push(st); drawStation(st); map.closePopup();
   if (csFocusPk === n.pk) csFocusPk = null;
   csDrawNodes(); csFillCalStations(); csRenderSel();
-  select(st.id); changed();
+  openEditor(st.id); changed();
   status(`„${st.name}“ übernommen – Höhe/Antenne/Leistung prüfen, dann speichern.`);
 }
 
@@ -1287,11 +1328,12 @@ function wire() {
   map.on("click", (e) => {
     if (placing && isAdmin) {
       const st = defaultStation(e.latlng.lat, e.latlng.lng);
-      project.stations.push(st); drawStation(st); setPlacing(false); select(st.id); changed();
+      project.stations.push(st); drawStation(st); setPlacing(false); openEditor(st.id); changed();
       return;
     }
-    inspectAt(e.latlng);
+    // einfacher Klick: nichts weiter (offene Popups schließt Leaflet selbst)
   });
+  map.on("contextmenu", (e) => { if (!placing) inspectAt(e.latlng); });  // Rechtsklick bzw. lange tippen
   $("layerSel").onchange = showLayer;
   $("opacity").oninput = () => covLayer && covLayer.setOpacity(+$("opacity").value);
   $("reqSlider").oninput = () => { $("reqVal").textContent = $("reqSlider").value; };
@@ -1334,7 +1376,25 @@ function wire() {
     if (!id || (dirty && !confirm("Ungespeicherte Änderungen verwerfen?"))) return;
     try { loadProject(await api(`/api/projects/${id}`)); } catch (er) { status("Fehler: " + er.message, "err"); }
   };
-  $("btnMore").onclick = () => $("moreMenu").classList.toggle("hidden");
+  $("btnMore").onclick = (e) => { e.stopPropagation(); $("moreMenu").classList.toggle("hidden"); };
+  // Menüs und Popups schließen, sobald woanders hingeklickt wird
+  let popupOpenedAt = 0;
+  map.on("popupopen", () => { popupOpenedAt = Date.now(); });
+  document.addEventListener("click", (e) => {
+    if (!$("moreMenu").classList.contains("hidden") && !$("moreMenu").contains(e.target)) $("moreMenu").classList.add("hidden");
+    if (!e.target.closest("#map, .leaflet-popup, dialog") && Date.now() - popupOpenedAt > 300) map.closePopup();
+  });
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape") { map.closePopup(); $("moreMenu").classList.add("hidden"); } });
+  // Seitenleiste: Breite ziehen, ein-/ausblenden (Desktop)
+  $("btnSideHide").onclick = () => { document.body.classList.add("side-collapsed"); setTimeout(() => map.invalidateSize(), 50); };
+  $("btnSide").addEventListener("click", () => { if (!narrow()) { document.body.classList.remove("side-collapsed"); setTimeout(() => map.invalidateSize(), 50); } });
+  const rz = $("sideResize");
+  rz.addEventListener("pointerdown", (e) => {
+    e.preventDefault(); rz.setPointerCapture(e.pointerId);
+    const move = (ev) => { $("side").style.width = Math.max(300, Math.min(window.innerWidth * 0.6, ev.clientX)) + "px"; };
+    const up = () => { rz.removeEventListener("pointermove", move); rz.removeEventListener("pointerup", up); map.invalidateSize(); };
+    rz.addEventListener("pointermove", move); rz.addEventListener("pointerup", up);
+  });
   $("btnExport").onclick = () => {
     $("moreMenu").classList.add("hidden");
     project.name = $("projName").value;
@@ -1407,7 +1467,7 @@ async function init() {
     try { loadProject(await api(`/api/projects/${encodeURIComponent(pick)}`)); }
     catch (e) { status("Projekt nicht gefunden oder nicht öffentlich.", "err"); }
   } else {
-    status(isAdmin ? "Bereit. „＋ Station platzieren“, dann „▶ Berechnen“." : "Noch keine öffentlichen Projekte.");
+    status(isAdmin ? "Bereit. „＋ Station platzieren“, dann „▶ Berechnen“. Rechtsklick (Handy: lange tippen) zeigt Pegel und Profil an einem Punkt." : "Noch keine öffentlichen Projekte.");
   }
 }
 init().catch((e) => status("Start fehlgeschlagen: " + e.message, "err"));

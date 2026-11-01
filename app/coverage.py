@@ -146,7 +146,7 @@ def terrain_pair(s, grid):
         frac = float(np.isnan(G).mean())
         try:
             C = load_terrain(fb_id, grid, "surface")
-        except SourceError as e:
+        except Exception as e:  # noqa: BLE001 – Netz/Proxy/Datei: dann eben ohne Ersatz
             C = None
             warn.append(f"Ersatzquelle nicht verfügbar ({e}) – Lücken mit Nachbarwerten gefüllt")
         if C is not None:
