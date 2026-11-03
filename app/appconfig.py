@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import threading
 
 from .terrain import DATA_DIR
@@ -33,6 +34,9 @@ DEFAULTS = {
     "parent_name": os.environ.get("RFP_PARENT_NAME", ""),
     "parent_url": os.environ.get("RFP_PARENT_URL", ""),
     "show_github": os.environ.get("RFP_SHOW_GITHUB", "true").strip().lower() not in ("0", "false", "no"),
+    # Messungen: Schlüssel für die MeshMapper-Weiterleitung, Sichtbarkeit für Besucher
+    "mm_api_key": os.environ.get("RFP_MEASURE_KEY", ""),
+    "measurements_public": False,
 }
 if DEFAULTS["user_password"]:
     DEFAULTS["user_enabled"] = True
@@ -62,6 +66,8 @@ def update(data: dict):
             v = str(v or "").strip()[:2000]
         if k in MODES and v not in MODES[k]:
             raise ValueError(f"{k}: erlaubt sind {', '.join(MODES[k])}")
+        if k == "mm_api_key" and v and (len(v) < 16 or not re.fullmatch(r"[A-Za-z0-9_\-]+", v)):
+            raise ValueError("Messungs-Schlüssel: mindestens 16 Zeichen, nur Buchstaben, Ziffern, _ und -")
         if k.endswith("_url") and v and not v.startswith(("https://", "http://")):
             raise ValueError(f"{k}: muss mit https:// oder http:// beginnen")
         cur[k] = v
@@ -85,4 +91,5 @@ def public():
         "parent": {"name": c["parent_name"], "url": c["parent_url"]} if c["parent_name"] or c["parent_url"] else None,
         "github": GITHUB_URL if c["show_github"] else None,
         "user_enabled": bool(c["user_enabled"]),
+        "measurements_public": bool(c["measurements_public"]),
     }

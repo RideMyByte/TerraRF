@@ -40,7 +40,7 @@ os.makedirs(DIR, exist_ok=True)
 NODES_FILE = os.path.join(DIR, "nodes.json")
 PK = re.compile(r"^[0-9a-f]{64}$")
 ROLES = ("repeater", "room")
-LINKS_VERSION = 2
+LINKS_VERSION = 3
 OVERRIDES_FILE = os.path.join(DIR, "overrides.json")
 _ovr_lock = threading.Lock()
 
@@ -209,7 +209,7 @@ def links(pk, refresh=False):
     return out
 
 
-def merge_links(pk, reach, nb):
+def merge_links(pk, reach, nb, reports=None):
     """Verbindungen aus reach + neighbors zusammenführen; SNR nur dort, wo es die Strecke misst."""
     me = reach.get("node") or {}
     L = {}
@@ -258,9 +258,35 @@ def merge_links(pk, reach, nb):
                         "we_hear": 0, "they_hear": 0, "bidir": False, "distance_km": dist or src.get("distance_km")}
         e["snr"] = round(snr, 2)
         e["snr_n"] = cnt
+    # Pfad-abgeleitetes SNR ist unsicher (Observer hören nur den letzten Hop, kurze Präfixe sind mehrdeutig):
+    # nur noch als Hinweis. Als Messung zählen allein die Nachbartabellen, die Knoten selbst melden.
     for e in L.values():
         e.setdefault("count", 0)
-        e.setdefault("snr_any", e.get("snr"))
+        if e.get("snr") is not None and e.get("snr_any") is None:
+            e["snr_any"] = e["snr"]
+        e["snr"], e["snr_n"], e["snr_src"] = None, 0, None
+    try:
+        rep = (reports or observer_reports())
+    except Exception:  # noqa: BLE001
+        rep = {"by_neighbor": {}}
+    for x in rep.get("by_neighbor", {}).get(pk, []):  # Observer x hat unseren Knoten direkt gehört: pk -> x
+        e = L.get(x["observer"])
+        if e is None:
+            kn = node(x["observer"])
+            if not kn:
+                continue
+            e = L[x["observer"]] = {"pk": x["observer"], "name": x.get("name") or kn["name"], "role": kn.get("role"),
+                                    "lat": kn["lat"], "lon": kn["lon"], "we_hear": 0, "they_hear": 0, "bidir": False,
+                                    "distance_km": None, "count": 0, "snr_any": None}
+        e["snr"], e["snr_n"], e["snr_src"] = round(x["snr"], 2), 1, "neighbor_report"
+    mine = {}
+    for q, lst in rep.get("by_neighbor", {}).items():  # unser Knoten meldet selbst: q -> pk
+        for x in lst:
+            if x["observer"] == pk:
+                mine[q] = x["snr"]
+    for q, v in mine.items():
+        if q in L:
+            L[q]["snr_rev"] = round(v, 2)
     return {"v": LINKS_VERSION, "pk": pk, "name": me.get("name"), "lat": me.get("lat"), "lon": me.get("lon"),
             "fetched_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
             "window_days": (reach.get("window") or {}).get("days"), "links": list(L.values())}
@@ -352,3 +378,54 @@ def node_meta(pk):
         json.dump(out, f)
     return {**out, "override": overrides().get(pk)}
 
+
+
+# ---------------------------------------------------------------- direkte Messwerte: Nachbartabellen der Observer
+REPORTS_FILE = os.path.join(DIR, "observer_reports.json")
+REPORTS_TTL_S = 6 * 3600
+
+
+def _items(d, *keys):
+    if isinstance(d, list):
+        return d
+    if isinstance(d, dict):
+        for k in keys:
+            if isinstance(d.get(k), list):
+                return d[k]
+    return []
+
+
+def observer_reports(refresh=False):
+    """Nachbartabellen, die Observer selbst melden (/api/observers/{id} -> neighbor_report): SNR direkt gehörter
+    Adverts, also sicher direkte Verbindungen. Ergebnis: {nachbar_pk: [{observer, name, snr, heard_secs_ago}]}."""
+    if not refresh and os.path.exists(REPORTS_FILE) and time.time() - os.path.getmtime(REPORTS_FILE) < REPORTS_TTL_S:
+        with open(REPORTS_FILE) as f:
+            return json.load(f)
+    if not enabled():
+        return {"by_neighbor": {}, "observers": {}}
+    idx, obs = {}, {}
+    with _client() as c:
+        lst = _items(_get(c, "/api/observers"), "observers", "data", "items")
+        for o in lst:
+            if not isinstance(o, dict) or not (o.get("neighbors_report_at") or o.get("neighbors_count")):
+                continue
+            oid = str(o.get("id") or o.get("pubkey") or o.get("public_key") or "")
+            if not oid:
+                continue
+            try:
+                d = _get(c, f"/api/observers/{oid}")
+            except httpx.HTTPError:
+                continue
+            d = d.get("observer", d) if isinstance(d, dict) else {}
+            rep = d.get("neighbor_report") or {}
+            opk = str(d.get("pubkey") or d.get("public_key") or oid).lower()
+            obs[opk] = {"name": d.get("name") or o.get("name"), "reported_at": rep.get("reported_at") or rep.get("received_at")}
+            for nb in rep.get("neighbors") or []:
+                q = str(nb.get("pubkey") or "").lower()
+                if PK.match(q) and nb.get("snr") is not None:
+                    idx.setdefault(q, []).append({"observer": opk, "name": obs[opk]["name"], "snr": float(nb["snr"]),
+                                                  "heard_secs_ago": nb.get("heard_secs_ago")})
+    out = {"by_neighbor": idx, "observers": obs, "fetched_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
+    with open(REPORTS_FILE, "w") as f:
+        json.dump(out, f)
+    return out

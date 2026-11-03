@@ -114,6 +114,33 @@
           <button id="btnCsSync" class="admin-only" style="margin-top:6px">Repeater jetzt synchronisieren</button>
         </details>
       </div>
+
+      <div class="card" id="mCard">
+        <div class="cardhead">Messfahrten <span id="mShort" class="note"></span></div>
+        <div id="mOff" class="note hidden">Messungen sind nur für angemeldete Nutzer sichtbar.</div>
+        <div id="mOn">
+          <div id="mStats" class="note"></div>
+          <label class="chk"><input type="checkbox" id="mShowPts"> Messpunkte zeigen</label>
+          <label class="chk"><input type="checkbox" id="mShowPlan"> Messplan zeigen (grün = genug, orange = weiter messen)</label>
+          <label>Zeitraum<select id="mDays"><option value="">alles</option><option value="1">letzter Tag</option><option value="7">7 Tage</option>
+            <option value="30">30 Tage</option><option value="365">1 Jahr</option></select></label>
+          <label>Repeater<select id="mRep"><option value="">alle</option></select></label>
+          <p class="note">Messplan: eine ~300-m-Zelle gilt als „genug“, wenn ein Repeater dort mindestens 3 Messungen mit höchstens 6 dB Streuung hat.</p>
+          <h4>Vergleich mit dem Modell</h4>
+          <label>Station (mit Repeater verknüpft)<select id="mCmpSt"></select></label>
+          <button id="btnMCmp" class="primary" style="width:100%">▶ Messungen vergleichen</button>
+          <div id="mCmpOut"></div>
+          <details class="member-only" style="margin-top:8px"><summary class="note">Messungen eintragen / importieren</summary>
+            <p class="note">Einzeln: Rechtsklick (Handy: lange tippen) in die Karte → „Messung hier eintragen“.
+              CSV mit Kopfzeile: <code>lat;lon;rep;snr_down</code>, optional <code>snr_up;rssi;ts;rx_h;note</code> (Trenner ; oder , – Dezimalkomma geht).</p>
+            <input type="file" id="mCsvFile" accept=".csv,text/csv,text/plain">
+            <div id="mCsvOut" class="note"></div>
+          </details>
+          <details class="admin-only" style="margin-top:4px"><summary class="note">Löschen</summary>
+            <div class="row"><select id="mDelSrc"></select><button id="btnMDel">Quelle löschen</button></div>
+          </details>
+        </div>
+      </div>
     </section>
 
     <section id="tab-results" class="tab">
@@ -207,6 +234,15 @@
         <option value="link">auf eine andere Seite verlinken</option></select></label>
       <label>Link (bei „verlinken“)<input id="ac_privacy_url" placeholder="https://…/datenschutz"></label>
       <label>Zusatz zur Datenschutzerklärung (z. B. Reverse-Proxy-Logs)<input id="ac_privacy_extra"></label>
+      <h3>Messfahrten (MeshMapper)</h3>
+      <p class="note">Schlüssel setzen, speichern, dann den Link unten kopieren und in der MeshMapper-App unter
+        <i>Settings → API Endpoints → Import from Clipboard</i> einfügen (oder Adresse und Schlüssel von Hand eintragen).
+        Die App schickt dann jeden erfolgreich hochgeladenen Messblock zusätzlich hierher. TerraRF muss per HTTPS erreichbar sein.</p>
+      <label>API-Schlüssel (mind. 16 Zeichen, leer = Empfang aus)
+        <div class="row"><input id="ac_mm_api_key" autocomplete="off" spellcheck="false" style="flex:1"><button type="button" id="btnMmKey" style="flex:0 0 auto">neu</button></div></label>
+      <label>Adresse<input id="mmUrl" readonly></label>
+      <label>Link für die App<div class="row"><input id="mmLink" readonly style="flex:1"><button type="button" id="btnMmCopy" style="flex:0 0 auto">kopieren</button></div></label>
+      <label class="chk" style="margin-top:2px"><input type="checkbox" id="ac_measurements_public"> Messpunkte auch ohne Anmeldung zeigen (ohne Zeit und Gerät)</label>
       <div class="row"><button id="btnAcSave" class="primary">Webseite &amp; Zugang speichern</button></div>
       <div id="acOut" class="note"></div>
       </div></details>

@@ -141,9 +141,11 @@ blendet alle anderen aus und färbt die Nachbarn nach SNR; die Liste im Reiter z
 Erneuter Klick hebt die Auswahl auf. Ein Klick auf eine verknüpfte Station zeigt sofort deren Nachbarn; eigene
 Stationen lassen sich im Editor mit einem Repeater verknüpfen. Der Abgleich startet mit „▶ Abgleich rechnen“.
 Bedeutung der Farben:
-- **dunkler Rand** – gemessenes SNR: Der Partner ist selbst Observer und hat den Repeater direkt gehört.
-- **gestrichelter Rand** – Mittel über andere Observer; sagt über die Strecke selbst wenig. Kurze Hop-Präfixe können
-  falsche Nachbarn erzeugen; der Filter „nur beidseitig“ + Mindestanzahl blendet die meisten aus.
+- **dunkler Rand** – direkt gemeldetes SNR: aus der Nachbartabelle, die ein Observer selbst an CoreScope meldet
+  (`neighbor_report`, direkt gehörte Adverts). Nur diese Werte fließen in den Abgleich.
+- **gestrichelter Rand** – aus Paketpfaden abgeleitetes SNR („Ø“). Ein Observer hört nur den letzten Hop, kurze
+  Präfixe sind mehrdeutig, Dach-Observer hören über nahe Repeater – solche Werte werden nur angezeigt, nicht verglichen.
+  Der Filter „nur beidseitig“ + Mindestanzahl blendet falsche Nachbarn größtenteils aus.
 
 „Als Station übernehmen“ legt eine Station mit Annahmen an (10 m, Rundstrahler 5,8 dBi, 22 dBm) – CoreScope kennt
 Antennenhöhe, Gewinn und Leistung nicht. „Mit Messwerten vergleichen“ rechnet für jede gemessene Strecke das
@@ -152,6 +154,29 @@ Für die Gegenstelle gelten, in dieser Reihenfolge: Werte der Station, falls der
 (Höhe, Antenne in Richtung, Kabel), die je Repeater hinterlegte Höhe/Gewinn, sonst die Standardwerte. Ein Klick auf
 einen Partner zeigt die Strecke als Profil. SNR-Werte ab 10 dB fließen nicht in die Statistik ein (LoRa-Meldungen sind
 nach oben begrenzt). Bitte die Instanz schonend nutzen und im Zweifel bei den Betreibern nachfragen.
+
+## Messfahrten (MeshMapper)
+Eigene Messungen sind der verlässlichste Abgleich. TerraRF nimmt sie auf drei Wegen an:
+1. **MeshMapper-Weiterleitung**: unter ⚙ → Webseite & Zugang → *Messfahrten* einen API-Schlüssel erzeugen und speichern,
+   dann den angezeigten Link kopieren und in der MeshMapper-App unter *Settings → API Endpoints → Import from Clipboard*
+   einfügen. Die App schickt jeden erfolgreich hochgeladenen Messblock zusätzlich an `https://<host>/api/ingest/meshmapper`
+   (Header `X-API-Key`). MeshMapper verlangt HTTPS – TerraRF muss also über einen Reverse-Proxy mit Zertifikat erreichbar
+   sein. Gespeichert werden DISC/TRACE (SNR beim Handy und beim Repeater, RSSI) und TX/RX-Echos (SNR je Repeater);
+   DEFER/SCOPES und fehlgeschlagene Erkennungen werden ignoriert, doppelte Echos (TX + RX) nur einmal gezählt.
+   Repeater-Präfixe werden über die CoreScope-Liste einem Schlüssel zugeordnet, wenn das im Umkreis eindeutig ist.
+2. **Von Hand**: Rechtsklick (Handy: lange tippen) → „Messung hier eintragen“.
+3. **CSV**: Kopfzeile `lat;lon;rep;snr_down`, optional `snr_up;rssi;ts;rx_h;note` (Trenner `;` oder `,`, Dezimalkomma geht).
+
+Im Reiter „MeshCore“ → *Messfahrten*: Messpunkte (Farbe nach SNR), **Messplan** und **Vergleich mit dem Modell** für
+eine mit einem Repeater verknüpfte Station (Δ SNR und Δ RSSI; Punkte danach nach Δ gefärbt; auch im PDF-Bericht).
+Nahe am Repeater sagt SNR nichts – LoRa meldet höchstens etwa 10 dB –, dort zählt nur RSSI.
+Messplan: eine ~300-m-Zelle (das Raster von MeshMapper) gilt als **genug**, wenn ein Repeater dort mindestens 3 Messungen
+mit höchstens 6 dB Streuung hat; orange Zellen lohnen eine weitere Fahrt. Die App selbst lässt sich von TerraRF nicht
+steuern. Ihr *Smart Pinging* (Wardriving → Auto-Ping) überspringt Felder, die auf meshmapper.net in den letzten 14 Tagen
+schon Abdeckung haben – egal von wem und wie oft. Für TerraRFs Regel (3 stimmige Messungen) heißt das: in orangen Zellen
+Smart Pinging lieber ausschalten, sonst kommen dort keine weiteren Messungen an.
+Messungen sind nur für angemeldete Nutzer sichtbar, außer „Messpunkte auch ohne Anmeldung zeigen“ ist gesetzt (dann ohne
+Zeit, Gerät und Notiz). Der Admin kann Messungen je Quelle löschen.
 
 ## Modell
 

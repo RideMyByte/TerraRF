@@ -8,7 +8,7 @@ import time
 import numpy as np
 from PIL import Image, ImageDraw
 
-from . import corescope, terrain, tiles
+from . import corescope, measurements, terrain, tiles
 from . import coverage as cov
 from . import propagation as prop
 from .version import VERSION
@@ -101,7 +101,7 @@ def summary(project, sid):
 
 
 # ---------------------------------------------------------------- Kartenbild
-def _map_image(st, r, s, width=1500, neighbors=None):
+def _map_image(st, r, s, width=1500, neighbors=None, points=None):
     g = r.grid
     l, b, rr, t = g.bounds
     span = max(rr - l, t - b)
@@ -148,6 +148,11 @@ def _map_image(st, r, s, width=1500, neighbors=None):
         col = (22, 163, 74) if sn is not None and sn >= 5 else (101, 163, 13) if sn is not None and sn >= -5 \
             else (217, 119, 6) if sn is not None and sn >= -10 else (220, 38, 38) if sn is not None else (156, 163, 175)
         d.ellipse([nx_ - 5, ny_ - 5, nx_ + 5, ny_ + 5], fill=col, outline=(17, 24, 39) if nb.get("snr") is not None else (255, 255, 255), width=2)
+    for pt in points or []:  # Messpunkte, Farbe nach gemessenem SNR
+        px_, py_ = to_px(*terrain.lonlat_to_merc(pt["lon"], pt["lat"]))
+        sn = pt.get("snr_down")
+        col = (22, 163, 74) if sn >= 5 else (101, 163, 13) if sn >= -5 else (217, 119, 6) if sn >= -10 else (220, 38, 38)
+        d.rectangle([px_ - 3, py_ - 3, px_ + 3, py_ + 3], fill=col, outline=(255, 255, 255))
     sx, sy = to_px(*terrain.lonlat_to_merc(float(st["lon"]), float(st["lat"])))
     d.ellipse([sx - 8, sy - 8, sx + 8, sy + 8], fill=(220, 38, 38), outline=(255, 255, 255), width=3)
     img = img.crop((int(max(0, X0 - 20)), int(max(0, Y0 - 20)), int(min(img.width, X1 + 20)), int(min(img.height, Y1 + 20))))
@@ -212,8 +217,10 @@ def pdf(project, sid, cal_defaults=None, site=None):
             nbs = [x for x in mc["links"] if x.get("bidir") or x.get("snr") is not None]
         except Exception:  # noqa: BLE001
             mc = None
+    mrows = measurements.query(None, st["corescope_pk"]) if st.get("corescope_pk") else []
+    mrows = [m for m in mrows if m.get("snr_down") is not None]
     try:
-        jpg, base_ok = _map_image(st, r, s, neighbors=nbs)
+        jpg, base_ok = _map_image(st, r, s, neighbors=nbs, points=mrows)
         im = RLImage(io.BytesIO(jpg))
         ratio = im.imageHeight / im.imageWidth
         im.drawWidth = 180 * mm
@@ -222,7 +229,8 @@ def pdf(project, sid, cal_defaults=None, site=None):
         story.append(im)
         story.append(Paragraph("Bester Pegel als Reserve über der Empfindlichkeit (Farben wie in der Karte)."
                                + ("" if base_ok else " Grundkarte nicht verfügbar.")
-                               + (" Punkte: MeshCore-Nachbarn, Farbe nach SNR (dunkler Rand = gemessen)." if nbs else "")
+                               + (" Punkte: MeshCore-Nachbarn, Farbe nach SNR (dunkler Rand = direkt gemeldet)." if nbs else "")
+                               + (" Quadrate: Messfahrten, Farbe nach gemessenem SNR." if mrows else "")
                                + " Kartendaten © OpenStreetMap-Mitwirkende.", SM))
     except Exception as e:  # noqa: BLE001
         story.append(Paragraph(f"Kartenbild konnte nicht erzeugt werden: {_e(e)}", SM))
@@ -277,6 +285,50 @@ def pdf(project, sid, cal_defaults=None, site=None):
               f"Zusatz {f(float(s.get('rx_extra_loss_db', 0)))} dB, Rauschanhebung {f(float(s.get('noise_rise_db', 0)))} dB"]]
     story.append(table(mrows, [36 * mm, 144 * mm], head=False))
 
+    # Messfahrten
+    if mrows:
+        story.append(Paragraph("Messfahrten ↔ Modell", H2))
+        try:
+            cmp_ = cov.compare_measurements(project, sid, mrows)
+            stt = cmp_.get("stats")
+            kinds = {}
+            for m in mrows:
+                kinds[m.get("kind") or "?"] = kinds.get(m.get("kind") or "?", 0) + 1
+            first = min(m["ts"] for m in mrows if m.get("ts")); last = max(m["ts"] for m in mrows if m.get("ts"))
+            story.append(Paragraph(
+                f"{len(mrows)} Messungen dieses Repeaters ({', '.join(f'{k} {v}' for k, v in sorted(kinds.items()))}), "
+                f"{time.strftime('%d.%m.%Y', time.localtime(first))} bis {time.strftime('%d.%m.%Y', time.localtime(last))}. "
+                f"Modell mit Empfänger {f(cmp_['rx_height_m'])} m / {f(cmp_['rx_gain_dbi'])} dBi, Rauschboden {f(cmp_['noise_dbm'])} dBm"
+                + (f"; {cmp_['outside']} Messungen außerhalb des Rechenradius." if cmp_['outside'] else "."), P))
+            if stt:
+                story.append(Paragraph(
+                    f"Δ = gemessen − Modell: Mittel <b>{'+' if stt['mean_db'] > 0 else ''}{f(stt['mean_db'])} dB</b>, Median {f(stt['median_db'])} dB, "
+                    f"Streuung {f(stt['std_db'])} dB, RMSE {f(stt['rmse_db'])} dB, n = {stt['n']}. Negativ heißt: das Modell ist zu optimistisch.", P))
+            sr = cmp_.get("rssi_stats")
+            if sr:
+                story.append(Paragraph(f"RSSI: Δ Mittel {'+' if sr['mean_db'] > 0 else ''}{f(sr['mean_db'])} dB, Median {f(sr['median_db'])} dB, "
+                                       f"Streuung {f(sr['std_db'])} dB, n = {sr['n']}.", P))
+            if cmp_.get("saturated"):
+                story.append(Paragraph(f"{cmp_['saturated']} Messungen nahe am Repeater nicht in der SNR-Statistik "
+                                       f"(LoRa meldet höchstens etwa {f(cmp_['sat_db'], 0)} dB SNR).", SM))
+            # nach Entfernung
+            rows_ = [x for x in cmp_["rows"] if x["delta_db"] is not None and not x["saturated"]]
+            if rows_:
+                tab = [["Entfernung", "n", "gemessen (Median)", "Modell (Median)", "Δ (Median)"]]
+                lo = 0.0
+                for hi in RINGS_KM:
+                    sel = [x for x in rows_ if lo <= x["distance_km"] < hi]
+                    if sel:
+                        tab.append([f"{f(lo, 1)} – {f(hi, 1)} km", str(len(sel)), f(float(np.median([x['measured_snr'] for x in sel]))),
+                                    f(float(np.median([x['predicted_snr'] for x in sel]))), f(float(np.median([x['delta_db'] for x in sel])))])
+                    lo = hi
+                story.append(Spacer(1, 2 * mm))
+                story.append(table(tab, [34 * mm, 14 * mm, 38 * mm, 34 * mm, 28 * mm]))
+            story.append(Paragraph("Vergleich mit der berechneten Abdeckung am Messort (Empfänger-Einstellungen des Projekts). "
+                                   "Gemessen wird das SNR beim Messgerät (Repeater → Messgerät).", SM))
+        except Exception as e:  # noqa: BLE001
+            story.append(Paragraph(f"Vergleich nicht möglich: {_e(e)}", SM))
+
     # MeshCore
     if mc:
         story.append(Paragraph("MeshCore", H2))
@@ -300,10 +352,11 @@ def pdf(project, sid, cal_defaults=None, site=None):
             story.append(Spacer(1, 2 * mm))
             story.append(table([["Nachbar", "km", "Tx →", "Rx ←", "SNR dB"]] + [
                 [Paragraph(_e(x.get("name") or x["pk"][:8]), P), f(x.get("distance_km")), str(x.get("they_hear", 0)), str(x.get("we_hear", 0)),
-                 (f(x["snr"]) + " gem.") if x.get("snr") is not None else (f(x.get("snr_any")) + " Ø" if x.get("snr_any") is not None else "–")]
+                 (f(x["snr"]) + " direkt") if x.get("snr") is not None else (f(x.get("snr_any")) + " Ø" if x.get("snr_any") is not None else "–")]
                 for x in nb], [80 * mm, 18 * mm, 20 * mm, 20 * mm, 30 * mm]))
-            story.append(Paragraph("Tx: wie oft der Nachbar diese Station gehört hat; Rx: umgekehrt. „gem.“ = vom Partner direkt gemessen, "
-                                   "„Ø“ = Mittel über andere Observer (sagt über die Strecke wenig). Höchstens 30 Einträge.", SM))
+            story.append(Paragraph("Tx: wie oft der Nachbar diese Station gehört hat; Rx: umgekehrt. „direkt“ = aus der Nachbartabelle, "
+                                   "die der Partner selbst meldet (direkt gehörtes Advert); „Ø“ = aus Paketpfaden abgeleitet, unsicher. "
+                                   "Höchstens 30 Einträge.", SM))
         pts = [x for x in mc["links"] if x.get("snr") is not None]
         if pts:
             cd = cal_defaults or {}

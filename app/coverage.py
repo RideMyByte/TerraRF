@@ -639,7 +639,7 @@ def _calibrate_rows(proj, station_id, points, by_pk, overrides, rx_height, rx_ga
         r.update(distance_km=round(pr["distance_m"] / 1000, 2), los_class=pr["los_class"], prx_dbm=b["prx_dbm"],
                  rx_height_m=b["rx_height_m"], rx_gain_dbi=b["rx_gain_dbi"], rx_cable_db=b["rx_cable_db"],
                  predicted_snr=round(pred, 1), delta_db=round(r["measured_snr"] - pred, 1),
-                 saturated=r["measured_snr"] >= SNR_SAT_DB)
+                 saturated=r["measured_snr"] >= SNR_SAT_DB or pred >= SNR_SAT_DB)
         rows.append(r)
 
 
@@ -652,3 +652,53 @@ def _calibrate_result(st, noise, rx_height, rx_gain, rx_cable, rows):
                  "std_db": round(float(d.std()), 1), "rmse_db": round(float(np.sqrt((d ** 2).mean())), 1)}
     return {"station": st.get("name"), "noise_dbm": round(noise, 1), "rx_height_m": rx_height, "rx_gain_dbi": rx_gain,
             "rx_cable_db": rx_cable, "sat_db": SNR_SAT_DB, "rows": rows, "stats": stats}
+
+
+def compare_measurements(project, station_id, rows, rx_gain=None):
+    """Messungen (snr_down am Messort) gegen die berechnete Abdeckung der Station.
+    Das Modell rechnet mit den Empfänger-Einstellungen des Projekts (Höhe, Gewinn); rx_gain verschiebt nur den Gewinn."""
+    s = merged_settings(project)
+    st = next((x for x in project.get("stations") or [] if x["id"] == station_id), None)
+    if st is None:
+        raise KeyError("Station nicht gefunden")
+    cs = project_cs(project, s)
+    r, _ = compute_station(st, s, cs)
+    g = r.grid
+    noise = -174.0 + 10.0 * math.log10(float(st.get("bw_khz", 125.0)) * 1000.0) + float(st.get("nf_db", 6.0)) \
+        + float(s.get("noise_rise_db", 0.0))
+    dg = 0.0 if rx_gain in (None, "") else float(rx_gain) - float(s["rx_gain_dbi"])
+    out = []
+    for m in rows:
+        if m.get("snr_down") is None:
+            continue
+        x, y = lonlat_to_merc(m["lon"], m["lat"])
+        ix, iy = int((x - g.x0) / g.cs), int((g.y1 - y) / g.cs)
+        pred = prx = None
+        if 0 <= ix < g.nx and 0 <= iy < g.ny:
+            v = float(r.prx[iy, ix])
+            if not math.isnan(v):
+                prx = round(v + dg, 1)
+                pred = round(prx - noise, 1)
+        km = math.hypot((x - lonlat_to_merc(float(st["lon"]), float(st["lat"]))[0]),
+                        (y - lonlat_to_merc(float(st["lon"]), float(st["lat"]))[1])) * math.cos(math.radians(m["lat"])) / 1000
+        out.append({"id": m.get("id"), "lat": m["lat"], "lon": m["lon"], "kind": m.get("kind"), "src": m.get("src"),
+                    "measured_snr": m["snr_down"], "predicted_snr": pred, "distance_km": round(km, 2),
+                    "delta_db": round(m["snr_down"] - pred, 1) if pred is not None else None,
+                    # SNR-Meldungen sind nach oben begrenzt: sagt das Modell mehr als das Maximum voraus, ist der Vergleich wertlos
+                    "saturated": pred is not None and (m["snr_down"] >= SNR_SAT_DB or pred >= SNR_SAT_DB),
+                    "outside": pred is None, "measured_rssi": m.get("rssi_down"), "predicted_rssi": prx,
+                    "delta_rssi_db": round(m["rssi_down"] - prx, 1) if prx is not None and m.get("rssi_down") is not None else None})
+
+    def st_(vals):
+        if not vals:
+            return None
+        d = np.array(vals)
+        return {"n": len(vals), "mean_db": round(float(d.mean()), 1), "median_db": round(float(np.median(d)), 1),
+                "std_db": round(float(d.std()), 1), "rmse_db": round(float(np.sqrt((d ** 2).mean())), 1)}
+    stats = st_([o["delta_db"] for o in out if o["delta_db"] is not None and not o["saturated"]])
+    # RSSI ist nicht begrenzt und deshalb auch nahe am Repeater brauchbar
+    rssi_stats = st_([o["delta_rssi_db"] for o in out if o["delta_rssi_db"] is not None])
+    return {"station": st.get("name"), "noise_dbm": round(noise, 1), "rx_height_m": float(s["rx_height_m"]),
+            "rx_gain_dbi": float(s["rx_gain_dbi"]) + dg, "rows": out, "stats": stats, "rssi_stats": rssi_stats,
+            "saturated": sum(1 for o in out if o["saturated"]),
+            "outside": sum(1 for o in out if o["outside"]), "sat_db": SNR_SAT_DB}

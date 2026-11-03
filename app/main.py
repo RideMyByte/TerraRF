@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import csv
+import hmac
 import json
 import logging
 import math
@@ -17,7 +19,7 @@ from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 
-from . import appconfig, auth, corescope, legal, overlay, report, regions, sysstat, terrain, tiles
+from . import appconfig, auth, corescope, legal, measurements, overlay, report, regions, sysstat, terrain, tiles
 from . import coverage as cov
 from . import propagation as prop
 from .version import VERSION
@@ -33,6 +35,7 @@ STATIC = os.path.join(os.path.dirname(__file__), "static")
 @asynccontextmanager
 async def lifespan(_app):
     auth.init()
+    measurements.init()
     threading.Thread(target=prop.warmup, daemon=True).start()
     if os.environ.get("RFP_PRELOAD", "nrw_dgm,nrw_dom").strip():
         threading.Thread(target=regions.start_preload, daemon=True).start()
@@ -388,6 +391,74 @@ async def cs_calibrate(request: Request, body: dict = Body(...)):
     try:
         return await run_in_threadpool(work)
     except (ValueError, KeyError, terrain.SourceError, httpx.HTTPError) as e:
+        _err(e)
+
+
+# ---------------------------------------------------------------- Messungen
+@app.post("/api/ingest/meshmapper")
+async def ingest_meshmapper(request: Request):
+    """Ziel für MeshMapper → Einstellungen → API Endpoints (Custom API Endpoint). Schlüssel im Header X-API-Key."""
+    key = appconfig.get().get("mm_api_key") or ""
+    got = request.headers.get("x-api-key", "")
+    if not key or not hmac.compare_digest(got.encode(), key.encode()):
+        raise HTTPException(401, "ungültiger Schlüssel")
+    try:
+        body = await request.json()
+    except ValueError:
+        raise HTTPException(400, "kein JSON")
+    items = body.get("data") if isinstance(body, dict) else None
+    if not isinstance(items, list) or len(items) > 500:
+        raise HTTPException(400, "data muss eine Liste sein")
+    rows = [r for it in items if isinstance(it, dict) for r in measurements.from_meshmapper(it)]
+    n = await run_in_threadpool(measurements.add, rows)
+    return {"ok": True, "received": len(items), "stored": n}
+
+
+def _can_see_measurements(request):
+    return auth.can_edit_any(request) or appconfig.get().get("measurements_public")
+
+
+@app.get("/api/measurements")
+def list_measurements(request: Request, bbox: str | None = None, pk: str | None = None, days: float | None = None):
+    if not _can_see_measurements(request):
+        raise HTTPException(401, "Messungen sind nur nach Anmeldung sichtbar")
+    bb = [float(v) for v in bbox.split(",")] if bbox else None
+    rows = measurements.query(bb, pk, days, public=not auth.can_edit_any(request))
+    return {"rows": rows, "plan": measurements.plan(rows), "stats": measurements.stats()}
+
+
+@app.post("/api/measurements", dependencies=MEMBER)
+def add_measurements(body: dict = Body(...)):
+    try:
+        if body.get("csv"):
+            rows, errs = measurements.from_csv(str(body["csv"]))
+        else:
+            rows, errs = [measurements.manual(body)], []
+    except (ValueError, csv.Error) as e:
+        _err(e)
+    return {"stored": measurements.add(rows), "errors": errs[:50]}
+
+
+@app.delete("/api/measurements", dependencies=ADMIN)
+def delete_measurements(body: dict = Body(...)):
+    return {"deleted": measurements.delete(ids=[int(i) for i in body.get("ids") or []], src=body.get("src"))}
+
+
+@app.post("/api/measurements/compare")
+async def compare_measurements(request: Request, body: dict = Body(...)):
+    if not _can_see_measurements(request):
+        raise HTTPException(401, "Messungen sind nur nach Anmeldung sichtbar")
+    project = _project_for(request, body)
+    st = next((x for x in project.get("stations") or [] if x["id"] == body.get("station_id")), None)
+    if st is None:
+        raise HTTPException(400, "Station nicht gefunden")
+    pk = st.get("corescope_pk")
+    if not pk:
+        raise HTTPException(400, "Station ist nicht mit einem Repeater verknüpft – Messungen werden über den Repeater zugeordnet")
+    rows = measurements.query(None, pk, body.get("days"))
+    try:
+        return await run_in_threadpool(cov.compare_measurements, project, st["id"], rows, body.get("rx_gain_dbi"))
+    except (ValueError, KeyError, terrain.SourceError) as e:
         _err(e)
 
 

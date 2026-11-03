@@ -853,7 +853,9 @@ function inspectAt(latlng) {
   const div = document.createElement("div");
   div.className = "popup";
   div.innerHTML = `<div class="note">${latlng.lat.toFixed(5)}, ${latlng.lng.toFixed(5)}</div><table>${rows || "<tr><td>Keine aktive Station</td></tr>"}</table>
-    ${canAdd() ? `<div class="cs-act"><button data-place="1">＋ Station hier platzieren</button></div>` : ""}`;
+    ${canAdd() ? `<div class="cs-act"><button data-place="1">＋ Station hier platzieren</button><button data-meas="1">Messung hier eintragen</button></div>` : ""}`;
+  const me = div.querySelector("[data-meas]");
+  if (me) me.onclick = () => mManualDialog(latlng);
   const pl = div.querySelector("[data-place]");
   if (pl) pl.onclick = () => { const st = defaultStation(latlng.lat, latlng.lng); project.stations.push(st); drawStation(st); openEditor(st.id); changed(); };
   div.querySelectorAll("[data-prof]").forEach((b) => b.addEventListener("click", () => showProfile(b.dataset.prof, latlng)));
@@ -1338,6 +1340,153 @@ function csFillCalStations() {
     : `<option value="">– keine Station mit Repeater verknüpft –</option>`;
   if (list.some((s) => s.id === cur)) sel.value = cur;
   $("btnCalRun").disabled = !list.length;
+  mFillSt();
+}
+
+/* ---------- Messfahrten (MeshMapper, von Hand, CSV) ---------- */
+const mLayer = L.layerGroup(), mPlanLayer = L.layerGroup();
+let mRows = [], mPlan = [], mCmp = null;   // mCmp: {byId: {id: row}} nach „vergleichen“
+const snrCol = (v) => v == null ? "#888" : v >= 5 ? "#16a34a" : v >= -5 ? "#65a30d" : v >= -10 ? "#d97706" : "#dc2626";
+const dCol = (d) => d == null ? "#888" : Math.abs(d) <= 3 ? "#16a34a" : Math.abs(d) <= 8 ? (d < 0 ? "#d97706" : "#2563eb") : (d < 0 ? "#dc2626" : "#7c3aed");
+function repName(pk, prefix) {
+  const n = (pk && csNodes.find((x) => x.pk === pk)) || null;
+  return n ? n.name : (pk || prefix || "?").slice(0, 8);
+}
+function mFillSt() {
+  const sel = $("mCmpSt"); if (!sel || !project) return;
+  const cur = sel.value, list = project.stations.filter((s) => s.corescope_pk);
+  sel.innerHTML = list.length ? list.map((s) => `<option value="${s.id}">${esc(s.name)}</option>`).join("")
+    : `<option value="">– keine Station mit Repeater verknüpft –</option>`;
+  if (list.some((s) => s.id === cur)) sel.value = cur;
+  $("btnMCmp").disabled = !list.length;
+}
+async function mLoad() {
+  const q = new URLSearchParams();
+  if ($("mDays").value) q.set("days", $("mDays").value);
+  if ($("mRep").value) q.set("pk", $("mRep").value);
+  try {
+    const r = await api("/api/measurements?" + q);
+    mRows = r.rows; mPlan = r.plan;
+    $("mOff").classList.add("hidden"); $("mOn").classList.remove("hidden");
+    const st = r.stats, done = mPlan.filter((c) => c.done).length;
+    $("mStats").innerHTML = st.count ? `${st.count} Messungen gespeichert, ${st.repeaters} Repeater` +
+      (st.last ? `, zuletzt ${fmtAgo(new Date(st.last * 1000).toISOString())}` : "") + `. Angezeigt: ${mRows.length} · Zellen ${done}/${mPlan.length} genug.`
+      : "Noch keine Messungen. MeshMapper-Weiterleitung unter ⚙ → Webseite &amp; Zugang einrichten.";
+    $("mShort").textContent = st.count ? `${st.count}` : "";
+    // Repeater-Auswahl aus allen Messungen (nur beim ersten Laden ohne Filter vollständig)
+    if (!$("mRep").value) {
+      const reps = {};
+      for (const m of mRows) { const k = m.rep_pk || m.rep_prefix; if (k) reps[k] = (reps[k] || 0) + 1; }
+      $("mRep").innerHTML = `<option value="">alle</option>` + Object.entries(reps).sort((a, b) => b[1] - a[1])
+        .map(([k, n]) => `<option value="${esc(k)}">${esc(repName(k.length === 64 ? k : null, k))} (${n})</option>`).join("");
+    }
+    if ($("mDelSrc")) {
+      $("mDelSrc").innerHTML = Object.entries(st.by_source || {}).map(([k, n]) => `<option value="${esc(k)}">${esc(k)} (${n})</option>`).join("");
+    }
+    mDraw();
+  } catch (e) {
+    if (/401|403|Anmeldung/.test(e.message)) { $("mOff").classList.remove("hidden"); $("mOn").classList.add("hidden"); }
+    else $("mStats").textContent = "Messungen: " + e.message;
+  }
+}
+function mDraw() {
+  mLayer.clearLayers(); mPlanLayer.clearLayers();
+  if ($("mShowPlan").checked) {
+    for (const c of mPlan) L.rectangle([[c.s, c.w], [c.n, c.e]], { weight: 1, color: c.done ? "#16a34a" : "#d97706", fillOpacity: 0.18, interactive: true })
+      .bindTooltip(`${c.done ? "genug" : "weiter messen"} · ${c.count} Messungen, ${c.repeaters} Repeater`).addTo(mPlanLayer);
+    mPlanLayer.addTo(map);
+  } else map.removeLayer(mPlanLayer);
+  if ($("mShowPts").checked) {
+    for (const m of mRows) {
+      const c = mCmp && mCmp.byId[m.id];
+      const col = c && !c.saturated && c.delta_db != null ? dCol(c.delta_db) : snrCol(m.snr_down);
+      const tip = `<b>${esc(repName(m.rep_pk, m.rep_prefix))}</b> · ${esc(m.kind || "")}<br>` +
+        `SNR ↓ ${m.snr_down != null ? fmt(m.snr_down, 1) + " dB" : "–"}${m.snr_up != null ? ` · ↑ ${fmt(m.snr_up, 1)} dB` : ""}` +
+        (m.rssi_down != null ? ` · RSSI ${fmt(m.rssi_down, 0)} dBm` : "") +
+        (c && c.predicted_snr != null ? `<br>Modell ${fmt(c.predicted_snr, 1)} dB · Δ ${c.delta_db > 0 ? "+" : ""}${fmt(c.delta_db, 1)} dB${c.saturated ? " (Messwert gesättigt)" : ""}` : "") +
+        (m.ts ? `<br>${new Date(m.ts * 1000).toLocaleString("de-DE")}` : "") + (m.note ? `<br>${esc(m.note)}` : "") + `<br><span class="note">${esc(m.src || "")}</span>`;
+      L.circleMarker([m.lat, m.lon], { radius: 5, weight: 1, color: "#fff", fillColor: col, fillOpacity: 0.9 }).bindTooltip(tip).addTo(mLayer);
+    }
+    mLayer.addTo(map);
+  } else map.removeLayer(mLayer);
+}
+async function mCompare() {
+  const st = byId($("mCmpSt").value); if (!st) return;
+  $("mCmpOut").innerHTML = `<div class="note cs-wait">vergleiche Messungen mit „${esc(st.name)}“ …</div>`;
+  try {
+    const body = { station_id: st.id, ...(canAdd() ? { project } : { project_id: project.id }) };
+    if ($("mDays").value) body.days = +$("mDays").value;
+    const r = await api("/api/measurements/compare", { method: "POST", body });
+    mCmp = { byId: Object.fromEntries(r.rows.map((x) => [x.id, x])) };
+    const s = r.stats, sr = r.rssi_stats, sg = (v) => (v > 0 ? "+" : "") + fmt(v, 1);
+    const line = (lbl, x) => `<tr><td>${lbl}</td><td><b>${sg(x.mean_db)} dB</b></td><td>${sg(x.median_db)}</td><td>${fmt(x.std_db, 1)}</td><td>${x.n}</td></tr>`;
+    let html = s || sr ? `<table class="mini"><tr><th></th><th>Δ Mittel</th><th>Median</th><th>Streuung</th><th>n</th></tr>
+      ${s ? line("SNR", s) : ""}${sr ? line("RSSI", sr) : ""}</table>
+      <p class="note">Δ = gemessen − Modell. Negativ: Modell zu optimistisch. Punkte auf der Karte jetzt nach Δ SNR gefärbt
+      (grün ±3 dB, orange/rot Modell zu gut, blau/lila Modell zu schlecht).
+      ${r.saturated ? ` ${r.saturated} Messungen nahe am Repeater nicht in der SNR-Statistik: LoRa meldet höchstens etwa ${fmt(r.sat_db, 0)} dB SNR, dort zählt nur RSSI.` : ""}
+      ${r.outside ? ` ${r.outside} Messungen außerhalb des Rechenradius.` : ""}</p>`
+      : `<div class="note warn">Keine vergleichbaren Messungen für diesen Repeater${r.outside ? ` (${r.outside} außerhalb des Rechenradius)` : ""}.</div>`;
+    const rows = r.rows.filter((x) => x.delta_db != null && !x.saturated).sort((a, b) => Math.abs(b.delta_db) - Math.abs(a.delta_db)).slice(0, 25);
+    if (rows.length) html += `<table class="cs-tab"><tr><th>km</th><th>gem.</th><th>Modell</th><th>Δ</th></tr>` + rows.map((x) =>
+      `<tr data-ll="${x.lat},${x.lon}"><td>${fmt(x.distance_km, 2)}</td><td>${fmt(x.measured_snr, 1)}${x.saturated ? "*" : ""}</td><td>${fmt(x.predicted_snr, 1)}</td>
+       <td style="color:${dCol(x.delta_db)}">${x.delta_db > 0 ? "+" : ""}${fmt(x.delta_db, 1)}</td></tr>`).join("") + `</table>
+      <p class="note">Die 25 größten Abweichungen; antippen zeigt den Ort. * = SNR am oberen Ende (gesättigt), nicht in der SNR-Statistik.</p>`;
+    $("mCmpOut").innerHTML = html;
+    $("mCmpOut").querySelectorAll("tr[data-ll]").forEach((tr) => tr.onclick = () => {
+      const [a, b] = tr.dataset.ll.split(",").map(Number); map.setView([a, b], Math.max(map.getZoom(), 15));
+    });
+    $("mShowPts").checked = true; mDraw();
+  } catch (e) { $("mCmpOut").innerHTML = `<div class="warn">Fehler: ${esc(e.message)}</div>`; }
+}
+function mManualDialog(latlng) {
+  const near = csNodes.map((n) => ({ n, d: distKm(latlng.lat, latlng.lng, n.lat, n.lon) })).filter((x) => x.d <= 30)
+    .sort((a, b) => a.d - b.d).slice(0, 40);
+  const div = document.createElement("div"); div.className = "popup";
+  div.innerHTML = `<div class="note">Messung bei ${latlng.lat.toFixed(5)}, ${latlng.lng.toFixed(5)}</div>
+    <label>Repeater<select data-k="rep">${near.map((x) => `<option value="${esc(x.n.pk)}">${esc(x.n.name)} (${fmt(x.d, 1)} km)</option>`).join("")}
+      <option value="">anderer (Präfix eingeben) …</option></select></label>
+    <label class="hidden" data-other>Hex-Präfix oder Schlüssel<input data-k="rep2" placeholder="z. B. a3f1"></label>
+    <div class="grid2"><label>SNR ↓ (dB, beim Messgerät)<input data-k="snr_down" type="number" step="0.25"></label>
+      <label>SNR ↑ (dB, optional)<input data-k="snr_up" type="number" step="0.25"></label></div>
+    <div class="grid2"><label>RSSI (dBm, optional)<input data-k="rssi" type="number" step="1"></label>
+      <label>Antennenhöhe (m, optional)<input data-k="rx_h" type="number" step="0.5"></label></div>
+    <label>Notiz<input data-k="note" maxlength="300"></label>
+    <div class="cs-act"><button class="primary" data-save>Speichern</button></div><div class="note" data-out></div>`;
+  const g = (k) => div.querySelector(`[data-k="${k}"]`);
+  g("rep").onchange = () => div.querySelector("[data-other]").classList.toggle("hidden", !!g("rep").value);
+  if (!near.length) div.querySelector("[data-other]").classList.remove("hidden");
+  div.querySelector("[data-save]").onclick = async () => {
+    const body = { lat: latlng.lat, lon: latlng.lng, rep: g("rep").value || g("rep2").value.trim() };
+    for (const k of ["snr_down", "snr_up", "rssi", "rx_h"]) if (g(k).value !== "") body[k] = +g(k).value;
+    if (g("note").value) body.note = g("note").value;
+    try {
+      await api("/api/measurements", { method: "POST", body });
+      div.querySelector("[data-out]").textContent = "Gespeichert."; map.closePopup(); $("mShowPts").checked = true; mLoad();
+    } catch (e) { div.querySelector("[data-out]").textContent = "Fehler: " + e.message; }
+  };
+  L.popup({ maxWidth: 340 }).setLatLng(latlng).setContent(div).openOn(map);
+}
+function mInit() {
+  for (const id of ["mShowPts", "mShowPlan"]) $(id).onchange = () => { mDraw(); if ($(id).checked && !mRows.length) mLoad(); };
+  $("mDays").onchange = () => { mCmp = null; mLoad(); };
+  $("mRep").onchange = () => { mCmp = null; mLoad(); };
+  $("btnMCmp").onclick = mCompare;
+  $("mCsvFile").onchange = async (e) => {
+    const f = e.target.files[0]; if (!f) return;
+    try {
+      const r = await api("/api/measurements", { method: "POST", body: { csv: await f.text() } });
+      $("mCsvOut").textContent = `${r.stored} gespeichert` + (r.errors.length ? `, ${r.errors.length} Fehler: ${r.errors.slice(0, 3).join("; ")}` : ".");
+      mLoad();
+    } catch (err) { $("mCsvOut").textContent = "Fehler: " + err.message; }
+    e.target.value = "";
+  };
+  $("btnMDel").onclick = async () => {
+    const src = $("mDelSrc").value; if (!src || !confirm(`Alle Messungen der Quelle „${src}“ löschen?`)) return;
+    try { const r = await api("/api/measurements", { method: "DELETE", body: { src } }); status(`${r.deleted} Messungen gelöscht.`); mLoad(); }
+    catch (e) { status("Löschen: " + e.message, "err"); }
+  };
+  if (canAdd() || cfg.site?.measurements_public) mLoad(); else { $("mOff").classList.remove("hidden"); $("mOn").classList.add("hidden"); }
 }
 
 async function csCalibrate(st) {
@@ -1458,13 +1607,25 @@ function wire() {
   document.addEventListener("keydown", (e) => { if (e.key === "Escape") setPlacing(false); });
   map.on("zoomend", renderOvLegend);
   const AC = ["user_enabled", "user_name", "user_password", "parent_name", "parent_url", "show_github", "imprint_mode", "imprint_url",
-    "imprint_name", "imprint_email", "imprint_address", "privacy_mode", "privacy_url", "privacy_extra"];
+    "imprint_name", "imprint_email", "imprint_address", "privacy_mode", "privacy_url", "privacy_extra", "mm_api_key", "measurements_public"];
+  const mmUrl = () => `${location.host}${location.pathname.replace(/\/[^/]*$/, "")}/api/ingest/meshmapper`;
+  const mmLinks = () => {
+    const k = $("ac_mm_api_key").value.trim();
+    $("mmUrl").value = "https://" + mmUrl();
+    $("mmLink").value = k ? `meshmapper://custom-api?url=${mmUrl()}&key=${k}` : "– erst Schlüssel setzen –";
+  };
+  $("ac_mm_api_key").oninput = mmLinks;
+  $("btnMmKey").onclick = () => {
+    const b = crypto.getRandomValues(new Uint8Array(24));
+    $("ac_mm_api_key").value = btoa(String.fromCharCode(...b)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, ""); mmLinks();
+  };
+  $("btnMmCopy").onclick = () => { navigator.clipboard?.writeText($("mmLink").value).then(() => ($("acOut").textContent = "Link kopiert.")); };
   $("btnSettings").onclick = async () => {
     renderSettings(); $("settingsDlg").showModal();
     try {
       const c = await api("/api/admin/appconfig");
       for (const k of AC) { const el = $("ac_" + k); if (el.type === "checkbox") el.checked = !!c[k]; else el.value = c[k] ?? ""; }
-      $("acOut").textContent = "";
+      mmLinks(); $("acOut").textContent = "";
     } catch (e) { $("acOut").textContent = "Fehler: " + e.message; }
   };
   $("btnAcSave").onclick = async () => {
@@ -1613,7 +1774,7 @@ async function init() {
   renderSite();
   $("ver").textContent = !cfg.version ? "" : /^\d/.test(cfg.version) ? "v" + cfg.version : cfg.version;
   wire(); applyRole();
-  csInit().catch((e) => console.warn("CoreScope", e));
+  csInit().catch((e) => console.warn("CoreScope", e)).finally(() => { try { mInit(); } catch (e) { console.warn("Messungen", e); } });
   pollStatus();
   if (isAdmin) bindSettings();
   newProject();

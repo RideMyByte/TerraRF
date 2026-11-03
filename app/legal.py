@@ -104,6 +104,10 @@ TDDDG) und wird beim Schließen des Browsers gelöscht, sofern nicht „angemeld
 {days} Tage). Lokaler Browserspeicher (localStorage) wird nicht verwendet.</p>
 <h2>Kartendarstellung</h2>{maps}
 {cs}
+<h2>Messfahrten</h2><p>Messwerte von Messfahrten (z. B. aus der App MeshMapper) werden mit Ort, Zeit, Signalwerten,
+Funkeinstellungen und gegebenenfalls einer kurzen Gerätekennung gespeichert, um die Rechnung mit der Wirklichkeit zu
+vergleichen. Sie sind nur für angemeldete Nutzer sichtbar, sofern der Betreiber sie nicht freigibt; Besucher sehen dann
+nur Ort und Signalwerte, keine Zeit und keine Gerätekennung. Löschung auf Anfrage beim Betreiber.</p>
 <h2>Projekte</h2><p>Angezeigte Projekte und Stationen werden vom Betreiber angelegt. Von Besuchern werden keine Eingaben
 gespeichert; Berechnungen erfolgen ohne Bezug zu Ihrer Person.</p>
 {extra}

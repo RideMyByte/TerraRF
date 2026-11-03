@@ -13,6 +13,9 @@ D = os.path.join(os.path.dirname(__file__), "data")
 REACH = json.load(open(os.path.join(D, "cs_reach.json")))
 NB = json.load(open(os.path.join(D, "cs_neighbors.json")))
 PK = REACH["node"]["pubkey"]
+OBS = [o["pubkey"] for o in REACH["direct_observers"][:4]]  # diese Observer melden HaldeScholven in ihrer Nachbartabelle
+REPORTS = {o: {"id": o, "name": f"Obs{i}", "neighbor_report": {"neighbors": [{"pubkey": PK, "snr": -2.0 - 3 * i}]}}
+           for i, o in enumerate(OBS)}
 
 
 def _node(i, lat=51.5, lon=7.0, role="repeater"):
@@ -32,6 +35,12 @@ def _handler(req: httpx.Request):
     if p == f"/api/nodes/{PK}":
         return httpx.Response(200, json={"node": {"public_key": PK, "name": "DE-NW-GE-HaldeScholven", "role": "repeater",
                                                   "battery_mv": 4010, "last_seen": "2026-10-31T18:00:00Z"}, "recentAdverts": [{}, {}]})
+    if p == "/api/observers":
+        return httpx.Response(200, json={"observers": [{"id": o, "name": REPORTS[o]["name"], "neighbors_report_at": "x"} for o in OBS]
+                                         + [{"id": "ff" * 32, "name": "ohne Bericht"}]})
+    if p.startswith("/api/observers/"):
+        o = p.rsplit("/", 1)[1]
+        return httpx.Response(200, json=REPORTS[o]) if o in REPORTS else httpx.Response(404)
     if p == "/api/rf-params":
         return httpx.Response(404)
     if p == f"/api/nodes/{PK}/reach":
@@ -51,16 +60,17 @@ def mocked(monkeypatch):
         os.remove(os.path.join(corescope.DIR, f))
 
 
-def test_merge_only_counts_snr_where_partner_is_observer():
-    out = corescope.merge_links(PK, REACH, NB)
-    meas = [l for l in out["links"] if l["snr"] is not None]
-    obs = {o["pubkey"] for o in REACH["direct_observers"]}
-    assert meas and {l["pk"] for l in meas} <= obs | {x["pubkey"] for x in NB["neighbors"] if x["pubkey"] in x["observers"]}
-    # Nachbarn, die nur über andere Observer gesehen wurden, bekommen kein SNR
-    indirect = {x["pubkey"] for x in NB["neighbors"] if x["pubkey"] not in x["observers"]}
-    assert all(l["snr"] is None for l in out["links"] if l["pk"] in indirect)
-    hemer = next(l for l in meas if l["name"] == "DE-NW-MK-Hemer-DH")
-    assert hemer["distance_km"] > 50
+def test_merge_uses_only_direct_neighbor_reports():
+    rep = {"by_neighbor": {PK: [{"observer": o, "name": "x", "snr": -2.0 - 3 * i} for i, o in enumerate(OBS)]}}
+    out = corescope.merge_links(PK, REACH, NB, reports=rep)
+    meas = {l["pk"]: l for l in out["links"] if l["snr"] is not None}
+    assert set(meas) == set(OBS)                                  # nur, was Observer selbst melden
+    assert all(l["snr_src"] == "neighbor_report" for l in meas.values())
+    assert meas[OBS[1]]["snr"] == -5.0
+    # Pfad-abgeleitete Werte bleiben nur als Hinweis
+    assert any(l.get("snr_any") is not None and l["snr"] is None for l in out["links"])
+    none = corescope.merge_links(PK, REACH, NB, reports={"by_neighbor": {}})
+    assert all(l["snr"] is None for l in none["links"])
 
 
 def test_sync_pages_and_filters(mocked):

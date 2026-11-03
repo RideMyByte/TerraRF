@@ -405,6 +405,8 @@ class WCSSource(BaseSource):
                     return None
                 except SourceError as e:  # einzelne Kachel: weiterrechnen, Lücke füllt die Ersatzquelle
                     return str(e)
+                except Exception as e:  # noqa: BLE001 – Netzfehler (Proxy, DNS, Timeout) genauso behandeln
+                    return f"{type(e).__name__}: {e}"
             with ThreadPoolExecutor(max_workers=TILE_WORKERS) as ex:
                 errs = [e for e in ex.map(safe, missing) if e]
             self.failed_tiles = len(errs)
