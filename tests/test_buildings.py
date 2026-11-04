@@ -5,7 +5,7 @@ import os
 import numpy as np
 import pytest
 import rasterio
-from pyproj import Transformer
+from rasterio.warp import transform as _warp
 from rasterio.transform import from_origin
 
 from app import coverage as cov
@@ -13,7 +13,11 @@ from app.terrain import lonlat_to_merc
 
 X0, Y1, RES, N = 360000.0, 5718000.0, 5.0, 800   # 4 km, 5 m
 CX, CY = X0 + 2000, Y1 - 2000
-TR = Transformer.from_crs(25832, 4326, always_xy=True)
+
+
+def _to_ll(x, y):
+    lon, lat = _warp("EPSG:25832", "EPSG:4326", [x], [y])
+    return lon[0], lat[0]
 
 
 @pytest.fixture(scope="module")
@@ -29,7 +33,7 @@ def bldg(terrain):
         with rasterio.open(os.path.join(d, name + ".tif"), "w", driver="GTiff", width=N, height=N, count=1, dtype="float32",
                            crs="EPSG:25832", transform=from_origin(X0, Y1, RES, RES), nodata=-9999) as ds:
             ds.write(arr.astype(np.float32), 1)
-    lon, lat = TR.transform(CX, CY)
+    lon, lat = _to_ll(CX, CY)
     return lat, lon
 
 
@@ -42,7 +46,7 @@ def _proj(lat, lon, res, ant=None):
 
 
 def _at(dx, dy):
-    lon, lat = TR.transform(CX + dx, CY + dy)
+    lon, lat = _to_ll(CX + dx, CY + dy)
     return lat, lon
 
 

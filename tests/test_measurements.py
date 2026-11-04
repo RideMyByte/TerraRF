@@ -68,7 +68,7 @@ def test_manual_csv_plan_and_compare(admin, project):
 
 def test_series_settings_change_model_and_pdf(admin, project):
     import io
-    import pypdf
+    pypdf = pytest.importorskip("pypdf")
     t0 = 1762100000
     batch = {"data": [{"type": "DISC", "lat": 51.565 + i * 0.002, "lon": 7.045, "timestamp": t0 + i * 60, "repeater_id": "ABAB",
                        "public_key": REP, "local_snr": -5.0 - i, "local_rssi": -105 - i, "remote_snr": -6} for i in range(4)]
