@@ -419,12 +419,26 @@ def _can_see_measurements(request):
 
 
 @app.get("/api/measurements")
-def list_measurements(request: Request, bbox: str | None = None, pk: str | None = None, days: float | None = None):
+def list_measurements(request: Request, bbox: str | None = None, pk: str | None = None, days: float | None = None,
+                      series: int | None = None):
     if not _can_see_measurements(request):
         raise HTTPException(401, "Messungen sind nur nach Anmeldung sichtbar")
     bb = [float(v) for v in bbox.split(",")] if bbox else None
-    rows = measurements.query(bb, pk, days, public=not auth.can_edit_any(request))
-    return {"rows": rows, "plan": measurements.plan(rows), "stats": measurements.stats()}
+    pub = not auth.can_edit_any(request)
+    rows = measurements.query(bb, pk, days, public=pub, series=series)
+    return {"rows": rows, "plan": measurements.plan(rows), "stats": measurements.stats(),
+            "series": measurements.series_list(public=pub)}
+
+
+@app.put("/api/measurements/series/{sid}", dependencies=MEMBER)
+def update_series(sid: int, body: dict = Body(...)):
+    try:
+        n = measurements.update_series(sid, body)
+    except ValueError as e:
+        _err(e)
+    if not n:
+        raise HTTPException(404, "Messreihe nicht gefunden")
+    return {"ok": True}
 
 
 @app.post("/api/measurements", dependencies=MEMBER)
@@ -432,16 +446,19 @@ def add_measurements(body: dict = Body(...)):
     try:
         if body.get("csv"):
             rows, errs = measurements.from_csv(str(body["csv"]))
+            skey = f"csv|{time.time():.3f}"   # ein Import = eine Messreihe
         else:
             rows, errs = [measurements.manual(body)], []
+            skey = None
     except (ValueError, csv.Error) as e:
         _err(e)
-    return {"stored": measurements.add(rows), "errors": errs[:50]}
+    return {"stored": measurements.add(rows, skey=skey), "errors": errs[:50]}
 
 
 @app.delete("/api/measurements", dependencies=ADMIN)
 def delete_measurements(body: dict = Body(...)):
-    return {"deleted": measurements.delete(ids=[int(i) for i in body.get("ids") or []], src=body.get("src"))}
+    return {"deleted": measurements.delete(ids=[int(i) for i in body.get("ids") or []], src=body.get("src"),
+                                           series=body.get("series"))}
 
 
 @app.post("/api/measurements/compare")
@@ -457,7 +474,8 @@ async def compare_measurements(request: Request, body: dict = Body(...)):
         raise HTTPException(400, "Station ist nicht mit einem Repeater verknüpft – Messungen werden über den Repeater zugeordnet")
     rows = measurements.query(None, pk, body.get("days"))
     try:
-        return await run_in_threadpool(cov.compare_measurements, project, st["id"], rows, body.get("rx_gain_dbi"))
+        return await run_in_threadpool(cov.compare_measurements, project, st["id"], rows, body.get("rx_gain_dbi"),
+                                       measurements.series_map())
     except (ValueError, KeyError, terrain.SourceError) as e:
         _err(e)
 

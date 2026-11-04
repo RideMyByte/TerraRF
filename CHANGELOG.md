@@ -2,6 +2,29 @@
 
 ## [Unreleased]
 
+## 0.4.6
+### Neu
+- Vergleich mit dem Modell in einer Karte: CoreScope (Repeater ↔ Repeater, nur direkt gemeldete Nachbar-SNR, 0 Hop)
+  und Messfahrten (Repeater → Handy) getrennt wählbar, Übersicht je Quelle, Quelle an jeder Zeile (CS/MM/✎/CSV) (#21)
+- Messreihen: Fahrten werden automatisch getrennt (Pause > 30 min); je Reihe Name, Antennenhöhe, Gewinn, Kabel,
+  externe Antenne und Notiz – der Vergleich rechnet mit diesen Angaben (#22)
+- Repeater oder verknüpfte Station antippen zeigt automatisch deren Messungen; Klick auf einen Messpunkt zeigt alle
+  Daten (SNR ↑/↓, RSSI, Rauschen, Leistung, Messreihe, Modellwert) (#22)
+- Station angetippt: nur ihre Abdeckung wird gezeigt, „alle Stationen zeigen“ oben auf der Karte (#19)
+- Abstrahlsektor je Station (z. B. Antenne an einer Hauswand): außerhalb gedämpft, ohne Richtcharakteristik (#23)
+- Station „auf der Karte neu setzen“ im Editor (#24)
+### Geändert
+- Modell 9: Umkreis der Station (Standard 150 m) wird in 5 m abgetastet, Gebäude direkt an der Antenne schatten
+  jetzt unabhängig von der Rechenauflösung ab; die Antennenzelle selbst gilt als frei (#23)
+- Empfänger-Nahbereich (P.2108) höchstens die halbe Strecke – bei kurzen Strecken verschwanden Gebäude zwischen
+  Sender und Empfänger sonst ganz aus der Beugung (#25). Alle Stationen werden einmal neu gerechnet
+- Stationen lassen sich nicht mehr auf der Karte ziehen (#24)
+- Messpunkte als weicher Farbfleck, Repeater als größere Kreise (#20)
+- MeshCore: Filter steht über der Nachbarliste (#18)
+- Profil: Legende „Oberfläche (Gebäude, Bäume)“, Zeile „Durch Objekte“ statt „Hindernisse durchquert“ (#25)
+### Behoben
+- PDF-Bericht: „Vergleich nicht möglich: 'list' object has no attribute 'get'“ (#21)
+
 ## 0.4.5
 ### Neu
 - Messfahrten: MeshMapper-Weiterleitung („Custom API Endpoint“) nach `/api/ingest/meshmapper` mit API-Schlüssel;

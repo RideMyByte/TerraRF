@@ -167,8 +167,16 @@ Eigene Messungen sind der verlässlichste Abgleich. TerraRF nimmt sie auf drei W
 2. **Von Hand**: Rechtsklick (Handy: lange tippen) → „Messung hier eintragen“.
 3. **CSV**: Kopfzeile `lat;lon;rep;snr_down`, optional `snr_up;rssi;ts;rx_h;note` (Trenner `;` oder `,`, Dezimalkomma geht).
 
-Im Reiter „MeshCore“ → *Messfahrten*: Messpunkte (Farbe nach SNR), **Messplan** und **Vergleich mit dem Modell** für
-eine mit einem Repeater verknüpfte Station (Δ SNR und Δ RSSI; Punkte danach nach Δ gefärbt; auch im PDF-Bericht).
+Im Reiter „MeshCore“ → *Messfahrten*: Messpunkte (Farbfleck nach SNR, antippen zeigt alle Daten), **Messplan** und
+**Messreihen**. Eine Messreihe ist eine Fahrt (Pause über 30 min trennt, ein CSV-Import ist eine Reihe); je Reihe lassen
+sich Antennenhöhe, Gewinn, Kabel, externe Antenne und eine Notiz eintragen. Einen Repeater oder eine verknüpfte Station
+antippen zeigt automatisch nur deren Messungen.
+
+**Vergleich mit dem Modell** (eigene Karte im Reiter, auch im PDF-Bericht), getrennt nach Quelle:
+- **CS – CoreScope, Repeater ↔ Repeater**: SNR, das ein Partner-Repeater in seiner Nachbartabelle für ein direkt gehörtes
+  Advert der Station meldet (0 Hop). Modell: Strecke Station → Partner mit dessen Höhe/Gewinn.
+- **MM – Messfahrten, Repeater → Handy**: SNR und RSSI am Handy. Modell: Abdeckung der Station am Messort mit Höhe und
+  Gewinn der Messreihe (je vorkommender Höhe wird die Abdeckung einmal gerechnet).
 Nahe am Repeater sagt SNR nichts – LoRa meldet höchstens etwa 10 dB –, dort zählt nur RSSI.
 Messplan: eine ~300-m-Zelle (das Raster von MeshMapper) gilt als **genug**, wenn ein Repeater dort mindestens 3 Messungen
 mit höchstens 6 dB Streuung hat; orange Zellen lohnen eine weitere Fahrt. Die App selbst lässt sich von TerraRF nicht
@@ -190,7 +198,16 @@ Gesamtdämpfung = Freiraum + Bodenreflexion + Beugung + Hindernisse + Clutter am
   γ ≈ 0,16 dB/m, Am ≈ 25 dB (Tabelle P.833-8, frequenzinterpoliert). Kommt zur Beugung dazu.
 * **Clutter am Empfänger** (ITU-R P.2108 §3.1): Zuschlag, wenn der Empfänger unter der
   umgebenden Bebauung steht (bei 1,5 m und 869 MHz ≈ 18 dB vorstädtisch, ≈ 22 dB städtisch).
-  „Automatisch“ bestimmt die Höhe aus Oberfläche − Gelände im Nahbereich des Empfängers.
+  „Automatisch“ bestimmt die Höhe aus Oberfläche − Gelände im Nahbereich des Empfängers
+  (Standard 60 m, höchstens die halbe Strecke – Hindernisse davor zählen voll in der Beugung).
+* **Nahfeld der Station**: Bis 150 m um die Antenne wird das Profil in 5 m abgetastet, auch wenn mit 10 oder 25 m
+  gerechnet wird. So schattet ein Gebäude direkt neben der Antenne die Richtung dahinter ab, statt im groben Raster
+  zu verschwimmen. Die eigene 5-m-Zelle der Antenne gilt als frei.
+* **Abstrahlsektor** (je Station, optional): für Antennen an einer Wand o. Ä. – außerhalb des Sektors zusätzliche
+  Dämpfung mit weichem Rand, innerhalb unverändert.
+* **Gebäude vs. Bäume**: Das Oberflächenmodell (DOM) enthält beides, ohne sie zu unterscheiden. Beugung rechnet über
+  beides; die P.833-Dämpfung „durch Objekte“ behandelt Gebäude wie dichten Bewuchs (höchstens ≈ 25 dB) –
+  eine Mauer ist meist undurchlässiger.
 * **Bodenreflexion**: 2-Strahl-Zuschlag bei freier Sicht.
 * **Empfänger**: Antennengewinn (Standard 0 dBi), Zusatzverlust (Körper/Gebäude),
   Rauschanhebung, **Fading-/Standortreserve** (Standard 10 dB, Regler an der Karte).

@@ -170,8 +170,11 @@ def endpoint_terms(d, z, zt, zg, nd, gsum, j, ztx, tx_agl, rx_h, lam, f_mhz, mod
     zrx = zg[j] + rx_h
     lo = j
     R_dsm = 0.0
+    # Nahbereich höchstens die halbe Strecke: sonst verschwinden bei kurzen Strecken Hindernisse zwischen
+    # Sender und Empfänger ganz aus der Beugung (#25)
+    ex = min(excl_m, 0.5 * d[j])
     if clut_mode > 0 and excl_m > 0.0:
-        while lo > 1 and d[j] - d[lo - 1] <= excl_m:
+        while lo > 1 and d[j] - d[lo - 1] <= ex:
             lo -= 1
         for i in range(lo, j + 1):
             if nd[i] > R_dsm:
@@ -225,9 +228,13 @@ def endpoint_terms(d, z, zt, zg, nd, gsum, j, ztx, tx_agl, rx_h, lam, f_mhz, mod
 
 @njit(parallel=True, cache=True, fastmath=True)
 def coverage_rays(G, S, sx, sy, cs, kscale, ztx_abs, tx_agl, rx_h, lam, f_mhz, n_rays, n_bins, step, sub, re,
-                  model, clut_mode, excl_m, cl_R, cl_typ, fl_R, fl_typ, two_ray, veg_g, veg_am, a0, a1):
+                  model, clut_mode, excl_m, cl_R, cl_typ, fl_R, fl_typ, two_ray, veg_g, veg_am, a0, a1,
+                  G2, S2, sx2, sy2, cs2, rnear):
     """Radial sweep. Returns per (ray, bin): diffraction, v_main, dz, clutter, reflection,
-    obstacle/vegetation loss, and visibility of the surface (roof/tree top) from the antenna."""
+    obstacle/vegetation loss, and visibility of the surface (roof/tree top) from the antenna.
+    G2/S2: feines Raster (Zellgröße cs2) um die Station. Bis rnear (m) läuft das Profil intern in feinen Schritten
+    aus diesem Raster, damit Gebäude direkt neben der Antenne nicht im groben Rechenraster verschmieren und
+    mit Vorder- und Hinterkante in die Beugung eingehen (#23). Ausgegeben wird weiter je grobem Bin. rnear <= 0: aus."""
     shape = (a1 - a0, n_bins + 1)  # nur Strahlen a0..a1-1 (Fortschritt in Blöcken)
     o_diff = np.zeros(shape, dtype=np.float32)
     o_v = np.full(shape, -1e9, dtype=np.float32)
@@ -236,58 +243,105 @@ def coverage_rays(G, S, sx, sy, cs, kscale, ztx_abs, tx_agl, rx_h, lam, f_mhz, n
     o_pe = np.zeros(shape, dtype=np.float32)
     o_veg = np.zeros(shape, dtype=np.float32)
     o_vis = np.zeros(shape, dtype=np.int8)
+    # interne Stützstellen: fein bis zur Nahfeldgrenze (auf grobe Bins ausgerichtet), dann die groben Bins
+    fs = cs2 * kscale
+    c0 = 0
+    nf = 0
+    if rnear > 0.0 and step > fs * 1.01:
+        c0 = int(rnear / step)                     # grobe Bins 1..c0 liegen im Nahfeld
+        if c0 > n_bins:
+            c0 = n_bins
+        nf = int(((c0 + 0.5) * step) / fs)         # feine Punkte k*fs, k = 1..nf
+    n_int = nf + (n_bins - c0)
+    out_q = np.empty(n_bins + 1, dtype=np.int64)  # grober Bin -> interner Index
+    out_q[0] = 0
+    for jj in range(1, n_bins + 1):
+        if jj <= c0:
+            q = int(jj * step / fs + 0.5)
+            if q < 1:
+                q = 1
+            if q > nf:
+                q = nf
+            out_q[jj] = q
+        else:
+            out_q[jj] = nf + (jj - c0)
+    is_out = np.zeros(n_int + 1, dtype=np.int64) - 1
+    for jj in range(1, n_bins + 1):
+        is_out[out_q[jj]] = jj
     for r in prange(a1 - a0):
         a = a0 + r
         th = 2.0 * math.pi * a / n_rays
         ux = math.sin(th) / (kscale * cs)
         uy = -math.cos(th) / (kscale * cs)
-        d = np.empty(n_bins + 1, dtype=np.float64)
-        z = np.empty(n_bins + 1, dtype=np.float64)
-        zg = np.empty(n_bins + 1, dtype=np.float64)
-        nd = np.empty(n_bins + 1, dtype=np.float64)
-        gsum = np.empty(n_bins + 1, dtype=np.float64)
+        ux2 = math.sin(th) / (kscale * cs2)
+        uy2 = -math.cos(th) / (kscale * cs2)
+        d = np.empty(n_int + 1, dtype=np.float64)
+        z = np.empty(n_int + 1, dtype=np.float64)
+        zg = np.empty(n_int + 1, dtype=np.float64)
+        nd = np.empty(n_int + 1, dtype=np.float64)
+        gsum = np.empty(n_int + 1, dtype=np.float64)
         d[0] = 0.0
         z[0] = ztx_abs
         zg[0] = 0.0
         nd[0] = 0.0
         gsum[0] = 0.0
         acc = 0.0
-        for i in range(1, n_bins + 1):
-            dc = i * step
+        for q in range(1, n_int + 1):
             mx = -1e9
-            for k in range(sub):
-                dd = dc - 0.5 * step + (k + 0.5) * step / sub
-                v = sample(S, sx + ux * dd, sy + uy * dd)
-                if v > mx:
-                    mx = v
-            g = sample(G, sx + ux * dc, sy + uy * dc)
+            if q <= nf:  # feines Nahfeld
+                dc = q * fs
+                lo_d = dc - 0.5 * fs
+                if q == 1:
+                    lo_d = 0.6 * fs  # eigene feine Zelle der Antenne auslassen
+                hi_d = dc + 0.5 * fs
+                for k in range(3):
+                    dd = lo_d + (k + 0.5) * (hi_d - lo_d) / 3.0
+                    v = sample(S2, sx2 + ux2 * dd, sy2 + uy2 * dd)
+                    if v > mx:
+                        mx = v
+                g = sample(G2, sx2 + ux2 * dc, sy2 + uy2 * dc)
+            else:
+                i = c0 + (q - nf)
+                dc = i * step
+                lo_d = dc - 0.5 * step
+                if nf > 0 and lo_d < nf * fs + 0.5 * fs:
+                    lo_d = nf * fs + 0.5 * fs  # direkt an das Nahfeld anschließen
+                hi_d = dc + 0.5 * step
+                for k in range(sub):
+                    dd = lo_d + (k + 0.5) * (hi_d - lo_d) / sub
+                    v = sample(S, sx + ux * dd, sy + uy * dd)
+                    if v > mx:
+                        mx = v
+                g = sample(G, sx + ux * dc, sy + uy * dc)
             if mx < g:
                 mx = g
             bulge = dc * dc / (2.0 * re)
-            d[i] = dc
-            z[i] = mx - bulge
-            zg[i] = g - bulge
-            nd[i] = mx - g
+            d[q] = dc
+            z[q] = mx - bulge
+            zg[q] = g - bulge
+            nd[q] = mx - g
             acc += g
-            gsum[i] = acc
+            gsum[q] = acc
         zt = z.copy()
         max_slope = -1e18
-        for j in range(1, n_bins + 1):
-            # optical visibility of the surface (+1 m) at bin j from the antenna
-            if (z[j] + 1.0 - ztx_abs) / d[j] >= max_slope:
-                o_vis[r, j] = 1
-            sl = (z[j] - ztx_abs) / d[j]
-            ldiff, v1, lcl, lpe, _r, lveg, _dv = endpoint_terms(
-                d, z, zt, zg, nd, gsum, j, ztx_abs, tx_agl, rx_h, lam, f_mhz,
-                model, clut_mode, excl_m, cl_R, cl_typ, fl_R, fl_typ, two_ray, veg_g, veg_am)
+        for q in range(1, n_int + 1):
+            j = is_out[q]
+            if j > 0:
+                # optical visibility of the surface (+1 m) at bin j from the antenna
+                if (z[q] + 1.0 - ztx_abs) / d[q] >= max_slope:
+                    o_vis[r, j] = 1
+                ldiff, v1, lcl, lpe, _r, lveg, _dv = endpoint_terms(
+                    d, z, zt, zg, nd, gsum, q, ztx_abs, tx_agl, rx_h, lam, f_mhz,
+                    model, clut_mode, excl_m, cl_R, cl_typ, fl_R, fl_typ, two_ray, veg_g, veg_am)
+                o_veg[r, j] = lveg
+                o_diff[r, j] = ldiff
+                o_v[r, j] = v1
+                o_dz[r, j] = zg[q] + rx_h - ztx_abs
+                o_cl[r, j] = lcl
+                o_pe[r, j] = lpe
+            sl = (z[q] - ztx_abs) / d[q]
             if sl > max_slope:
                 max_slope = sl
-            o_veg[r, j] = lveg
-            o_diff[r, j] = ldiff
-            o_v[r, j] = v1
-            o_dz[r, j] = zg[j] + rx_h - ztx_abs
-            o_cl[r, j] = lcl
-            o_pe[r, j] = lpe
     return o_diff, o_v, o_dz, o_cl, o_pe, o_veg, o_vis
 
 
@@ -342,7 +396,21 @@ def antenna_gain(az_deg, elev_deg, ant):
         daz = (az_deg - float(ant.get("azimuth_deg", 0.0) or 0.0) + 180.0) % 360.0 - 180.0
         att_h = np.minimum(12.0 * (daz / hbw) ** 2, fb)
         att = np.minimum(att_h + att_v, fb)
+    att = att + sector_loss(az_deg, ant)
     return g - att
+
+
+def sector_loss(az_deg, ant):
+    """#23: freier Abstrahlsektor (z. B. Antenne an einer Hauswand). Außerhalb des Sektors zusätzlich sector_loss_db,
+    mit 15° weichem Übergang an den Rändern – keine Richtcharakteristik, innerhalb bleibt der Rundstrahler unverändert."""
+    if not ant.get("sector_on"):
+        return 0.0
+    width = min(359.0, max(10.0, float(ant.get("sector_width_deg", 180.0) or 180.0)))
+    loss = max(0.0, float(ant.get("sector_loss_db", 25.0) or 0.0))
+    daz = np.abs((np.asarray(az_deg, dtype=np.float64) - float(ant.get("sector_az_deg", 0.0) or 0.0) + 180.0) % 360.0 - 180.0)
+    edge = 15.0
+    t = np.clip((daz - width / 2.0) / edge + 0.5, 0.0, 1.0)  # 0 innen, 1 außen
+    return loss * t
 
 
 def auto_vbw(ant):
@@ -410,4 +478,4 @@ def clutter_params(s):
 def warmup():
     G = np.zeros((20, 20), dtype=np.float32)
     coverage_rays(G, G, 10.0, 10.0, 10.0, 0.6, 10.0, 10.0, 1.5, 0.35, 869.0, 8, 5, 10.0, 2, 8.5e6,
-                  0, 1, 30.0, 0.0, 0, 10.0, 0, True, 0.17, 26.5, 0, 8)
+                  0, 1, 30.0, 0.0, 0, 10.0, 0, True, 0.17, 26.5, 0, 8, G, G, 10.0, 10.0, 5.0, 50.0)

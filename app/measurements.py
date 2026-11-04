@@ -28,6 +28,8 @@ _REP = re.compile(r"([0-9A-Fa-f]{2,64})\s*\(\s*(-?\d+(?:\.\d+)?|null|None)?\s*\)
 
 COLS = ("ts", "src", "kind", "lat", "lon", "alt", "rep_prefix", "rep_pk", "snr_down", "snr_up", "rssi_down",
         "noise", "power", "ext_ant", "radio", "contact", "rx_h", "note")
+SERIES_GAP_S = 1800   # neue Messreihe nach 30 min Pause
+SERIES_EDIT = ("name", "rx_h", "rx_gain_dbi", "rx_cable_db", "ext_ant", "note")
 
 
 def _db():
@@ -43,6 +45,15 @@ def init():
             ext_ant INTEGER, radio TEXT, contact TEXT, rx_h REAL, note TEXT, uniq TEXT UNIQUE)""")
         c.execute("CREATE INDEX IF NOT EXISTS m_pk ON m(rep_pk)")
         c.execute("CREATE INDEX IF NOT EXISTS m_ll ON m(lat, lon)")
+        # Messreihen (#22): zusammenhängende Fahrten mit gemeinsamen Angaben zur Empfangsantenne
+        c.execute("""CREATE TABLE IF NOT EXISTS series (id INTEGER PRIMARY KEY, src TEXT, skey TEXT, t0 INTEGER, t1 INTEGER,
+            name TEXT, rx_h REAL, rx_gain_dbi REAL, rx_cable_db REAL, ext_ant INTEGER, note TEXT)""")
+        if "series_id" not in [r[1] for r in c.execute("PRAGMA table_info(m)")]:
+            c.execute("ALTER TABLE m ADD COLUMN series_id INTEGER")
+        c.execute("CREATE INDEX IF NOT EXISTS m_series ON m(series_id)")
+        todo = c.execute("SELECT id, ts, src, contact, power, ext_ant FROM m WHERE series_id IS NULL ORDER BY ts").fetchall()
+        for r in todo:  # alte Daten nachträglich in Reihen einteilen
+            c.execute("UPDATE m SET series_id = ? WHERE id = ?", (_series_for(c, dict(r)), r["id"]))
 
 
 def _f(v):
@@ -107,7 +118,28 @@ def from_meshmapper(item):
     return [r for r in out if r["snr_down"] is not None or r["snr_up"] is not None]
 
 
-def add(rows):
+def _skey(r):
+    if r.get("src") == "meshmapper":  # je Gerät/Leistung/Antenne eine Reihe
+        return "|".join(str(r.get(k) or "") for k in ("src", "contact", "power", "ext_ant"))
+    return str(r.get("src") or "manual")
+
+
+def _series_for(c, r, skey=None):
+    """Passende Messreihe (gleiche Quelle/Gerät, höchstens 30 min Abstand) oder eine neue."""
+    skey = skey or _skey(r)
+    ts = int(r.get("ts") or time.time())
+    hit = c.execute("SELECT id, t0, t1 FROM series WHERE skey = ? AND t0 - ? <= ? AND t1 + ? >= ? ORDER BY t1 DESC LIMIT 1",
+                    (skey, SERIES_GAP_S, ts, SERIES_GAP_S, ts)).fetchone()
+    if hit:
+        c.execute("UPDATE series SET t0 = MIN(t0, ?), t1 = MAX(t1, ?) WHERE id = ?", (ts, ts, hit[0]))
+        return hit[0]
+    ext = 1 if r.get("ext_ant") else None
+    cur = c.execute("INSERT INTO series (src, skey, t0, t1, ext_ant) VALUES (?,?,?,?,?)", (r.get("src"), skey, ts, ts, ext))
+    return cur.lastrowid
+
+
+def add(rows, skey=None):
+    """skey: alle Zeilen in eine eigene Reihe (z. B. ein CSV-Import)."""
     if not rows:
         return 0
     n = 0
@@ -119,8 +151,11 @@ def add(rows):
                     "AND ABS(lat - ?) < 0.0005 AND ABS(lon - ?) < 0.0008 LIMIT 1",
                     (r["rep_prefix"], r["snr_down"], r["ts"], r["lat"], r["lon"])).fetchone():
                 continue
-            cur = c.execute(f"INSERT OR IGNORE INTO m ({','.join(COLS)},uniq) VALUES ({','.join('?' * (len(COLS) + 1))})",
-                            [r.get(k) for k in COLS] + [r["uniq"]])
+            if c.execute("SELECT 1 FROM m WHERE uniq = ?", (r["uniq"],)).fetchone():
+                continue
+            sid = _series_for(c, r, skey)
+            cur = c.execute(f"INSERT OR IGNORE INTO m ({','.join(COLS)},uniq,series_id) VALUES ({','.join('?' * (len(COLS) + 2))})",
+                            [r.get(k) for k in COLS] + [r["uniq"], sid])
             n += cur.rowcount
     return n
 
@@ -153,8 +188,11 @@ def from_csv(text):
     return rows, errs
 
 
-def query(bbox=None, pk=None, days=None, public=False):
+def query(bbox=None, pk=None, days=None, public=False, series=None):
     sql, args = "SELECT * FROM m WHERE 1=1", []
+    if series:
+        sql += " AND series_id = ?"
+        args.append(int(series))
     if bbox:
         sql += " AND lat BETWEEN ? AND ? AND lon BETWEEN ? AND ?"
         args += [bbox[0], bbox[2], bbox[1], bbox[3]]
@@ -175,13 +213,61 @@ def query(bbox=None, pk=None, days=None, public=False):
     return rows
 
 
-def delete(ids=None, src=None):
+def delete(ids=None, src=None, series=None):
+    n = 0
     with _lock, _db() as c:
         if ids:
-            return c.execute(f"DELETE FROM m WHERE id IN ({','.join('?' * len(ids))})", list(ids)).rowcount
-        if src:
-            return c.execute("DELETE FROM m WHERE src = ?", (src,)).rowcount
-    return 0
+            n = c.execute(f"DELETE FROM m WHERE id IN ({','.join('?' * len(ids))})", list(ids)).rowcount
+        elif series:
+            n = c.execute("DELETE FROM m WHERE series_id = ?", (int(series),)).rowcount
+        elif src:
+            n = c.execute("DELETE FROM m WHERE src = ?", (src,)).rowcount
+        c.execute("DELETE FROM series WHERE id NOT IN (SELECT DISTINCT series_id FROM m WHERE series_id IS NOT NULL)")
+    return n
+
+
+def series_list(public=False):
+    """Messreihen mit Zählung, Zeitraum und den Angaben zur Empfangsantenne."""
+    with _db() as c:
+        out = []
+        for r in c.execute("""SELECT s.*, COUNT(m.id) AS n, COUNT(DISTINCT COALESCE(m.rep_pk, m.rep_prefix)) AS repeaters,
+                MAX(m.ext_ant) AS ext_seen, MAX(m.power) AS power_seen, MAX(m.radio) AS radio_seen, MIN(m.lat) AS s_, MAX(m.lat) AS n_,
+                MIN(m.lon) AS w_, MAX(m.lon) AS e_
+                FROM series s JOIN m ON m.series_id = s.id GROUP BY s.id ORDER BY s.t1 DESC"""):
+            d = dict(r)
+            d["bounds"] = [d.pop("s_"), d.pop("w_"), d.pop("n_"), d.pop("e_")]
+            d.pop("skey", None)
+            if public:
+                for k in ("t0", "t1", "note", "power_seen"):
+                    d.pop(k, None)
+            out.append(d)
+    return out
+
+
+def series_map():
+    with _db() as c:
+        return {r["id"]: dict(r) for r in c.execute("SELECT * FROM series")}
+
+
+def update_series(sid, d):
+    vals = {}
+    for k in SERIES_EDIT:
+        if k not in d:
+            continue
+        v = d[k]
+        if k in ("name", "note"):
+            vals[k] = (str(v or "").strip()[:120 if k == "name" else 500]) or None
+        elif k == "ext_ant":
+            vals[k] = None if v in (None, "") else (1 if v else 0)
+        else:
+            f = _f(v)
+            if f is not None and not (-50 <= f <= 500):
+                raise ValueError(f"{k}: unplausibler Wert")
+            vals[k] = f
+    if not vals:
+        return 0
+    with _lock, _db() as c:
+        return c.execute(f"UPDATE series SET {', '.join(k + ' = ?' for k in vals)} WHERE id = ?", [*vals.values(), int(sid)]).rowcount
 
 
 def stats():

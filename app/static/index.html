@@ -78,15 +78,10 @@
           <p class="note">Repeater oder verknüpfte Station antippen: Infos und Aktionen. Erneut antippen hebt die Auswahl auf.</p>
         </div>
 
-        <div class="card" id="csSelCard">
-          <div class="cardhead">Auswahl</div>
-          <div id="csSel"></div>
-        </div>
-
         <details class="card" id="csFilterCard">
           <summary class="cardhead">Filter für Nachbarn <span id="csFilterShort" class="note"></span></summary>
           <label class="chk" style="margin-top:6px"><input type="checkbox" id="csBidir" checked> nur beidseitig beobachtete</label>
-          <label class="chk" style="margin-top:2px"><input type="checkbox" id="csMeas" checked> gemessene Partner immer zeigen</label>
+          <label class="chk" style="margin-top:2px"><input type="checkbox" id="csMeas" checked> direkt gemeldete Partner immer zeigen</label>
           <label title="Wie oft der Nachbar den gewählten Repeater gehört hat (→)">Tx mindestens <b id="csMinTxVal"></b>×<input type="range" id="csMinTx" min="0" max="500" value="10"></label>
           <label title="Wie oft der gewählte Repeater den Nachbarn gehört hat (←)">Rx mindestens <b id="csMinRxVal"></b>×<input type="range" id="csMinRx" min="0" max="500" value="10"></label>
           <label>SNR mindestens <b id="csSnrVal"></b><input type="range" id="csSnr" min="-21" max="15" step="1" value="-21"></label>
@@ -95,17 +90,9 @@
           <p class="note">Kurze Hop-Präfixe können falsche Nachbarn erzeugen; „beidseitig“ und eine Mindestanzahl blenden die meisten aus. Derselbe Filter gilt für den Abgleich.</p>
         </details>
 
-        <div class="card">
-          <div class="cardhead">Abgleich Modell ↔ Messung</div>
-          <label>Station (mit Repeater verknüpft)<select id="calSt"></select></label>
-          <details><summary class="note">Standardwerte für Partner ohne eigene Angaben</summary>
-            <div class="grid3">
-              <label>Höhe (m)<input id="calH" type="number" value="10" step="1"></label>
-              <label>Gewinn (dBi)<input id="calG" type="number" value="3" step="0.5"></label>
-              <label>Kabel (dB)<input id="calC" type="number" value="1" step="0.5"></label>
-            </div></details>
-          <button id="btnCalRun" class="primary" style="width:100%;margin-top:6px">▶ Abgleich rechnen</button>
-          <div id="calOut"></div>
+        <div class="card" id="csSelCard">
+          <div class="cardhead">Auswahl</div>
+          <div id="csSel"></div>
         </div>
 
         <details class="card">
@@ -115,28 +102,59 @@
         </details>
       </div>
 
+      <div class="card" id="cmpCard">
+        <div class="cardhead">Vergleich mit dem Modell</div>
+        <label>Station (mit Repeater verknüpft)<select id="calSt"></select></label>
+        <label class="chk" style="margin-top:4px"><input type="checkbox" id="cmpCs" checked> <span class="srcb cs">CS</span> CoreScope: Repeater ↔ Repeater, direkt (0 Hop)</label>
+        <label class="chk"><input type="checkbox" id="cmpMm" checked> <span class="srcb mm">MM</span> Messfahrten: Repeater → Handy</label>
+        <details><summary class="note">Was wird womit verglichen?</summary>
+          <p class="note"><span class="srcb cs">CS</span> <b>Gemessen</b>: SNR, das ein Partner-Repeater in seiner Nachbartabelle für ein
+            <i>direkt</i> gehörtes Advert der Station an CoreScope meldet (0 Hop; aus Paketpfaden abgeleitete Werte zählen nicht).
+            <b>Modell</b>: Strecke Station → Partner mit dessen Höhe und Gewinn (Werte der Station im Projekt, sonst eigene Angabe
+            zum Repeater, sonst die Standardwerte unten). Es zählen die Partner, die der Nachbarfilter oben zeigt.</p>
+          <p class="note"><span class="srcb mm">MM</span> <b>Gemessen</b>: SNR (und RSSI) am Handy für den direkt gehörten Repeater
+            – MeshMapper-DISC-Antwort oder -Echo, von Hand oder CSV. <b>Modell</b>: berechnete Abdeckung der Station am Messort mit
+            Empfängerhöhe und Antennengewinn der jeweiligen Messreihe (sonst Projekt-Einstellungen).</p>
+          <p class="note">Δ = gemessen − Modell, negativ heißt: das Modell ist zu optimistisch. SNR-Werte am oberen Ende (≈ 10 dB)
+            zählen nicht, dort sagt nur RSSI etwas.</p>
+        </details>
+        <details><summary class="note">CoreScope: Standardwerte für Partner ohne eigene Angaben</summary>
+          <div class="grid3">
+            <label>Höhe (m)<input id="calH" type="number" value="10" step="1"></label>
+            <label>Gewinn (dBi)<input id="calG" type="number" value="3" step="0.5"></label>
+            <label>Kabel (dB)<input id="calC" type="number" value="1" step="0.5"></label>
+          </div></details>
+        <button id="btnCalRun" class="primary" style="width:100%;margin-top:6px">▶ Vergleichen</button>
+        <div id="cmpSum"></div>
+        <div id="calOut"></div>
+        <div id="mCmpOut"></div>
+      </div>
+
       <div class="card" id="mCard">
         <div class="cardhead">Messfahrten <span id="mShort" class="note"></span></div>
         <div id="mOff" class="note hidden">Messungen sind nur für angemeldete Nutzer sichtbar.</div>
         <div id="mOn">
           <div id="mStats" class="note"></div>
+          <div id="mFocus" class="note hidden"></div>
           <label class="chk"><input type="checkbox" id="mShowPts"> Messpunkte zeigen</label>
           <label class="chk"><input type="checkbox" id="mShowPlan"> Messplan zeigen (grün = genug, orange = weiter messen)</label>
-          <label>Zeitraum<select id="mDays"><option value="">alles</option><option value="1">letzter Tag</option><option value="7">7 Tage</option>
-            <option value="30">30 Tage</option><option value="365">1 Jahr</option></select></label>
-          <label>Repeater<select id="mRep"><option value="">alle</option></select></label>
-          <p class="note">Messplan: eine ~300-m-Zelle gilt als „genug“, wenn ein Repeater dort mindestens 3 Messungen mit höchstens 6 dB Streuung hat.</p>
-          <h4>Vergleich mit dem Modell</h4>
-          <label>Station (mit Repeater verknüpft)<select id="mCmpSt"></select></label>
-          <button id="btnMCmp" class="primary" style="width:100%">▶ Messungen vergleichen</button>
-          <div id="mCmpOut"></div>
+          <div class="grid2">
+            <label>Zeitraum<select id="mDays"><option value="">alles</option><option value="1">letzter Tag</option><option value="7">7 Tage</option>
+              <option value="30">30 Tage</option><option value="365">1 Jahr</option></select></label>
+            <label>Repeater<select id="mRep"><option value="">alle</option></select></label>
+          </div>
+          <p class="note">Messplan: eine ~300-m-Zelle gilt als „genug“, wenn ein Repeater dort mindestens 3 Messungen mit höchstens 6 dB Streuung hat.
+            Einen Repeater antippen zeigt nur seine Messungen.</p>
+          <h4>Messreihen</h4>
+          <p class="note">Eine Reihe = eine Fahrt (Pause &gt; 30 min trennt). Angaben zur Empfangsantenne gelten für den Vergleich.</p>
+          <div id="mSeries"></div>
           <details class="member-only" style="margin-top:8px"><summary class="note">Messungen eintragen / importieren</summary>
             <p class="note">Einzeln: Rechtsklick (Handy: lange tippen) in die Karte → „Messung hier eintragen“.
-              CSV mit Kopfzeile: <code>lat;lon;rep;snr_down</code>, optional <code>snr_up;rssi;ts;rx_h;note</code> (Trenner ; oder , – Dezimalkomma geht).</p>
+              CSV mit Kopfzeile: <code>lat;lon;rep;snr_down</code>, optional <code>snr_up;rssi;ts;rx_h;note</code> (Trenner ; oder , – Dezimalkomma geht). Ein Import = eine Messreihe.</p>
             <input type="file" id="mCsvFile" accept=".csv,text/csv,text/plain">
             <div id="mCsvOut" class="note"></div>
           </details>
-          <details class="admin-only" style="margin-top:4px"><summary class="note">Löschen</summary>
+          <details class="admin-only" style="margin-top:4px"><summary class="note">Löschen nach Quelle</summary>
             <div class="row"><select id="mDelSrc"></select><button id="btnMDel">Quelle löschen</button></div>
           </details>
         </div>
@@ -158,6 +176,7 @@
     <div id="mstatus" role="status"></div>
     <div id="stPanel" class="hidden" role="dialog" aria-label="Station bearbeiten"><div id="editor"></div></div>
     <div id="ovLegend" class="hidden"></div>
+    <div id="soloChip" class="hidden"><span id="soloText"></span><button type="button" id="soloOff">alle Stationen zeigen</button></div>
     <div id="sysbox" title="Server-Status"><span class="dot"></span><span id="sysText">…</span><span id="sysRes"></span></div>
     <button id="btnSide" class="mapbtn" title="Menü" aria-label="Menü öffnen">☰</button>
     <div id="layerbox" class="hidden">
@@ -318,9 +337,10 @@
           <option value="dense">dicht städtisch</option>
           <option value="trees">Wald/Bäume</option></select></label>
         <label>Nahbereich Empfänger (m)<input id="s_clutter_exclude_m" type="number" min="0" max="500" step="10"></label>
+        <label title="Bis zu dieser Entfernung wird um jede Station in 5 m abgetastet – Gebäude direkt an der Antenne. 0 = aus">Nahfeld Station, 5 m fein (m)<input id="s_near_m" type="number" min="0" max="500" step="10"></label>
         <label class="chk"><input id="s_two_ray" type="checkbox"> Bodenreflexion (2-Strahl)</label>
       </div>
-      <p class="note">„Automatisch“ nimmt die Hindernishöhe (Oberfläche − Gelände) im Nahbereich des Empfängers als Clutter-Höhe und ersetzt dort die Beugung durch den P.2108-Zuschlag. Mit grober Oberfläche (Copernicus) besser einen Mindest-Clutter setzen.</p>
+      <p class="note">„Automatisch“ nimmt die Hindernishöhe (Oberfläche − Gelände) im Nahbereich des Empfängers (höchstens die halbe Strecke) als Clutter-Höhe und ersetzt dort die Beugung durch den P.2108-Zuschlag. Mit grober Oberfläche (Copernicus) besser einen Mindest-Clutter setzen.</p>
       <h3>Empfänger (Client)</h3>
       <div class="grid2">
         <label>Höhe über Grund (m)<input id="s_rx_height_m" type="number" step="0.5"></label>

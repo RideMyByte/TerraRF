@@ -32,6 +32,8 @@ const COLORS = ["#e6194b", "#3cb44b", "#4363d8", "#f58231", "#911eb4", "#46c0c8"
 let cfg = null;
 let project = null;
 let selected = null;   // hervorgehobene Station
+let soloId = null;     // #19: gewählte Station – nur ihre Abdeckung zeigen
+let relocating = null; // Station, die mit dem nächsten Kartenklick verschoben wird
 let editing = null;    // Station im Editor-Fenster
 let lastRun = null;
 let placing = false;
@@ -120,7 +122,7 @@ function setupBasemaps(proxy) {
   map.on("overlayadd overlayremove", renderOvLegend);
 }
 L.control.scale({ imperial: false }).addTo(map);
-map.on("zoomend", () => { if (project) project.stations.forEach((st) => { if (st.antenna?.type === "directional") drawStation(st); }); });
+map.on("zoomend", () => { if (project) project.stations.forEach((st) => { if (st.antenna?.type === "directional" || st.antenna?.sector_on) drawStation(st); }); });
 if (location.hash === "#debug") window.trfMap = map;  // für automatische Tests
 
 function stationIcon(st) {
@@ -151,14 +153,10 @@ function drawStation(st) {
   if (markers[st.id]) { map.removeLayer(markers[st.id]); delete markers[st.id]; }
   if (azLines[st.id]) { map.removeLayer(azLines[st.id]); delete azLines[st.id]; }
   if (st.enabled === false) return;  // deactivated stations are not shown on the map
-  const m = L.marker([st.lat, st.lon], { draggable: canEdit(st), icon: stationIcon(st), title: st.name });
-  m.on("click", (e) => { L.DomEvent.stopPropagation(e); select(st.id); stationPopup(st); csStationClicked(st); });
+  // Stationen lassen sich nicht ziehen (#24) – Repeater-Standorte ändern sich selten; verschieben im Editor
+  const m = L.marker([st.lat, st.lon], { icon: stationIcon(st), title: st.name });
+  m.on("click", (e) => { L.DomEvent.stopPropagation(e); const was = soloId === st.id; select(st.id); setSolo(was ? null : st.id); if (!was) stationPopup(st); else map.closePopup(); csStationClicked(st); });
   m.on("contextmenu", (e) => { L.DomEvent.stopPropagation(e); select(st.id); stationPopup(st); });
-  m.on("dragend", () => {
-    const ll = m.getLatLng();
-    st.lat = +ll.lat.toFixed(6); st.lon = +ll.lng.toFixed(6);
-    changed(st); drawStation(st);
-  });
   m.addTo(map);
   markers[st.id] = m;
   const a = st.antenna || {};
@@ -193,6 +191,14 @@ function drawStation(st) {
     }
     azLines[st.id] = L.layerGroup(layers).addTo(map);
   }
+  if (a.sector_on) {  // #23: freier Abstrahlsektor als gestrichelter Fächer
+    const mpp = 40075016 * Math.cos(st.lat * Math.PI / 180) / (256 * 2 ** map.getZoom());
+    const len = 55 * mpp, w = Math.min(359, Math.max(10, a.sector_width_deg ?? 180)), c = a.sector_az_deg ?? 270;
+    const pts = [[st.lat, st.lon]];
+    for (let t = -w / 2; t <= w / 2 + 0.01; t += Math.max(2, w / 36)) pts.push(destPoint(st.lat, st.lon, c + t, len));
+    const fan = L.polygon(pts, { color: st.color || "#2563eb", weight: 1.2, dashArray: "4 3", fillOpacity: 0.1, interactive: false });
+    if (azLines[st.id]) azLines[st.id].addLayer(fan); else azLines[st.id] = L.layerGroup([fan]).addTo(map);
+  }
 }
 
 // ------------------------------------------------------------ project
@@ -214,7 +220,7 @@ function newProject() {
   project = { id: null, name: "Neues Projekt", settings: { ...cfg.defaults }, stations: [], view: null };
   for (const k of Object.keys(markers)) { map.removeLayer(markers[k]); delete markers[k]; }
   for (const k of Object.keys(azLines)) { map.removeLayer(azLines[k]); delete azLines[k]; }
-  clearOverlay(); selected = null; editing = null; lastRun = null; runStations = {};
+  clearOverlay(); selected = null; editing = null; lastRun = null; runStations = {}; soloId = null; $("soloChip").classList.add("hidden");
   $("projName").value = project.name;
   renderAll(); setDirty(false);
 }
@@ -298,6 +304,16 @@ function renderList() {
 }
 
 const byId = (id) => project.stations.find((s) => s.id === id);
+
+/** #19: Abdeckung nur einer Station zeigen (null = alle). Erneuter Klick auf die Station hebt es auf. */
+function setSolo(id) {
+  if (id && !byId(id)) id = null;
+  soloId = id;
+  const st = id && byId(id);
+  $("soloChip").classList.toggle("hidden", !st);
+  if (st) $("soloText").innerHTML = `Nur <b style="color:${esc(st.color)}">●</b> ${esc(st.name)}`;
+  if (lastRun) composite();
+}
 
 /** Station hervorheben (ohne Editor). */
 function select(id, pan = false) {
@@ -398,6 +414,7 @@ function renderEditor() {
           <option value="ground" ${st.height_ref !== "surface" ? "selected" : ""}>Gelände (Boden)</option>
           <option value="surface" ${st.height_ref === "surface" ? "selected" : ""}>Oberfläche (Dach)</option></select></label>
       </div>
+      ${canEdit(st) ? `<button id="btnRelocate" title="Danach in die Karte klicken: die Station springt dorthin">📍 Auf der Karte neu setzen</button>` : ""}
       <div class="calc" id="elevInfo">Geländehöhe: <button id="btnElev">abfragen</button></div>`, `${fmt(st.height_m, 0)} m`)}
     ${sec("radio", "Funk", `
       <label>Vorlage<select data-k="radio_preset">${opt(RADIO_PRESETS, st.radio_preset || "custom")}</select></label>
@@ -430,8 +447,16 @@ function renderEditor() {
         <label>Neigung, + = abwärts (°)<input type="number" step="0.5" data-k="antenna.tilt_deg" value="${a.tilt_deg ?? 0}"></label>
         <label>Vor/Rück (dB)<input type="number" step="1" data-k="antenna.fb_db" value="${a.fb_db ?? 25}"></label>
       </div>
-      ${a.type === "directional" && canEdit(st) ? `<p class="note">Tipp: Den weißen Griff am Ende der Richtung auf der Karte ziehen, um die Antenne zu drehen.</p>` : ""}`,
-      `${a.type === "directional" ? `Richt ${fmt(a.gain_dbi, 0)} dBi · ${fmt(a.azimuth_deg ?? 0, 0)}°` : `Rund ${fmt(a.gain_dbi, 1)} dBi`}`)}
+      ${a.type === "directional" && canEdit(st) ? `<p class="note">Tipp: Den weißen Griff am Ende der Richtung auf der Karte ziehen, um die Antenne zu drehen.</p>` : ""}
+      <label class="chk" style="margin-top:6px" title="Z. B. Antenne an einer Hauswand: in der Gegenrichtung blockt das Gebäude"><input type="checkbox" data-k="antenna.sector_on" ${a.sector_on ? "checked" : ""}> Abstrahlung nur in einen Sektor (Gebäude/Wand dahinter)</label>
+      ${a.sector_on ? `<div class="grid3">
+        <label>Richtung (° von Nord)<input type="number" step="5" data-k="antenna.sector_az_deg" value="${a.sector_az_deg ?? 270}"></label>
+        <label>Breite (°)<input type="number" step="10" min="10" max="359" data-k="antenna.sector_width_deg" value="${a.sector_width_deg ?? 180}"></label>
+        <label>Dämpfung außerhalb (dB)<input type="number" step="1" min="0" data-k="antenna.sector_loss_db" value="${a.sector_loss_db ?? 25}"></label></div>
+        <p class="note">Keine Richtcharakteristik: innerhalb des Sektors gilt die Antenne wie eingestellt, außerhalb wird mit 15° weichem Rand gedämpft.
+        Gebäude im Oberflächenmodell berücksichtigt die Rechnung ohnehin (bis ${fmt(project.settings.near_m ?? cfg.defaults.near_m ?? 150, 0)} m um die Station in 5-m-Auflösung) –
+        der Sektor ist für Fälle, die das Modell nicht kennt (Wand, Dachaufbau, Metall).</p>` : ""}`,
+      `${a.type === "directional" ? `Richt ${fmt(a.gain_dbi, 0)} dBi · ${fmt(a.azimuth_deg ?? 0, 0)}°` : `Rund ${fmt(a.gain_dbi, 1)} dBi`}${a.sector_on ? ` · Sektor ${fmt(a.sector_az_deg ?? 270, 0)}° ±${fmt((a.sector_width_deg ?? 180) / 2, 0)}°` : ""}`)}
     ${cfg.corescope?.enabled ? sec("mc", "MeshCore", st.corescope_pk ? `
       <div>Verknüpft mit <b>${esc(csName)}</b>. Antippen der Station zeigt seine Nachbarn.</div>
       <div class="row tight"><button id="btnCalSt">Mit Messwerten vergleichen</button>${isAdmin ? `<button id="btnCsUnlink" class="danger">Verknüpfung lösen</button>` : ""}</div>`
@@ -444,6 +469,7 @@ function renderEditor() {
 
   el.querySelectorAll("details.esec").forEach((d) => d.addEventListener("toggle", () => { d.open ? openSecs.add(d.dataset.sec) : openSecs.delete(d.dataset.sec); }));
   $("btnEdClose").onclick = closeEditor;
+  if ($("btnRelocate")) $("btnRelocate").onclick = () => { relocating = st.id; setPlacing(true); if (narrow()) closeSide(); status(`Neuen Standort für „${st.name}“ in die Karte klicken (Esc bricht ab).`); };
   if ($("btnPtp")) $("btnPtp").onclick = () => showProfile(st.id, null, { rxStationId: $("ptpSel").value });
   if ($("btnAim")) $("btnAim").onclick = () => aimPair(st, byId($("ptpSel").value));
   if ($("csLinkSel")) $("csLinkSel").onchange = (e) => {
@@ -455,7 +481,7 @@ function renderEditor() {
     if (csSelPk === st.corescope_pk) csDeselect();
     delete st.corescope_pk; changed(); csDrawNodes(); csFillCalStations(); renderEditor();
   };
-  if ($("btnCalSt")) $("btnCalSt").onclick = () => { activateTab("net"); if (narrow()) openSide(); $("calSt").value = st.id; csCalibrate(st); };
+  if ($("btnCalSt")) $("btnCalSt").onclick = () => { activateTab("net"); if (narrow()) openSide(); $("calSt").value = st.id; runCompare(); $("cmpCard").scrollIntoView({ block: "start" }); };
   el.querySelectorAll("[data-k]").forEach((inp) => {
     if (!canEdit(st)) { inp.disabled = true; return; }
     inp.addEventListener("change", () => onField(st, inp));
@@ -480,13 +506,14 @@ function renderEditor() {
 
 function onField(st, inp) {
   const path = inp.dataset.k.split(".");
-  let v = inp.type === "number" ? (inp.value === "" ? null : +inp.value) : inp.value;
+  let v = inp.type === "checkbox" ? inp.checked : inp.type === "number" ? (inp.value === "" ? null : +inp.value) : inp.value;
   if (path[0] === "sf") v = +v;
   if (path.length === 2) {
     st[path[0]] = st[path[0]] || {};
     st[path[0]][path[1]] = v;
     if (path[1] === "preset" && ANT_PRESETS[v] && v !== "custom") Object.assign(st.antenna, stripLabel(ANT_PRESETS[v]));
-    else if (path[1] !== "preset" && path[1] !== "azimuth_deg" && path[1] !== "tilt_deg") st.antenna.preset = "custom";
+    else if (path[1] !== "preset" && path[1] !== "azimuth_deg" && path[1] !== "tilt_deg" && !path[1].startsWith("sector_")) st.antenna.preset = "custom";
+    if (path[1] === "sector_on" && v) { const a = st.antenna; a.sector_az_deg ??= 270; a.sector_width_deg ??= 180; a.sector_loss_db ??= 25; }
   } else {
     st[path[0]] = v;
     if (path[0] === "radio_preset" && RADIO_PRESETS[v] && !["custom", "lora_custom"].includes(v)) Object.assign(st, stripLabel(RADIO_PRESETS[v]));
@@ -525,10 +552,10 @@ function renderSettings() {
   $("s_veg_gamma_db_m").value = s.veg_gamma_db_m ?? "";
   $("s_veg_max_db").value = s.veg_max_db ?? "";
   $("reqSlider").value = s.min_margin_db ?? 10; $("reqVal").textContent = s.min_margin_db ?? 10;
-  for (const k of ["res_m", "k_factor", "max_profile_points", "max_rays", "rx_height_m", "rx_gain_dbi", "rx_cable_db", "min_margin_db", "rx_extra_loss_db", "noise_rise_db", "clutter_exclude_m"]) $("s_" + k).value = s[k] ?? cfg.defaults[k];
+  for (const k of ["res_m", "k_factor", "max_profile_points", "max_rays", "rx_height_m", "rx_gain_dbi", "rx_cable_db", "min_margin_db", "rx_extra_loss_db", "noise_rise_db", "clutter_exclude_m", "near_m"]) $("s_" + k).value = s[k] ?? cfg.defaults[k];
 }
 function bindSettings() {
-  for (const k of ["ground_source", "surface_source", "fallback_source", "diffraction_model", "clutter_mode", "clutter_floor", "two_ray", "veg_mode", "veg_gamma_db_m", "veg_max_db", ...["res_m", "k_factor", "max_profile_points", "max_rays", "rx_height_m", "rx_gain_dbi", "rx_cable_db", "min_margin_db", "rx_extra_loss_db", "noise_rise_db", "clutter_exclude_m"]]) {
+  for (const k of ["ground_source", "surface_source", "fallback_source", "diffraction_model", "clutter_mode", "clutter_floor", "two_ray", "veg_mode", "veg_gamma_db_m", "veg_max_db", ...["res_m", "k_factor", "max_profile_points", "max_rays", "rx_height_m", "rx_gain_dbi", "rx_cable_db", "min_margin_db", "rx_extra_loss_db", "noise_rise_db", "clutter_exclude_m", "near_m"]]) {
     $("s_" + k).addEventListener("change", (e) => {
       const el = e.target;
       project.settings[k] = el.type === "checkbox" ? el.checked : el.tagName === "SELECT" ? el.value : (el.value === "" ? null : +el.value);
@@ -672,7 +699,8 @@ async function apiRetry(path, opts) {
 
 function activeEntries() {
   if (!lastRun) return [];
-  return project.stations.filter((s) => s.enabled !== false && runStations[s.id])
+  if (soloId && !project.stations.some((s) => s.id === soloId && s.enabled !== false)) { soloId = null; $("soloChip").classList.add("hidden"); }
+  return project.stations.filter((s) => s.enabled !== false && runStations[s.id] && (!soloId || s.id === soloId))
     .map((s) => ({ st: s, e: runStations[s.id], d: stationData[`${runStations[s.id].key}@${lastRun.factor}`] }))
     .filter((x) => x.d);
 }
@@ -895,7 +923,7 @@ async function showProfile(sid, latlng, opts = {}) {
       ["Antenne Tx (Richtung)", `${fmt(b.tx_gain_dbi)} dBi`], ["Freiraumdämpfung", `−${fmt(b.fspl_db)} dB`],
       [`Beugung (${project.settings.diffraction_model === "deygout" ? "Deygout" : "Bullington"})`, `−${fmt(b.diffraction_db)} dB`],
       ["Bodenreflexion", `−${fmt(b.reflection_db)} dB`],
-      [`Hindernisse durchquert (${fmt(b.obstacle_len_m, 0)} m)`, `−${fmt(b.obstacle_db)} dB`],
+      [`<span title="ITU-R P.833: Strecke, auf der die direkte Linie durch Objekte des Oberflächenmodells läuft (Bäume oder Gebäude – das Modell unterscheidet sie nicht)">Durch Objekte (${fmt(b.obstacle_len_m, 0)} m)</span>`, `−${fmt(b.obstacle_db)} dB`],
       [`Clutter Rx (R ${fmt(b.clutter_height_m, 0)} m)`, `−${fmt(b.clutter_db)} dB`],
       [b.rx_station ? `Antenne Rx ${esc(b.rx_station)} (Richtung, ${fmt(b.rx_height_m, 1)} m)` : "Antenne Rx", `${fmt(b.rx_gain_dbi)} dBi`],
       ["Kabel + Zusatz Rx", `−${fmt(b.rx_cable_db + b.rx_extra_db)} dB`],
@@ -943,6 +971,11 @@ function drawProfile(p) {
   // surface + ground
   poly(p.surface, true); g.fillStyle = "#86a873"; g.fill();
   poly(p.ground, true); g.fillStyle = "#b08a5e"; g.fill();
+  // Legende: das Oberflächenmodell enthält Gebäude und Bäume, ohne sie zu unterscheiden (#25)
+  g.font = "11px system-ui";
+  const lg = [["#b08a5e", "Gelände"], ["#86a873", "Oberfläche (Gebäude, Bäume)"]];
+  let lx = padL + 6;
+  for (const [c, t] of lg) { g.fillStyle = c; g.fillRect(lx, padT + 2, 10, 10); g.fillStyle = "#374151"; g.fillText(t, lx + 14, padT + 11); lx += 22 + g.measureText(t).width; }
   // LOS
   g.strokeStyle = "#2563eb"; g.lineWidth = 1.5; poly(p.los, false); g.stroke();
   g.setLineDash([4, 3]); g.lineWidth = 1; poly(lowF, false); g.stroke(); g.setLineDash([]);
@@ -1092,8 +1125,8 @@ function csFilterSummary() {
 }
 
 function csSnrText(l) {
-  if (l.snr != null) return `SNR ${fmt(l.snr, 1)} dB gemessen (${l.snr_n} Pakete)`;
-  if (l.snr_any != null) return `Ø-SNR ${fmt(l.snr_any, 1)} dB (indirekt, über andere Observer)`;
+  if (l.snr != null) return `SNR ${fmt(l.snr, 1)} dB direkt gemeldet (0 Hop)`;
+  if (l.snr_any != null) return `Ø-SNR ${fmt(l.snr_any, 1)} dB (aus Paketpfaden, unsicher – nicht im Vergleich)`;
   return "kein SNR";
 }
 
@@ -1140,7 +1173,7 @@ function csDrawNodes() {
     for (const l of vis) {
       if (csStationOf(l.pk) || drawn.has(l.pk)) continue;
       const s = l.snr ?? l.snr_any, meas = l.snr != null;
-      const m = L.circleMarker([l.lat, l.lon], { renderer: csRenderer, radius: meas ? 7 : 6, weight: meas ? 2.5 : 1.5,
+      const m = L.circleMarker([l.lat, l.lon], { renderer: csRenderer, radius: meas ? 9 : 8, weight: meas ? 2.5 : 1.5,
         color: meas ? "#111827" : "#fff", dashArray: meas ? null : "3 2", fillColor: s != null ? snrColor(s) : "#9ca3af", fillOpacity: 0.95 });
       m.bindTooltip(`${esc(l.name || l.pk.slice(0, 8))} · ${fmt(l.distance_km, 1)} km<br>${csSnrText(l)}<br>→ ${l.they_hear}× · ← ${l.we_hear}×`, { direction: "top" });
       m.on("click", (e) => { L.DomEvent.stopPropagation(e); csTap(l.pk); });
@@ -1154,7 +1187,7 @@ function csDrawNodes() {
   for (const n of csNodes) {
     const d = ageDays(n.last_seen);
     if ((maxAge && d > maxAge) || (role && n.role !== role) || csStationOf(n.pk) || drawn.has(n.pk)) continue;
-    const m = L.circleMarker([n.lat, n.lon], { renderer: csRenderer, radius: 5, weight: 1, color: "#fff", fillColor: csAgeColor(d), fillOpacity: 0.95 });
+    const m = L.circleMarker([n.lat, n.lon], { renderer: csRenderer, radius: 7, weight: 1.5, color: "#fff", fillColor: csAgeColor(d), fillOpacity: 0.95 });
     m.bindTooltip(esc(n.name), { direction: "top" });
     m.on("click", (e) => { L.DomEvent.stopPropagation(e); csTap(n.pk); });
     csLayer.addLayer(m);
@@ -1275,7 +1308,7 @@ function csPopup(pk) {
 function csRenderSel() {
   const box = $("csSel"); if (!box) return;
   csFilterSummary();
-  if (!csSelPk && !csFocusPk) { box.innerHTML = `<p class="note">Nichts ausgewählt.</p>`; return; }
+  if (!csSelPk && !csFocusPk) { box.innerHTML = `<p class="note">Nichts ausgewählt.</p>`; mSyncFocus(); return; }
   let html = "";
   if (csFocusPk) {
     const n = csNode(csFocusPk) || csLinkOf(csFocusPk) || {};
@@ -1290,14 +1323,15 @@ function csRenderSel() {
     else {
       const vis = csVisibleLinks().sort((a, b) => ((b.snr ?? b.snr_any ?? -99) - (a.snr ?? a.snr_any ?? -99)));
       html += `<div class="note">${vis.length} von ${csLinks.links.length} nach Filter · Fenster ${csLinks.window_days ?? "?"} Tage</div>
-        ${vis.length ? `<table class="mini cs-nb"><tr><th>Nachbar</th><th>km</th><th title="so oft hat der Nachbar ${esc(name)} gehört">→</th><th title="so oft hat ${esc(name)} den Nachbarn gehört">←</th><th title="gemessen (fett) bzw. Mittel über Observer (kursiv)">SNR</th></tr>${vis.map((l) =>
+        ${vis.length ? `<table class="mini cs-nb"><tr><th>Nachbar</th><th>km</th><th title="so oft hat der Nachbar ${esc(name)} gehört">→</th><th title="so oft hat ${esc(name)} den Nachbarn gehört">←</th><th title="direkt gemeldet (fett, 0 Hop) bzw. aus Paketpfaden abgeleitet (kursiv, unsicher)">SNR</th></tr>${vis.map((l) =>
           `<tr data-pk="${l.pk}" class="${l.pk === csFocusPk ? "on" : ""}"><td>${esc(l.name || l.pk.slice(0, 8))}${csStationOf(l.pk) ? " 📍" : ""}</td><td>${fmt(l.distance_km, 1)}</td>
            <td>${l.they_hear || "–"}</td><td>${l.we_hear || "–"}</td>
            <td style="color:${snrColor(l.snr ?? l.snr_any ?? -99)}">${l.snr != null ? `<b>${fmt(l.snr, 1)}</b>` : l.snr_any != null ? `<i>${fmt(l.snr_any, 1)}</i>` : "–"}</td></tr>`).join("")}</table>
-        <div class="legend-cs"><span><i class="c meas"></i>gemessen</span><span><i class="c ind"></i>Mittel über Observer</span><span>→ Nachbar hat gehört · ← wurde gehört</span></div>` : ""}`;
+        <div class="legend-cs"><span><i class="c meas"></i>direkt gemeldet (0 Hop)</span><span><i class="c ind"></i>aus Paketpfaden (unsicher)</span><span>→ Nachbar hat gehört · ← wurde gehört</span></div>` : ""}`;
     }
   }
-  box.innerHTML = html;
+  box.innerHTML = html + `<div id="csSelMeas" class="note" style="margin-top:6px"></div>`;
+  mSyncFocus();
   if (csFocusPk) csWireActions(box, csFocusPk);
   box.querySelectorAll("[data-cs-x]").forEach((b) => b.onclick = () => {
     if (b.dataset.csX === "focus") { csFocusPk = null; map.closePopup(); csDrawNodes(); csRenderSel(); } else csDeselect();
@@ -1340,55 +1374,107 @@ function csFillCalStations() {
     : `<option value="">– keine Station mit Repeater verknüpft –</option>`;
   if (list.some((s) => s.id === cur)) sel.value = cur;
   $("btnCalRun").disabled = !list.length;
-  mFillSt();
 }
 
 /* ---------- Messfahrten (MeshMapper, von Hand, CSV) ---------- */
 const mLayer = L.layerGroup(), mPlanLayer = L.layerGroup();
-let mRows = [], mPlan = [], mCmp = null;   // mCmp: {byId: {id: row}} nach „vergleichen“
-const snrCol = (v) => v == null ? "#888" : v >= 5 ? "#16a34a" : v >= -5 ? "#65a30d" : v >= -10 ? "#d97706" : "#dc2626";
-const dCol = (d) => d == null ? "#888" : Math.abs(d) <= 3 ? "#16a34a" : Math.abs(d) <= 8 ? (d < 0 ? "#d97706" : "#2563eb") : (d < 0 ? "#dc2626" : "#7c3aed");
+let mRows = [], mPlan = [], mSeries = [], mCmp = null;   // mCmp: {byId: {id: row}} nach „Vergleichen“
+let mFocusPk = null;      // #22: angetippter Repeater -> nur seine Messungen, automatisch sichtbar
+let mSeriesSel = null;    // angetippte Messreihe -> nur ihre Messungen
+let mLoadSeq = 0;
+const snrCol = (v) => v == null ? "#888888" : v >= 5 ? "#16a34a" : v >= -5 ? "#65a30d" : v >= -10 ? "#d97706" : "#dc2626";
+const dCol = (d) => d == null ? "#888888" : Math.abs(d) <= 3 ? "#16a34a" : Math.abs(d) <= 8 ? (d < 0 ? "#d97706" : "#2563eb") : (d < 0 ? "#dc2626" : "#7c3aed");
+const SRC = { meshmapper: ["MM", "mm", "MeshMapper"], manual: ["✎", "man", "von Hand"], csv: ["CSV", "csv", "CSV-Import"], corescope: ["CS", "cs", "CoreScope"] };
+const srcBadge = (src) => { const s = SRC[src] || [src || "?", "man", src || "?"]; return `<span class="srcb ${s[1]}" title="${esc(s[2])}">${esc(s[0])}</span>`; };
 function repName(pk, prefix) {
   const n = (pk && csNodes.find((x) => x.pk === pk)) || null;
   return n ? n.name : (pk || prefix || "?").slice(0, 8);
 }
-function mFillSt() {
-  const sel = $("mCmpSt"); if (!sel || !project) return;
-  const cur = sel.value, list = project.stations.filter((s) => s.corescope_pk);
-  sel.innerHTML = list.length ? list.map((s) => `<option value="${s.id}">${esc(s.name)}</option>`).join("")
-    : `<option value="">– keine Station mit Repeater verknüpft –</option>`;
-  if (list.some((s) => s.id === cur)) sel.value = cur;
-  $("btnMCmp").disabled = !list.length;
+const seriesById = (id) => mSeries.find((s) => s.id === id);
+function seriesName(s) {
+  if (!s) return "–";
+  if (s.name) return s.name;
+  const when = s.t0 ? new Date(s.t0 * 1000).toLocaleString("de-DE", { dateStyle: "short", timeStyle: "short" }) : "";
+  return `${(SRC[s.src] || [, , s.src])[2]}${when ? " " + when : ""}`;
 }
+function fmtRx(s) {
+  if (!s) return "Projekt-Empfänger";
+  const p = project.settings, d = cfg.defaults || {};
+  const h = s.rx_h ?? p.rx_height_m ?? d.rx_height_m, g = s.rx_gain_dbi ?? p.rx_gain_dbi ?? d.rx_gain_dbi;
+  return `${fmt(h, 1)} m · ${fmt(g, 1)} dBi${s.rx_h == null && s.rx_gain_dbi == null ? " (Projekt)" : ""}${s.ext_ant ? " · ext. Antenne" : ""}`;
+}
+
+/* #20: Messpunkte als weicher Farbverlauf (SVG-Radialverlauf je Farbe) */
+const mRenderer = L.svg({ padding: 0.3 });
+function mGrad(col) {
+  const id = "mg" + col.replace("#", "");
+  const svg = mRenderer._container;
+  if (svg && !svg.querySelector("#" + id)) {
+    let defs = svg.querySelector("defs");
+    if (!defs) { defs = document.createElementNS("http://www.w3.org/2000/svg", "defs"); svg.insertBefore(defs, svg.firstChild); }
+    const g = document.createElementNS("http://www.w3.org/2000/svg", "radialGradient");
+    g.setAttribute("id", id);
+    g.innerHTML = `<stop offset="0" stop-color="${col}" stop-opacity="0.95"/><stop offset="0.45" stop-color="${col}" stop-opacity="0.7"/>` +
+      `<stop offset="1" stop-color="${col}" stop-opacity="0"/>`;
+    defs.appendChild(g);
+  }
+  return `url(#${id})`;
+}
+
 async function mLoad() {
+  const seq = ++mLoadSeq;
   const q = new URLSearchParams();
   if ($("mDays").value) q.set("days", $("mDays").value);
-  if ($("mRep").value) q.set("pk", $("mRep").value);
+  const pk = mFocusPk || $("mRep").value;
+  if (pk) q.set("pk", pk);
+  if (mSeriesSel) q.set("series", mSeriesSel);
   try {
     const r = await api("/api/measurements?" + q);
-    mRows = r.rows; mPlan = r.plan;
+    if (seq !== mLoadSeq) return;
+    mRows = r.rows; mPlan = r.plan; mSeries = r.series || [];
     $("mOff").classList.add("hidden"); $("mOn").classList.remove("hidden");
     const st = r.stats, done = mPlan.filter((c) => c.done).length;
     $("mStats").innerHTML = st.count ? `${st.count} Messungen gespeichert, ${st.repeaters} Repeater` +
       (st.last ? `, zuletzt ${fmtAgo(new Date(st.last * 1000).toISOString())}` : "") + `. Angezeigt: ${mRows.length} · Zellen ${done}/${mPlan.length} genug.`
       : "Noch keine Messungen. MeshMapper-Weiterleitung unter ⚙ → Webseite &amp; Zugang einrichten.";
     $("mShort").textContent = st.count ? `${st.count}` : "";
-    // Repeater-Auswahl aus allen Messungen (nur beim ersten Laden ohne Filter vollständig)
-    if (!$("mRep").value) {
+    if (!$("mRep").value && !mFocusPk && !mSeriesSel) {
       const reps = {};
       for (const m of mRows) { const k = m.rep_pk || m.rep_prefix; if (k) reps[k] = (reps[k] || 0) + 1; }
       $("mRep").innerHTML = `<option value="">alle</option>` + Object.entries(reps).sort((a, b) => b[1] - a[1])
         .map(([k, n]) => `<option value="${esc(k)}">${esc(repName(k.length === 64 ? k : null, k))} (${n})</option>`).join("");
     }
-    if ($("mDelSrc")) {
-      $("mDelSrc").innerHTML = Object.entries(st.by_source || {}).map(([k, n]) => `<option value="${esc(k)}">${esc(k)} (${n})</option>`).join("");
-    }
-    mDraw();
+    if ($("mDelSrc")) $("mDelSrc").innerHTML = Object.entries(st.by_source || {}).map(([k, n]) => `<option value="${esc(k)}">${esc((SRC[k] || [, , k])[2])} (${n})</option>`).join("");
+    mRenderFocus(); mRenderSeries(); mDraw();
   } catch (e) {
     if (/401|403|Anmeldung/.test(e.message)) { $("mOff").classList.remove("hidden"); $("mOn").classList.add("hidden"); }
     else $("mStats").textContent = "Messungen: " + e.message;
   }
 }
+
+/** Auswahl im MeshCore-Reiter hat sich geändert -> Messungen des Repeaters automatisch zeigen (#22). */
+function mSyncFocus() {
+  const pk = csFocusPk || csSelPk || null;
+  if (pk === mFocusPk) { mRenderFocus(); return; }
+  mFocusPk = pk; mSeriesSel = null; mCmp = null;
+  if (canAdd() || cfg.site?.measurements_public) mLoad();
+}
+function mRenderFocus() {
+  const el = $("mFocus"), sel = $("csSelMeas");
+  const by = {};
+  for (const m of mRows) by[m.src] = (by[m.src] || 0) + 1;
+  const parts = Object.entries(by).map(([k, n]) => `${srcBadge(k)} ${n}`).join(" ");
+  if (mFocusPk || mSeriesSel) {
+    const what = mSeriesSel ? `Messreihe „${esc(seriesName(seriesById(mSeriesSel)))}“` : `Repeater ${esc(repName(mFocusPk))}`;
+    el.innerHTML = `Nur ${what}: ${mRows.length} Messungen ${parts} <button type="button" id="mFocusOff">alle</button>`;
+    el.classList.remove("hidden");
+    $("mFocusOff").onclick = () => { if (mSeriesSel) { mSeriesSel = null; mLoad(); } else { mFocusPk = null; mLoad(); } };
+  } else el.classList.add("hidden");
+  if (sel) sel.innerHTML = mFocusPk ? (mRows.length ? `Messfahrten: ${mRows.length} Messungen ${parts} – auf der Karte als Farbflecken` : "Messfahrten: keine Messungen zu diesem Repeater") : "";
+}
+
+function mShowPoints() { return $("mShowPts").checked || !!mFocusPk || !!mSeriesSel; }
+
 function mDraw() {
   mLayer.clearLayers(); mPlanLayer.clearLayers();
   if ($("mShowPlan").checked) {
@@ -1396,49 +1482,161 @@ function mDraw() {
       .bindTooltip(`${c.done ? "genug" : "weiter messen"} · ${c.count} Messungen, ${c.repeaters} Repeater`).addTo(mPlanLayer);
     mPlanLayer.addTo(map);
   } else map.removeLayer(mPlanLayer);
-  if ($("mShowPts").checked) {
-    for (const m of mRows) {
-      const c = mCmp && mCmp.byId[m.id];
-      const col = c && !c.saturated && c.delta_db != null ? dCol(c.delta_db) : snrCol(m.snr_down);
-      const tip = `<b>${esc(repName(m.rep_pk, m.rep_prefix))}</b> · ${esc(m.kind || "")}<br>` +
-        `SNR ↓ ${m.snr_down != null ? fmt(m.snr_down, 1) + " dB" : "–"}${m.snr_up != null ? ` · ↑ ${fmt(m.snr_up, 1)} dB` : ""}` +
-        (m.rssi_down != null ? ` · RSSI ${fmt(m.rssi_down, 0)} dBm` : "") +
-        (c && c.predicted_snr != null ? `<br>Modell ${fmt(c.predicted_snr, 1)} dB · Δ ${c.delta_db > 0 ? "+" : ""}${fmt(c.delta_db, 1)} dB${c.saturated ? " (Messwert gesättigt)" : ""}` : "") +
-        (m.ts ? `<br>${new Date(m.ts * 1000).toLocaleString("de-DE")}` : "") + (m.note ? `<br>${esc(m.note)}` : "") + `<br><span class="note">${esc(m.src || "")}</span>`;
-      L.circleMarker([m.lat, m.lon], { radius: 5, weight: 1, color: "#fff", fillColor: col, fillOpacity: 0.9 }).bindTooltip(tip).addTo(mLayer);
-    }
-    mLayer.addTo(map);
-  } else map.removeLayer(mLayer);
+  if (!mShowPoints()) { map.removeLayer(mLayer); return; }
+  if (!map.hasLayer(mRenderer)) mRenderer.addTo(map);
+  for (const m of mRows) {
+    const c = mCmp && mCmp.byId[m.id];
+    const col = c && !c.saturated && c.delta_db != null ? dCol(c.delta_db) : snrCol(m.snr_down);
+    const mk = L.circleMarker([m.lat, m.lon], { renderer: mRenderer, radius: 11, stroke: false, fillColor: mGrad(col), fillOpacity: 1 });
+    mk.bindTooltip(`${srcBadge(m.src)} ${esc(repName(m.rep_pk, m.rep_prefix))} · SNR ${m.snr_down != null ? fmt(m.snr_down, 1) + " dB" : "–"}` +
+      (c && c.delta_db != null && !c.saturated ? ` · Δ ${c.delta_db > 0 ? "+" : ""}${fmt(c.delta_db, 1)} dB` : ""), { direction: "top" });
+    mk.on("click", (e) => { L.DomEvent.stopPropagation(e); mPointPopup(m); });
+    mLayer.addLayer(mk);
+  }
+  mLayer.addTo(map);
 }
-async function mCompare() {
-  const st = byId($("mCmpSt").value); if (!st) return;
-  $("mCmpOut").innerHTML = `<div class="note cs-wait">vergleiche Messungen mit „${esc(st.name)}“ …</div>`;
+
+/** #22: Klick auf einen Messpunkt zeigt alle Daten dazu. */
+function mPointPopup(m) {
+  const c = mCmp && mCmp.byId[m.id], se = seriesById(m.series_id);
+  const kinds = { DISC: "Erkennung (DISC, direkte Antwort)", TRACE: "Trace", TX: "Echo auf eigenen Ping (TX)", RX: "empfangenes Paket (RX)", MANUAL: "von Hand", CSV: "CSV" };
+  const rows = [
+    ["Quelle", `${srcBadge(m.src)} ${esc((SRC[m.src] || [, , m.src])[2])}`],
+    ["Repeater", `${esc(repName(m.rep_pk, m.rep_prefix))} <span class="note">${esc((m.rep_pk || m.rep_prefix || "").slice(0, 12))}</span>`],
+    ["Art", esc(kinds[m.kind] || m.kind || "–")],
+    ["SNR ↓ (am Handy)", m.snr_down != null ? `${fmt(m.snr_down, 2)} dB` : "–"],
+    ["SNR ↑ (am Repeater)", m.snr_up != null ? `${fmt(m.snr_up, 2)} dB` : "–"],
+    ["RSSI", m.rssi_down != null ? `${fmt(m.rssi_down, 0)} dBm` : "–"],
+    ["Rauschboden", m.noise != null ? `${fmt(m.noise, 0)} dBm` : ""],
+    ["Sendeleistung", m.power ? esc(m.power) : ""],
+    ["Funk", m.radio ? esc(m.radio) : ""],
+    ["Höhe ü. NHN", m.alt != null ? `${fmt(m.alt, 0)} m` : ""],
+    ["Zeit", m.ts ? new Date(m.ts * 1000).toLocaleString("de-DE") : ""],
+    ["Messreihe", se ? `${esc(seriesName(se))}<br><span class="note">${esc(fmtRx(se))}</span>` : ""],
+    ["Notiz", m.note ? esc(m.note) : ""],
+  ];
+  if (c && c.predicted_snr != null) rows.push(["Modell", `SNR ${fmt(c.predicted_snr, 1)} dB · RSSI ${fmt(c.predicted_rssi, 0)} dBm` +
+    `<br>Δ SNR ${c.saturated ? "– (oberes Ende)" : (c.delta_db > 0 ? "+" : "") + fmt(c.delta_db, 1) + " dB"}` +
+    (c.delta_rssi_db != null ? ` · Δ RSSI ${c.delta_rssi_db > 0 ? "+" : ""}${fmt(c.delta_rssi_db, 1)} dB` : "")]);
+  const div = document.createElement("div"); div.className = "popup";
+  div.innerHTML = `<table class="kv">${rows.filter((r) => r[1]).map(([k, v]) => `<tr><td>${k}</td><td>${v}</td></tr>`).join("")}</table>
+    <div class="cs-act">${se ? `<button data-a="ser">Messreihe zeigen</button>` : ""}${isAdmin ? `<button data-a="del" class="danger">Messung löschen</button>` : ""}</div>`;
+  const b1 = div.querySelector('[data-a="ser"]');
+  if (b1) b1.onclick = () => { map.closePopup(); mSeriesSel = se.id; activateTab("net"); mLoad(); };
+  const b2 = div.querySelector('[data-a="del"]');
+  if (b2) b2.onclick = async () => {
+    try { await api("/api/measurements", { method: "DELETE", body: { ids: [m.id] } }); map.closePopup(); mLoad(); }
+    catch (e) { status("Löschen: " + e.message, "err"); }
+  };
+  L.popup({ maxWidth: 360 }).setLatLng([m.lat, m.lon]).setContent(div).openOn(map);
+}
+
+/** #22: Messreihen in der Seitenleiste, mit Angaben zur Empfangsantenne. */
+function mRenderSeries() {
+  const box = $("mSeries"); if (!box) return;
+  if (!mSeries.length) { box.innerHTML = `<p class="note">Noch keine Messreihen.</p>`; return; }
+  const edit = canAdd();
+  box.innerHTML = mSeries.slice(0, 50).map((s) => `<div class="mser${s.id === mSeriesSel ? " on" : ""}" data-sid="${s.id}">
+      <div class="mser-h"><span>${srcBadge(s.src)} <b>${esc(seriesName(s))}</b></span>
+        <span class="note">${s.n} Mess. · ${s.repeaters} Rep.</span></div>
+      <div class="note">${s.t0 ? `${new Date(s.t0 * 1000).toLocaleString("de-DE", { dateStyle: "short", timeStyle: "short" })} – ${new Date(s.t1 * 1000).toLocaleTimeString("de-DE", { timeStyle: "short" })} · ` : ""}
+        Empfänger ${esc(fmtRx(s))}${s.power_seen ? ` · ${esc(s.power_seen)}` : ""}${s.ext_seen && !s.ext_ant ? " · App meldet ext. Antenne" : ""}</div>
+      <div class="row tight"><button data-a="show">zeigen</button>${edit ? `<button data-a="edit">✎ Angaben</button>` : ""}${isAdmin ? `<button data-a="del" class="danger" title="Messreihe löschen">🗑</button>` : ""}</div>
+      <div class="mser-ed hidden"></div></div>`).join("") + (mSeries.length > 50 ? `<p class="note">… ${mSeries.length - 50} ältere</p>` : "");
+  box.querySelectorAll(".mser").forEach((el) => {
+    const s = seriesById(+el.dataset.sid);
+    el.querySelector('[data-a="show"]').onclick = () => {
+      mSeriesSel = mSeriesSel === s.id ? null : s.id; mCmp = null; mLoad();
+      if (mSeriesSel && s.bounds && s.bounds[0] != null) map.fitBounds([[s.bounds[0], s.bounds[1]], [s.bounds[2], s.bounds[3]]], { padding: [30, 30], maxZoom: 16 });
+    };
+    const de = el.querySelector('[data-a="del"]');
+    if (de) de.onclick = async () => {
+      if (!confirm(`Messreihe „${seriesName(s)}“ mit ${s.n} Messungen löschen?`)) return;
+      try { await api("/api/measurements", { method: "DELETE", body: { series: s.id } }); if (mSeriesSel === s.id) mSeriesSel = null; mLoad(); }
+      catch (e) { status("Löschen: " + e.message, "err"); }
+    };
+    const ed = el.querySelector('[data-a="edit"]');
+    if (ed) ed.onclick = () => {
+      const f = el.querySelector(".mser-ed");
+      if (!f.classList.contains("hidden")) { f.classList.add("hidden"); return; }
+      const d = cfg.defaults || {}, p = project.settings;
+      f.innerHTML = `<label>Name<input data-k="name" value="${esc(s.name || "")}" placeholder="${esc(seriesName({ ...s, name: "" }))}"></label>
+        <div class="grid3">
+          <label title="Höhe der Empfangsantenne über Grund">Antennenhöhe (m)<input data-k="rx_h" type="number" step="0.1" value="${s.rx_h ?? ""}" placeholder="${fmt(p.rx_height_m ?? d.rx_height_m, 1)}"></label>
+          <label>Gewinn (dBi)<input data-k="rx_gain_dbi" type="number" step="0.1" value="${s.rx_gain_dbi ?? ""}" placeholder="${fmt(p.rx_gain_dbi ?? d.rx_gain_dbi, 1)}"></label>
+          <label>Kabel (dB)<input data-k="rx_cable_db" type="number" step="0.1" value="${s.rx_cable_db ?? ""}" placeholder="${fmt(p.rx_cable_db ?? d.rx_cable_db, 1)}"></label>
+        </div>
+        <label class="chk"><input data-k="ext_ant" type="checkbox" ${s.ext_ant ? "checked" : ""}> externe Antenne (z. B. auf dem Autodach)</label>
+        <label>Notiz<input data-k="note" value="${esc(s.note || "")}" placeholder="Fahrzeug, Antenne, Wetter …"></label>
+        <p class="note">Leer = Projekt-Einstellung. Eine in der einzelnen Messung eingetragene Höhe geht vor.</p>
+        <div class="row tight"><button class="primary" data-a="save">Speichern</button></div><div class="note" data-out></div>`;
+      f.classList.remove("hidden");
+      f.querySelector('[data-a="save"]').onclick = async () => {
+        const body = {};
+        f.querySelectorAll("[data-k]").forEach((i) => { body[i.dataset.k] = i.type === "checkbox" ? i.checked : i.value === "" ? null : (i.type === "number" ? +i.value : i.value); });
+        try { await api(`/api/measurements/series/${s.id}`, { method: "PUT", body }); mCmp = null; mLoad(); status("Messreihe gespeichert – für neue Werte „▶ Vergleichen“."); }
+        catch (e) { f.querySelector("[data-out]").textContent = "Fehler: " + e.message; }
+      };
+    };
+  });
+}
+
+/* ---------- Vergleich mit dem Modell (#21): CoreScope (Repeater ↔ Repeater, 0 Hop) und Messfahrten ---------- */
+let cmpRes = { cs: null, mm: null };
+function cmpRenderSum() {
+  const rows = [];
+  const line = (b, lbl, x) => x ? `<tr><td>${b} ${lbl}</td><td>${x.n}</td><td><b>${x.mean_db > 0 ? "+" : ""}${fmt(x.mean_db, 1)}</b></td><td>${fmt(x.median_db, 1)}</td><td>${fmt(x.std_db, 1)}</td></tr>`
+    : `<tr><td>${b} ${lbl}</td><td colspan="4" class="note">keine auswertbaren Werte</td></tr>`;
+  if (cmpRes.cs) rows.push(line(srcBadge("corescope"), "SNR", cmpRes.cs.stats));
+  if (cmpRes.mm) { rows.push(line(SRC_MM_BADGE(), "SNR", cmpRes.mm.stats)); if (cmpRes.mm.rssi_stats) rows.push(line(SRC_MM_BADGE(), "RSSI", cmpRes.mm.rssi_stats)); }
+  $("cmpSum").innerHTML = rows.length ? `<table class="mini"><tr><th>Quelle</th><th>n</th><th>Δ Mittel</th><th>Median</th><th>Streuung</th></tr>${rows.join("")}</table>
+    <p class="note">Δ = gemessen − Modell in dB. Negativ: das Modell ist zu optimistisch.</p>` : "";
+}
+const SRC_MM_BADGE = () => `<span class="srcb mm" title="Messfahrten (MeshMapper, von Hand, CSV)">MM</span>`;
+
+async function runCompare() {
+  const st = byId($("calSt").value); if (!st) return;
+  cmpRes = { cs: null, mm: null }; $("cmpSum").innerHTML = ""; $("calOut").innerHTML = ""; $("mCmpOut").innerHTML = "";
+  const jobs = [];
+  if ($("cmpCs").checked && cfg.corescope?.enabled) jobs.push(csCalibrate(st));
+  if ($("cmpMm").checked) jobs.push(mCompare(st));
+  if (!jobs.length) { $("cmpSum").innerHTML = `<p class="note">Mindestens eine Quelle wählen.</p>`; return; }
+  await Promise.allSettled(jobs);
+  cmpRenderSum();
+}
+
+async function mCompare(st) {
+  $("mCmpOut").innerHTML = `<h4>${SRC_MM_BADGE()} Messfahrten: Repeater → Handy</h4><div class="note cs-wait">vergleiche Messungen mit „${esc(st.name)}“ …</div>`;
   try {
     const body = { station_id: st.id, ...(canAdd() ? { project } : { project_id: project.id }) };
     if ($("mDays").value) body.days = +$("mDays").value;
     const r = await api("/api/measurements/compare", { method: "POST", body });
+    cmpRes.mm = r;
     mCmp = { byId: Object.fromEntries(r.rows.map((x) => [x.id, x])) };
-    const s = r.stats, sr = r.rssi_stats, sg = (v) => (v > 0 ? "+" : "") + fmt(v, 1);
-    const line = (lbl, x) => `<tr><td>${lbl}</td><td><b>${sg(x.mean_db)} dB</b></td><td>${sg(x.median_db)}</td><td>${fmt(x.std_db, 1)}</td><td>${x.n}</td></tr>`;
-    let html = s || sr ? `<table class="mini"><tr><th></th><th>Δ Mittel</th><th>Median</th><th>Streuung</th><th>n</th></tr>
-      ${s ? line("SNR", s) : ""}${sr ? line("RSSI", sr) : ""}</table>
-      <p class="note">Δ = gemessen − Modell. Negativ: Modell zu optimistisch. Punkte auf der Karte jetzt nach Δ SNR gefärbt
-      (grün ±3 dB, orange/rot Modell zu gut, blau/lila Modell zu schlecht).
-      ${r.saturated ? ` ${r.saturated} Messungen nahe am Repeater nicht in der SNR-Statistik: LoRa meldet höchstens etwa ${fmt(r.sat_db, 0)} dB SNR, dort zählt nur RSSI.` : ""}
-      ${r.outside ? ` ${r.outside} Messungen außerhalb des Rechenradius.` : ""}</p>`
-      : `<div class="note warn">Keine vergleichbaren Messungen für diesen Repeater${r.outside ? ` (${r.outside} außerhalb des Rechenradius)` : ""}.</div>`;
-    const rows = r.rows.filter((x) => x.delta_db != null && !x.saturated).sort((a, b) => Math.abs(b.delta_db) - Math.abs(a.delta_db)).slice(0, 25);
-    if (rows.length) html += `<table class="cs-tab"><tr><th>km</th><th>gem.</th><th>Modell</th><th>Δ</th></tr>` + rows.map((x) =>
-      `<tr data-ll="${x.lat},${x.lon}"><td>${fmt(x.distance_km, 2)}</td><td>${fmt(x.measured_snr, 1)}${x.saturated ? "*" : ""}</td><td>${fmt(x.predicted_snr, 1)}</td>
-       <td style="color:${dCol(x.delta_db)}">${x.delta_db > 0 ? "+" : ""}${fmt(x.delta_db, 1)}</td></tr>`).join("") + `</table>
-      <p class="note">Die 25 größten Abweichungen; antippen zeigt den Ort. * = SNR am oberen Ende (gesättigt), nicht in der SNR-Statistik.</p>`;
+    const rows = r.rows.filter((x) => x.predicted_snr != null)
+      .sort((a, b) => (a.saturated - b.saturated) || Math.abs(b.delta_db) - Math.abs(a.delta_db)).slice(0, 40);
+    let html = `<h4>${SRC_MM_BADGE()} Messfahrten: Repeater → Handy</h4>
+      <div class="note">${r.rows.length} Messungen · Empfängerhöhen ${r.rx_heights.map((h) => fmt(h, 1) + " m").join(", ") || "–"} (je Messreihe)
+      ${r.saturated ? ` · ${r.saturated} am oberen SNR-Ende (nur RSSI)` : ""}${r.outside ? ` · ${r.outside} außerhalb des Rechenradius` : ""}</div>`;
+    if (rows.length) html += `<table class="mini cs-nb"><tr><th></th><th>Reihe</th><th>km</th><th title="SNR am Handy">gem.</th><th>Modell</th><th>Δ SNR</th><th>Δ RSSI</th></tr>` + rows.map((x) =>
+      `<tr data-id="${x.id}" class="${x.saturated ? "dim" : ""}"><td>${srcBadge(x.src)}</td><td title="${esc(fmtRx(seriesById(x.series_id)))}">${esc(seriesName(seriesById(x.series_id)).slice(0, 18))}</td>
+       <td>${fmt(x.distance_km, 2)}</td><td>${fmt(x.measured_snr, 1)}</td><td>${fmt(x.predicted_snr, 1)}</td>
+       <td style="color:${x.saturated ? "inherit" : dCol(x.delta_db)}">${x.saturated ? "–" : (x.delta_db > 0 ? "+" : "") + fmt(x.delta_db, 1)}</td>
+       <td>${x.delta_rssi_db != null ? (x.delta_rssi_db > 0 ? "+" : "") + fmt(x.delta_rssi_db, 1) : "–"}</td></tr>`).join("") + `</table>
+      <p class="note">Größte Abweichungen zuerst (höchstens 40); antippen zeigt den Messpunkt. Grau: SNR am oberen Ende, zählt nicht.
+      Punkte auf der Karte jetzt nach Δ SNR gefärbt (grün ±3 dB, orange/rot Modell zu gut, blau/lila Modell zu schlecht).</p>`;
+    else html += `<div class="note warn">Keine Messungen dieses Repeaters im Rechenradius.</div>`;
     $("mCmpOut").innerHTML = html;
-    $("mCmpOut").querySelectorAll("tr[data-ll]").forEach((tr) => tr.onclick = () => {
-      const [a, b] = tr.dataset.ll.split(",").map(Number); map.setView([a, b], Math.max(map.getZoom(), 15));
+    $("mCmpOut").querySelectorAll("tr[data-id]").forEach((tr) => tr.onclick = () => {
+      const m = mRows.find((x) => x.id === +tr.dataset.id) || r.rows.find((x) => x.id === +tr.dataset.id);
+      if (!m) return;
+      map.setView([m.lat, m.lon], Math.max(map.getZoom(), 15));
+      const full = mRows.find((x) => x.id === m.id); if (full) mPointPopup(full);
     });
-    $("mShowPts").checked = true; mDraw();
-  } catch (e) { $("mCmpOut").innerHTML = `<div class="warn">Fehler: ${esc(e.message)}</div>`; }
+    if (mFocusPk !== st.corescope_pk) { mFocusPk = st.corescope_pk; mSeriesSel = null; await mLoad(); } else mDraw();
+  } catch (e) { $("mCmpOut").innerHTML = `<h4>${SRC_MM_BADGE()} Messfahrten</h4><div class="warn">Fehler: ${esc(e.message)}</div>`; }
 }
+
 function mManualDialog(latlng) {
   const near = csNodes.map((n) => ({ n, d: distKm(latlng.lat, latlng.lng, n.lat, n.lon) })).filter((x) => x.d <= 30)
     .sort((a, b) => a.d - b.d).slice(0, 40);
@@ -1471,7 +1669,8 @@ function mInit() {
   for (const id of ["mShowPts", "mShowPlan"]) $(id).onchange = () => { mDraw(); if ($(id).checked && !mRows.length) mLoad(); };
   $("mDays").onchange = () => { mCmp = null; mLoad(); };
   $("mRep").onchange = () => { mCmp = null; mLoad(); };
-  $("btnMCmp").onclick = mCompare;
+  $("btnCalRun").onclick = runCompare;
+  if (!cfg.corescope?.enabled) { $("cmpCs").checked = false; $("cmpCs").closest("label").classList.add("hidden"); }
   $("mCsvFile").onchange = async (e) => {
     const f = e.target.files[0]; if (!f) return;
     try {
@@ -1491,10 +1690,11 @@ function mInit() {
 
 async function csCalibrate(st) {
   activateTab("net");
-  $("calOut").innerHTML = `<div class="note cs-wait">rechne Strecken für „${esc(st.name)}“ …</div>`;
+  const H = `<h4>${srcBadge("corescope")} CoreScope: Repeater ↔ Repeater, direkt (0 Hop)</h4>`;
+  $("calOut").innerHTML = H + `<div class="note cs-wait">rechne Strecken für „${esc(st.name)}“ …</div>`;
   $("calOut").scrollIntoView({ block: "nearest" });
   if (csSelPk !== st.corescope_pk || !csLinks) await csShowNeighbors(st.corescope_pk);
-  if (!csLinks) { $("calOut").innerHTML = `<div class="warn">Nachbarn konnten nicht geladen werden.</div>`; return; }
+  if (!csLinks) { $("calOut").innerHTML = H + `<div class="warn">Nachbarn konnten nicht geladen werden.</div>`; return; }
   const partners = csVisibleLinks().filter((l) => l.snr != null).map((l) => l.pk);
   status(`Abgleich: rechne ${partners.length} Strecken …`, "busy");
   try {
@@ -1502,6 +1702,7 @@ async function csCalibrate(st) {
       ...(canAdd() ? { project } : { project_id: project.id }), station_id: st.id, partners,
       rx_height_m: +$("calH").value, rx_gain_dbi: +$("calG").value, rx_cable_db: +$("calC").value } });
     const s = r.stats;
+    cmpRes.cs = r;
     let hint = "";
     if (s) {
       const m = s.mean_db;
@@ -1511,11 +1712,11 @@ async function csCalibrate(st) {
       if (s.n < 5) hint += " Nur wenige Messpunkte – mit Vorsicht deuten.";
     }
     const src = { station: ["📍", "Werte der Station im Projekt"], angabe: ["✎", "eigene Angabe zum Repeater"], standard: ["", "Standardwerte oben"] };
-    $("calOut").innerHTML = `<div class="note">Rauschboden ${fmt(r.noise_dbm)} dBm · ${r.rows.length} gemessene Partner nach Filter · Fenster ${r.window_days ?? "?"} Tage. Zeile anklicken zeigt die Strecke.</div>
-      <table class="mini cs-nb"><tr><th>Partner</th><th title="Antennenhöhe der Gegenstelle">Höhe</th><th>km</th><th title="Sichtlinie">LOS</th><th>gem.</th><th>Modell</th><th>Δ</th></tr>
-      ${r.rows.map((x, i) => x.error ? `<tr><td>${esc(x.name)}</td><td colspan="6" class="warn">${esc(x.error)}</td></tr>`
+    $("calOut").innerHTML = H + `<div class="note">Rauschboden ${fmt(r.noise_dbm)} dBm · ${r.rows.length} Partner mit direkt gemeldetem SNR (nach Filter) · Fenster ${r.window_days ?? "?"} Tage. Zeile anklicken zeigt die Strecke.</div>
+      <table class="mini cs-nb"><tr><th></th><th>Partner</th><th title="Antennenhöhe der Gegenstelle">Höhe</th><th>km</th><th title="Sichtlinie">LOS</th><th>gem.</th><th>Modell</th><th>Δ</th></tr>
+      ${r.rows.map((x, i) => x.error ? `<tr><td>${srcBadge("corescope")}</td><td>${esc(x.name)}</td><td colspan="6" class="warn">${esc(x.error)}</td></tr>`
         : `<tr data-i="${i}"${x.saturated ? ' class="dim" title="SNR ≥ ' + r.sat_db + ' dB: LoRa-Meldungen sind nach oben begrenzt, nicht in der Statistik"' : ""}>
-          <td>${esc(x.name || "")} <span title="${src[x.rx_src][1]}">${src[x.rx_src][0]}</span></td><td>${fmt(x.rx_height_m, 0)} m</td><td>${fmt(x.distance_km, 1)}</td><td>${["–", "~", "✓"][x.los_class]}</td>
+          <td>${srcBadge("corescope")}</td><td>${esc(x.name || "")} <span title="${src[x.rx_src][1]}">${src[x.rx_src][0]}</span></td><td>${fmt(x.rx_height_m, 0)} m</td><td>${fmt(x.distance_km, 1)}</td><td>${["–", "~", "✓"][x.los_class]}</td>
           <td>${fmt(x.measured_snr, 1)}</td><td>${fmt(x.predicted_snr, 1)}</td><td style="color:${Math.abs(x.delta_db) < 3 ? "var(--go)" : Math.abs(x.delta_db) < 8 ? "#b45309" : "var(--bad)"}">${x.delta_db > 0 ? "+" : ""}${fmt(x.delta_db, 1)}</td></tr>`).join("")}</table>
       <p class="note">📍 Werte der Station im Projekt (Höhe, Antenne in Richtung, Kabel) · ✎ eigene Angabe zum Repeater · sonst die Standardwerte oben.</p>
       ${s ? `<div class="calc">Δ = gemessen − Modell: Mittel <b>${s.mean_db > 0 ? "+" : ""}${fmt(s.mean_db)} dB</b> · Median ${fmt(s.median_db)} · Streuung ${fmt(s.std_db)} dB · n = ${s.n}</div><p class="note">${hint}</p>
@@ -1528,7 +1729,7 @@ async function csCalibrate(st) {
     status(`Abgleich fertig: ${r.rows.length} Strecken.`);
     if (r.stats) { lastCal[st.id] = r.stats; const el = document.getElementById("res-" + st.id); if (el && runStations[st.id]) { el.innerHTML = resCard(runStations[st.id], summaries[st.id]); wireResults(); } }
     $("calOut").scrollIntoView({ block: "nearest", behavior: "smooth" });
-  } catch (e) { $("calOut").innerHTML = `<div class="warn">Fehler: ${esc(e.message)}</div>`; status("Abgleich: " + e.message, "err"); }
+  } catch (e) { $("calOut").innerHTML = H + `<div class="warn">Fehler: ${esc(e.message)}</div>`; status("Abgleich: " + e.message, "err"); }
 }
 
 async function csInit() {
@@ -1539,7 +1740,6 @@ async function csInit() {
   $("csShow").onchange = csDrawNodes;
   $("csAge").onchange = csDrawNodes; $("csRole").onchange = csDrawNodes;
   const refilter = () => { csDrawNodes(); csRenderSel(); };
-  $("btnCalRun").onclick = () => { const st = byId($("calSt").value); if (st) csCalibrate(st); };
   csFillCalStations();
   $("csBidir").onchange = refilter; $("csMeas").onchange = refilter; $("csLines").onchange = refilter;
   const num = (id, fmtv) => { $(id).oninput = () => { $(id + "Val").textContent = fmtv($(id).value); refilter(); }; $(id + "Val").textContent = fmtv($(id).value); };
@@ -1595,6 +1795,8 @@ function activateTab(t) {
 
 function setPlacing(v) {
   placing = v;
+  if (!v) relocating = null;
+  $("placing").textContent = relocating ? "Klicke in die Karte: neuer Standort der Station (Esc bricht ab)" : "Klicke in die Karte, um die Station zu setzen (Esc bricht ab)";
   if (v) closeSide();
   $("placing").classList.toggle("hidden", !v);
   $("map").classList.toggle("placing", v);
@@ -1603,8 +1805,9 @@ function setPlacing(v) {
 function wire() {
   document.querySelectorAll(".tabs button").forEach((b) => (b.onclick = () => activateTab(b.dataset.tab)));
   $("btnAdd").onclick = () => setPlacing(!placing);
+  $("soloOff").onclick = () => { const was = soloId; setSolo(null); const st = was && byId(was); if (st && st.corescope_pk && csSelPk === st.corescope_pk) csDeselect(); };
   $("btnCompute").onclick = () => compute();
-  document.addEventListener("keydown", (e) => { if (e.key === "Escape") setPlacing(false); });
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape") { relocating = null; setPlacing(false); } });
   map.on("zoomend", renderOvLegend);
   const AC = ["user_enabled", "user_name", "user_password", "parent_name", "parent_url", "show_github", "imprint_mode", "imprint_url",
     "imprint_name", "imprint_email", "imprint_address", "privacy_mode", "privacy_url", "privacy_extra", "mm_api_key", "measurements_public"];
@@ -1640,6 +1843,11 @@ function wire() {
   $("settingsClose").onclick = () => $("settingsDlg").close();
   $("settingsDlg").addEventListener("close", overlaySources);
   map.on("click", (e) => {
+    if (placing && relocating) {
+      const st = byId(relocating); relocating = null; setPlacing(false);
+      if (st) { st.lat = +e.latlng.lat.toFixed(6); st.lon = +e.latlng.lng.toFixed(6); changed(st); drawStation(st); openEditor(st.id); status(`„${st.name}“ verschoben.`); }
+      return;
+    }
     if (placing && canAdd()) {
       const st = defaultStation(e.latlng.lat, e.latlng.lng);
       project.stations.push(st); drawStation(st); setPlacing(false); openEditor(st.id); changed();

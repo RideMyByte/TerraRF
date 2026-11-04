@@ -276,20 +276,21 @@ def pdf(project, sid, cal_defaults=None, site=None):
     # Modell
     story.append(Paragraph("Modell und Daten", H2))
     names = {x["id"]: x["label"] for x in terrain.list_sources()}
-    mrows = [["Gelände / Oberfläche", f"{names.get(s['ground_source'], s['ground_source'])} / {names.get(s.get('surface_source'), s.get('surface_source'))}"],
+    model_rows = [["Gelände / Oberfläche", f"{names.get(s['ground_source'], s['ground_source'])} / {names.get(s.get('surface_source'), s.get('surface_source'))}"],
              ["Ersatz außerhalb", names.get(s.get("fallback_source"), s.get("fallback_source") or "keine")],
              ["Auflösung", f"{f(float(s['res_m']), 0)} m, {info.get('rays')} Strahlen, Schritt {f(info.get('step_m'))} m"],
              ["Ausbreitung", f"Beugung {('Deygout' if s.get('diffraction_model') == 'deygout' else 'Bullington')}, Clutter {s.get('clutter_mode')}, "
               f"Hindernisse (P.833) {s.get('veg_mode')}, Bodenreflexion {'an' if s.get('two_ray', True) else 'aus'}, k = {f(float(s['k_factor']), 2)}"],
              ["Empfänger", f"{f(float(s['rx_height_m']))} m, {f(float(s['rx_gain_dbi']))} dBi, Kabel {f(float(s['rx_cable_db']))} dB, "
               f"Zusatz {f(float(s.get('rx_extra_loss_db', 0)))} dB, Rauschanhebung {f(float(s.get('noise_rise_db', 0)))} dB"]]
-    story.append(table(mrows, [36 * mm, 144 * mm], head=False))
+    story.append(table(model_rows, [36 * mm, 144 * mm], head=False))
 
     # Messfahrten
     if mrows:
-        story.append(Paragraph("Messfahrten ↔ Modell", H2))
+        story.append(Paragraph("Vergleich mit dem Modell – Messfahrten (Repeater → Handy)", H2))
         try:
-            cmp_ = cov.compare_measurements(project, sid, mrows)
+            smap = measurements.series_map()
+            cmp_ = cov.compare_measurements(project, sid, mrows, series=smap)
             stt = cmp_.get("stats")
             kinds = {}
             for m in mrows:
@@ -298,7 +299,8 @@ def pdf(project, sid, cal_defaults=None, site=None):
             story.append(Paragraph(
                 f"{len(mrows)} Messungen dieses Repeaters ({', '.join(f'{k} {v}' for k, v in sorted(kinds.items()))}), "
                 f"{time.strftime('%d.%m.%Y', time.localtime(first))} bis {time.strftime('%d.%m.%Y', time.localtime(last))}. "
-                f"Modell mit Empfänger {f(cmp_['rx_height_m'])} m / {f(cmp_['rx_gain_dbi'])} dBi, Rauschboden {f(cmp_['noise_dbm'])} dBm"
+                f"Empfänger je Messreihe (sonst Projekt: {f(cmp_['rx_height_m'])} m / {f(cmp_['rx_gain_dbi'])} dBi), "
+                f"Rauschboden {f(cmp_['noise_dbm'])} dBm"
                 + (f"; {cmp_['outside']} Messungen außerhalb des Rechenradius." if cmp_['outside'] else "."), P))
             if stt:
                 story.append(Paragraph(
@@ -324,8 +326,25 @@ def pdf(project, sid, cal_defaults=None, site=None):
                     lo = hi
                 story.append(Spacer(1, 2 * mm))
                 story.append(table(tab, [34 * mm, 14 * mm, 38 * mm, 34 * mm, 28 * mm]))
-            story.append(Paragraph("Vergleich mit der berechneten Abdeckung am Messort (Empfänger-Einstellungen des Projekts). "
-                                   "Gemessen wird das SNR beim Messgerät (Repeater → Messgerät).", SM))
+            # je Messreihe: Empfängerangaben, Δ SNR (ohne gesättigte) und Δ RSSI
+            groups = {}
+            for x in cmp_["rows"]:
+                groups.setdefault(x.get("series_id"), []).append(x)
+            if groups:
+                tab = [["Messreihe", "Empfänger", "n", "Δ SNR", "Δ RSSI"]]
+                for k, xs in sorted(groups.items(), key=lambda kv: -len(kv[1])):
+                    se = smap.get(k) or {}
+                    nm = se.get("name") or (time.strftime("%d.%m.%Y %H:%M", time.localtime(se["t0"])) if se.get("t0") else "–")
+                    ds = [x["delta_db"] for x in xs if x["delta_db"] is not None and not x["saturated"]]
+                    dr = [x["delta_rssi_db"] for x in xs if x.get("delta_rssi_db") is not None]
+                    mean = lambda v: ("+" if np.mean(v) > 0 else "") + f(float(np.mean(v))) if v else "–"  # noqa: E731
+                    tab.append([Paragraph(_e(nm), P), f"{f(xs[0]['rx_height_m'])} m, {f(xs[0]['rx_gain_dbi'])} dBi", str(len(xs)),
+                                mean(ds), mean(dr)])
+                story.append(Spacer(1, 2 * mm))
+                story.append(table(tab, [64 * mm, 40 * mm, 14 * mm, 28 * mm, 28 * mm]))
+            story.append(Paragraph("Gemessen: SNR am Handy für den direkt gehörten Repeater (MeshMapper DISC-Antwort oder Echo, "
+                                   "von Hand, CSV). Modell: berechnete Abdeckung der Station am Messort mit der Empfängerhöhe und dem "
+                                   "Antennengewinn der Messreihe.", SM))
         except Exception as e:  # noqa: BLE001
             story.append(Paragraph(f"Vergleich nicht möglich: {_e(e)}", SM))
 
@@ -371,7 +390,10 @@ def pdf(project, sid, cal_defaults=None, site=None):
                     rows.append([Paragraph(_e(x.get("name")) + (" *" if x["saturated"] else ""), P), f"{f(x['rx_height_m'], 0)} m",
                                  f(x["distance_km"]), ["–", "~", "✓"][x["los_class"]], f(x["measured_snr"]), f(x["predicted_snr"]),
                                  ("+" if x["delta_db"] > 0 else "") + f(x["delta_db"])])
-                story.append(KeepTogether([Paragraph("Abgleich Modell ↔ Messung", H2), table(rows, [60 * mm, 16 * mm, 16 * mm, 12 * mm, 24 * mm, 24 * mm, 20 * mm])]))
+                story.append(KeepTogether([Paragraph("Vergleich mit dem Modell – CoreScope (Repeater ↔ Repeater, direkt)", H2),
+                                           Paragraph("Gemessen: SNR, das der Partner-Repeater in seiner Nachbartabelle für ein direkt "
+                                                     "gehörtes Advert dieser Station meldet (0 Hop). Modell: Strecke Station → Partner.", SM),
+                                           table(rows, [60 * mm, 16 * mm, 16 * mm, 12 * mm, 24 * mm, 24 * mm, 20 * mm])]))
                 stt = res.get("stats")
                 if stt:
                     story.append(Paragraph(

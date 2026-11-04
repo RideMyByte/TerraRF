@@ -285,3 +285,23 @@ body.role-user .admin-only { display:none !important; }
 .resbtns { margin-left:auto; display:flex; gap:4px; }
 .resbtns button { padding:2px 8px; font-size:12px; }
 .resbar { display:flex; height:10px; border-radius:3px; overflow:hidden; margin:5px 0; }
+
+/* #19: nur die gewählte Station zeigen */
+#soloChip { position:absolute; z-index:1000; left:50%; transform:translateX(-50%); top:10px; display:flex; align-items:center; gap:8px;
+  background:rgba(255,255,255,.95); border-radius:18px; padding:4px 6px 4px 12px; box-shadow:0 1px 5px rgba(0,0,0,.25); font-size:13px; max-width:calc(100% - 140px); }
+#soloChip span { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+#soloChip button { border-radius:14px; padding:3px 10px; white-space:nowrap; }
+
+/* Quelle von Messwerten (#21) */
+.srcb { display:inline-block; min-width:20px; padding:0 4px; border-radius:4px; font-size:10px; font-weight:700; line-height:15px;
+  text-align:center; color:#fff; background:#6b7280; vertical-align:1px; }
+.srcb.mm { background:#7c3aed; } .srcb.cs { background:#0e7490; } .srcb.csv { background:#a16207; } .srcb.man { background:#4b5563; }
+/* Messreihen (#22) */
+.mser { border:1px solid var(--line, #e5e7eb); border-radius:8px; padding:6px 8px; margin:6px 0; }
+.mser.on { border-color:#7c3aed; box-shadow:0 0 0 1px #7c3aed inset; }
+.mser-h { display:flex; justify-content:space-between; gap:6px; align-items:baseline; }
+.mser .row.tight button { padding:2px 8px; }
+.mser-ed { margin-top:6px; }
+#mFocus { background:#f5f3ff; border-radius:6px; padding:4px 6px; margin:4px 0; }
+#mFocus button { padding:1px 8px; margin-left:4px; }
+#cmpCard h4, #mCard h4 { margin:10px 0 4px; }
