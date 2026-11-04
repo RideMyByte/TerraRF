@@ -2,6 +2,23 @@
 
 ## [Unreleased]
 
+## 0.4.5
+### Neu
+- Messfahrten: MeshMapper-Weiterleitung („Custom API Endpoint“) nach `/api/ingest/meshmapper` mit API-Schlüssel;
+  unter ⚙ Schlüssel erzeugen, Adresse und Import-Link für die App kopieren
+- Messungen von Hand (Rechtsklick → „Messung hier eintragen“) und als CSV
+- Reiter MeshCore → Messfahrten: Messpunkte nach SNR, Messplan (~300-m-Zellen; „genug“ ab 3 Messungen desselben
+  Repeaters mit höchstens 6 dB Streuung), Zeitraum- und Repeater-Filter
+- Vergleich Messung ↔ Modell je Station (Δ SNR und Δ RSSI, größte Abweichungen anklickbar, Punkte nach Δ gefärbt);
+  auch im PDF-Bericht
+- Messpunkte optional ohne Anmeldung sichtbar (ohne Zeit und Gerät); Admin kann Messungen je Quelle löschen
+### Geändert
+- CoreScope-Abgleich nutzt nur noch direkt gemeldete Nachbar-SNR (`neighbor_report` der Observer); aus Paketpfaden
+  abgeleitete Werte (letzter Hop, mehrdeutige Präfixe, Dach-Observer) werden nur noch angezeigt
+- SNR-Vergleiche lassen Werte am oberen Ende weg, auch wenn das Modell dort mehr als ~10 dB vorhersagt
+### Behoben
+- Netzwerkfehler beim Laden einzelner NRW-Kacheln (Proxy, DNS) brachen die Berechnung mit HTTP 500 ab
+
 ## 0.4.4
 ### Neu
 - PDF-Bericht je Station: Karte, Parameter, Kennzahlen nach Reserve und Entfernung, MeshCore-Nachbarn und Abgleich
