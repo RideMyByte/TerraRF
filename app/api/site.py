@@ -4,7 +4,7 @@ from __future__ import annotations
 import os
 
 from fastapi import APIRouter, HTTPException
-from fastapi.responses import JSONResponse, RedirectResponse, Response
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response
 
 from ..site import legal
 from ..store import appconfig
@@ -25,6 +25,25 @@ MANIFEST = {
         {"src": "/static/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any"},
     ],
 }
+
+
+@router.get("/assets/{version}/{folder}/{path:path}")
+def versioned_asset(version: str, folder: str, path: str):
+    """Frontend modules and translations under a path that contains the version.
+
+    ES modules import each other by relative URL, so a version tag in the query string of main.js does not reach
+    them. With the version in the path every release gets new URLs: no browser, reverse proxy or CDN can mix
+    modules of two versions (which breaks the page with "module does not provide an export"). Files of the
+    current version may be cached for good; a request for another version gets the current files uncached.
+    """
+    if folder not in ("js", "locales"):
+        raise HTTPException(404)
+    base = os.path.realpath(os.path.join(STATIC, folder))
+    target = os.path.realpath(os.path.join(base, path))
+    if not target.startswith(base + os.sep) or not os.path.isfile(target):
+        raise HTTPException(404)
+    cache = "public, max-age=31536000, immutable" if version == VERSION and VERSION != "dev" else "no-cache"
+    return FileResponse(target, headers={"Cache-Control": cache})
 
 
 @router.get("/manifest.webmanifest")

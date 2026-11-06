@@ -1,6 +1,10 @@
 # Changelog
 
 ## [Unreleased]
+### Behoben
+- Nach einem Update konnte die Seite mit „module does not provide an export“ hängen bleiben, wenn Browser oder
+  Reverse-Proxy noch alte Module im Cache hatten. Module und Übersetzungen liegen jetzt unter einem Pfad mit der
+  Versionsnummer (`/assets/<version>/…`), damit jede Version neue Adressen hat.
 
 ## 0.5.1
 ### Neu

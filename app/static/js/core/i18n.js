@@ -1,5 +1,5 @@
 /**
- * Translations. Source strings in the code are English; /static/locales/<lang>.json maps them to the
+ * Translations. Source strings in the code are English; locales/<lang>.json (next to js/) maps them to the
  * target language (missing entries fall back to English). Placeholders: t("{n} stations", { n: 3 }).
  *
  * Static markup is translated with attributes: data-i18n (text), data-i18n-title, data-i18n-placeholder.
@@ -24,7 +24,7 @@ export async function setLanguage(code, { remember = false } = {}) {
   current = SUPPORTED.includes(code) ? code : "en";
   dictionary = {};
   if (current !== "en") {
-    try { dictionary = await (await fetch(`/static/locales/${current}.json`, { cache: "no-cache" })).json(); }
+    try { dictionary = await (await fetch(new URL(`../../locales/${current}.json`, import.meta.url), { cache: "no-cache" })).json(); }
     catch { dictionary = {}; }
   }
   if (remember) { try { localStorage.setItem(STORAGE_KEY, current); } catch { /* ignore */ } }
