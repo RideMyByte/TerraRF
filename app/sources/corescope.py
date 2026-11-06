@@ -41,7 +41,7 @@ os.makedirs(DIR, exist_ok=True)
 NODES_FILE = os.path.join(DIR, "nodes.json")
 PK = re.compile(r"^[0-9a-f]{64}$")
 ROLES = ("repeater", "room")
-LINKS_VERSION = 3
+LINKS_VERSION = 4
 OVERRIDES_FILE = os.path.join(DIR, "overrides.json")
 _ovr_lock = threading.Lock()
 
@@ -219,6 +219,7 @@ def merge_links(pk, reach, nb, reports=None):
         if not PK.match(q) or x.get("lat") is None or x.get("lon") is None:
             continue
         L[q] = {"pk": q, "name": x.get("name"), "role": x.get("role"), "lat": x["lat"], "lon": x["lon"],
+                "last_seen": x.get("last_seen") or x.get("last_heard"),
                 "we_hear": int(x.get("we_hear") or 0), "they_hear": int(x.get("they_hear") or 0),
                 "bidir": bool(x.get("bidir")), "distance_km": x.get("distance_km"), "snr": None, "snr_n": 0}
     meas, where = {}, {}
@@ -280,14 +281,16 @@ def merge_links(pk, reach, nb, reports=None):
                                     "lat": kn["lat"], "lon": kn["lon"], "we_hear": 0, "they_hear": 0, "bidir": False,
                                     "distance_km": None, "count": 0, "snr_any": None}
         e["snr"], e["snr_n"], e["snr_src"] = round(x["snr"], 2), 1, "neighbor_report"
+        e["heard_at"] = x.get("heard_at")   # #26: when the partner last heard this node directly
     mine = {}
     for q, lst in rep.get("by_neighbor", {}).items():  # unser Knoten meldet selbst: q -> pk
         for x in lst:
             if x["observer"] == pk:
-                mine[q] = x["snr"]
+                mine[q] = x
     for q, v in mine.items():
         if q in L:
-            L[q]["snr_rev"] = round(v, 2)
+            L[q]["snr_rev"] = round(v["snr"], 2)
+            L[q]["heard_rev_at"] = v.get("heard_at")
     return {"v": LINKS_VERSION, "pk": pk, "name": me.get("name"), "lat": me.get("lat"), "lon": me.get("lon"),
             "fetched_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
             "window_days": (reach.get("window") or {}).get("days"), "links": list(L.values())}
@@ -424,8 +427,11 @@ def observer_reports(refresh=False):
             for nb in rep.get("neighbors") or []:
                 q = str(nb.get("pubkey") or "").lower()
                 if PK.match(q) and nb.get("snr") is not None:
+                    ago = nb.get("heard_secs_ago")
                     idx.setdefault(q, []).append({"observer": opk, "name": obs[opk]["name"], "snr": float(nb["snr"]),
-                                                  "heard_secs_ago": nb.get("heard_secs_ago")})
+                                                  "heard_secs_ago": ago,
+                                                  # absolute time, so the age stays right while the cache is reused
+                                                  "heard_at": int(time.time() - float(ago)) if isinstance(ago, (int, float)) else None})
     out = {"by_neighbor": idx, "observers": obs, "fetched_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
     with open(REPORTS_FILE, "w") as f:
         json.dump(out, f)

@@ -8,6 +8,7 @@ import time
 import numpy as np
 from PIL import Image, ImageDraw
 
+from . import compare
 from ..model import coverage as cov
 from ..model import propagation as prop
 from ..model import terrain
@@ -170,7 +171,7 @@ def tiles_world():
 
 
 # ---------------------------------------------------------------- PDF
-def pdf(project, sid, cal_defaults=None, site=None):
+def pdf(project, sid, cal_defaults=None, site=None, lang="de"):
     from reportlab.lib import colors
     from reportlab.lib.pagesizes import A4
     from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
@@ -292,7 +293,7 @@ def pdf(project, sid, cal_defaults=None, site=None):
         story.append(Paragraph("Vergleich mit dem Modell – Messfahrten (Repeater → Handy)", H2))
         try:
             smap = measurements.series_map()
-            cmp_ = cov.compare_measurements(project, sid, mrows, series=smap)
+            cmp_ = compare.compare_measurements(project, sid, mrows, series=smap)
             stt = cmp_.get("stats")
             kinds = {}
             for m in mrows:
@@ -382,7 +383,7 @@ def pdf(project, sid, cal_defaults=None, site=None):
         if pts:
             cd = cal_defaults or {}
             try:
-                res = cov.calibrate(project, sid, pts, float(cd.get("rx_height_m", 10)), float(cd.get("rx_gain_dbi", 3)),
+                res = compare.calibrate(project, sid, pts, float(cd.get("rx_height_m", 10)), float(cd.get("rx_gain_dbi", 3)),
                                     float(cd.get("rx_cable_db", 1)), corescope.overrides())
                 rows = [["Partner", "Höhe", "km", "LOS", "gemessen", "Modell", "Δ"]]
                 for x in res["rows"]:

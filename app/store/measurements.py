@@ -18,7 +18,7 @@ import threading
 import time
 
 from .. import paths
-from ..model import terrain
+from . import catalog
 from ..sources import corescope
 
 DB = os.path.join(paths.DATA_DIR, "measurements.db")
@@ -31,7 +31,7 @@ _REP = re.compile(r"([0-9A-Fa-f]{2,64})\s*\(\s*(-?\d+(?:\.\d+)?|null|None)?\s*\)
 COLS = ("ts", "src", "kind", "lat", "lon", "alt", "rep_prefix", "rep_pk", "snr_down", "snr_up", "rssi_down",
         "noise", "power", "ext_ant", "radio", "contact", "rx_h", "note")
 SERIES_GAP_S = 1800   # neue Messreihe nach 30 min Pause
-SERIES_EDIT = ("name", "rx_h", "rx_gain_dbi", "rx_cable_db", "ext_ant", "note")
+SERIES_EDIT = ("name", "rx_h", "rx_gain_dbi", "rx_cable_db", "ext_ant", "note", "device_id", "placement_id")
 
 
 def _db():
@@ -52,6 +52,10 @@ def init():
             name TEXT, rx_h REAL, rx_gain_dbi REAL, rx_cable_db REAL, ext_ant INTEGER, note TEXT)""")
         if "series_id" not in [r[1] for r in c.execute("PRAGMA table_info(m)")]:
             c.execute("ALTER TABLE m ADD COLUMN series_id INTEGER")
+        have = [r[1] for r in c.execute("PRAGMA table_info(series)")]
+        for col in ("device_id", "placement_id"):   # 0.5: catalog profiles (#29)
+            if col not in have:
+                c.execute(f"ALTER TABLE series ADD COLUMN {col} TEXT")
         c.execute("CREATE INDEX IF NOT EXISTS m_series ON m(series_id)")
         todo = c.execute("SELECT id, ts, src, contact, power, ext_ant FROM m WHERE series_id IS NULL ORDER BY ts").fetchall()
         for r in todo:  # alte Daten nachträglich in Reihen einteilen
@@ -259,6 +263,12 @@ def update_series(sid, d):
         v = d[k]
         if k in ("name", "note"):
             vals[k] = (str(v or "").strip()[:120 if k == "name" else 500]) or None
+        elif k in ("device_id", "placement_id"):
+            v = str(v or "").strip()
+            kind = "devices" if k == "device_id" else "placements"
+            if v and catalog.get(kind, v) is None:
+                raise ValueError(f"{k}: not in the catalog")
+            vals[k] = v or None
         elif k == "ext_ant":
             vals[k] = None if v in (None, "") else (1 if v else 0)
         else:
