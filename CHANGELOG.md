@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+## 0.5.3
+### Behoben
+- Projektmenü: Die Einträge waren weiß auf weiß und damit unsichtbar (die Schriftfarbe der oberen Leiste galt auch im Menü).
+
 ## 0.5.2
 ### Neu
 - **Projekte teilen mit Mitarbeitenden:** Im Projektmenü unter „Teilen & Mitarbeitende“ legt der Admin je Projekt
