@@ -15,15 +15,16 @@ from urllib.parse import urlencode
 
 import httpx
 
-from . import terrain
-from .version import VERSION
+from .. import paths
+from ..model import terrain
+from ..version import VERSION
 
 log = logging.getLogger("terrarf.tiles")
 
 ENABLED = os.environ.get("RFP_TILE_PROXY", "true").strip().lower() not in ("0", "false", "no", "off")
 MAX_AGE_S = 14 * 86400
 CACHE_MB = float(os.environ.get("RFP_TILE_CACHE_MB", "2000") or 2000)
-DIR = os.path.join(terrain.DATA_DIR, "tiles")
+DIR = os.path.join(paths.DATA_DIR, "tiles")
 UA = f"TerraRF/{VERSION} tile proxy (+https://github.com/RideMyByte/TerraRF)"
 
 # XYZ sources: id -> (URL template, max zoom)

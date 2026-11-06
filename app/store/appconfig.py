@@ -9,7 +9,7 @@ import os
 import re
 import threading
 
-from .terrain import DATA_DIR
+from ..paths import DATA_DIR
 
 PATH = os.path.join(DATA_DIR, "appconfig.json")
 _lock = threading.Lock()

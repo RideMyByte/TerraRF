@@ -9,9 +9,12 @@ from __future__ import annotations
 import html
 import os
 
-from . import appconfig, auth, corescope, terrain, tiles
+from .. import paths
+from ..sources import corescope, tiles
+from ..store import appconfig
+from . import auth
 
-LEGAL_DIR = os.path.join(terrain.DATA_DIR, "legal")
+LEGAL_DIR = os.path.join(paths.DATA_DIR, "legal")
 
 
 def _c(k):

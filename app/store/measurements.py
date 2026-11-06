@@ -17,9 +17,11 @@ import sqlite3
 import threading
 import time
 
-from . import corescope, terrain
+from .. import paths
+from ..model import terrain
+from ..sources import corescope
 
-DB = os.path.join(terrain.DATA_DIR, "measurements.db")
+DB = os.path.join(paths.DATA_DIR, "measurements.db")
 _lock = threading.Lock()
 GRID_LAT, GRID_LON = 0.0027, 0.00384  # Rasterzelle wie MeshMapper (~300 m)
 PLAN_MIN_N, PLAN_MAX_SPREAD_DB = 3, 6.0

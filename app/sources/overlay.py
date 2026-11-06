@@ -15,9 +15,10 @@ import rasterio
 from PIL import Image
 from rasterio.warp import Resampling, transform_bounds
 
-from . import terrain
+from .. import paths
+from ..model import terrain
 
-DIR = os.path.join(terrain.CACHE_DIR, "overlay")
+DIR = os.path.join(paths.CACHE_DIR, "overlay")
 MIN_Z, MAX_Z = 11, 18
 WORLD = 2 * math.pi * 6378137.0
 KINDS = ("relief", "surface", "ndom")

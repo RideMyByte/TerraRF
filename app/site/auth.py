@@ -22,7 +22,7 @@ import time
 
 from fastapi import HTTPException, Request
 
-from .terrain import DATA_DIR
+from ..paths import DATA_DIR
 
 log = logging.getLogger("terrarf.auth")
 
@@ -72,7 +72,7 @@ def _sign(payload: bytes) -> str:
 
 def _pwtag(role):
     """Kurzer Fingerabdruck des aktuellen Passworts: ändert der Admin es, werden alte Sitzungen ungültig."""
-    from . import appconfig
+    from ..store import appconfig
     pw = _password if role == "admin" else appconfig.get()["user_password"]
     return hashlib.sha256((pw or "").encode()).hexdigest()[:10]
 
@@ -108,7 +108,7 @@ def verify(token: str | None) -> str | None:
     if role == "admin" and user == ADMIN_USER:
         return "admin"
     if role == "user":
-        from . import appconfig
+        from ..store import appconfig
         c = appconfig.get()
         if c["user_enabled"] and c["user_password"] and user == c["user_name"]:
             return "user"
@@ -152,7 +152,7 @@ def check_login(request: Request, user: str, password: str) -> str | None:
         _fail[ip] = recent
         if len(recent) >= 10:
             raise HTTPException(429, "Zu viele Fehlversuche, bitte später erneut versuchen")
-    from . import appconfig
+    from ..store import appconfig
     c = appconfig.get()
     got = None
     if hmac.compare_digest(user.encode(), ADMIN_USER.encode()) & hmac.compare_digest(

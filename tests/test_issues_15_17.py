@@ -5,7 +5,7 @@ import httpx
 import pytest
 from fastapi.testclient import TestClient
 
-from app import tiles
+from app.sources import tiles
 from app.main import app
 
 
@@ -70,7 +70,7 @@ def test_tile_proxy_caches_and_validates(monkeypatch):
 def test_public_project_is_precomputed_on_save(admin, project):
     project["public"] = True
     project["stations"][0]["height_m"] = 31.5  # eigener Cache-Schlüssel für diesen Test
-    from app import coverage as cov
+    from app.model import coverage as cov
     before = set(cov._station_cache)
     assert admin.put("/api/projects/warm", json=project).status_code == 200
     for _ in range(120):  # Vorberechnung läuft im Hintergrund – ohne dass ein Besucher etwas anfragt
@@ -114,7 +114,7 @@ def test_admin_reopens_last_project(admin, project):
 
 def test_status_busy_and_resources(admin, project):
     import threading
-    from app import sysstat
+    from app.site import sysstat
     r = admin.get("/api/status").json()
     assert "busy" in r and "cpu_pct" in r["res"] and r["res"]["mem_used"]
     with TestClient(app) as anon:
@@ -132,7 +132,7 @@ def test_status_busy_and_resources(admin, project):
 
 
 def test_user_role_and_site_settings(admin, project, station):
-    from app import appconfig
+    from app.store import appconfig
     # Admin richtet den Benutzer ein (Klartext-Passwort sichtbar) und verlinkt das Impressum
     r = admin.put("/api/admin/appconfig", json={"user_enabled": True, "user_name": "gast", "user_password": "geheim123",
                                                 "imprint_mode": "link", "imprint_url": "https://forum.example/impressum",

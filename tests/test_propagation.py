@@ -2,7 +2,7 @@ import math
 
 import numpy as np
 
-from app import propagation as prop
+from app.model import propagation as prop
 
 
 def test_knife_edge_reference_values():

@@ -8,10 +8,12 @@ import time
 import numpy as np
 from PIL import Image, ImageDraw
 
-from . import corescope, measurements, terrain, tiles
-from . import coverage as cov
-from . import propagation as prop
-from .version import VERSION
+from ..model import coverage as cov
+from ..model import propagation as prop
+from ..model import terrain
+from ..sources import corescope, tiles
+from ..store import measurements
+from ..version import VERSION
 
 RINGS_KM = (1, 2, 3, 5, 7.5, 10, 15, 20, 30, 50, 80)
 FONT_DIRS = ("/usr/share/fonts/truetype/dejavu", "/usr/share/fonts/dejavu", "/usr/share/fonts/TTF")

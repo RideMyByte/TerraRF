@@ -19,15 +19,20 @@ from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 
-from . import appconfig, auth, corescope, legal, measurements, overlay, report, regions, sysstat, terrain, tiles
-from . import coverage as cov
-from . import propagation as prop
+from . import paths
+from .analysis import report
+from .model import coverage as cov
+from .model import propagation as prop
+from .model import terrain
+from .site import auth, legal, sysstat
+from .sources import corescope, overlay, regions, tiles
+from .store import appconfig, measurements
 from .version import VERSION
 
 logging.basicConfig(level=os.environ.get("RFP_LOGLEVEL", "INFO"), format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 log = logging.getLogger("terrarf")
 
-PROJECT_DIR = os.path.join(terrain.DATA_DIR, "projects")
+PROJECT_DIR = os.path.join(paths.DATA_DIR, "projects")
 os.makedirs(PROJECT_DIR, exist_ok=True)
 STATIC = os.path.join(os.path.dirname(__file__), "static")
 
@@ -193,7 +198,7 @@ def list_projects(request: Request):
     return out
 
 
-LAST_FILE = os.path.join(terrain.DATA_DIR, "last_project")
+LAST_FILE = os.path.join(paths.DATA_DIR, "last_project")
 
 
 @app.get("/api/projects/{pid}")

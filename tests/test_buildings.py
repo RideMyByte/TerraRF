@@ -8,8 +8,8 @@ import rasterio
 from rasterio.warp import transform as _warp
 from rasterio.transform import from_origin
 
-from app import coverage as cov
-from app.terrain import lonlat_to_merc
+from app.model import coverage as cov
+from app.model.terrain import lonlat_to_merc
 
 X0, Y1, RES, N = 360000.0, 5718000.0, 5.0, 800   # 4 km, 5 m
 CX, CY = X0 + 2000, Y1 - 2000

@@ -23,8 +23,9 @@ import time
 
 import httpx
 
-from . import terrain
-from .version import VERSION
+from .. import paths
+from ..model import terrain
+from ..version import VERSION
 
 log = logging.getLogger("terrarf.corescope")
 
@@ -35,7 +36,7 @@ PAGE = 200
 MAX_PAGES = 100
 PAUSE_S = 0.3
 UA = f"TerraRF/{VERSION} (+https://github.com/RideMyByte/TerraRF)"
-DIR = os.path.join(terrain.DATA_DIR, "corescope")
+DIR = os.path.join(paths.DATA_DIR, "corescope")
 os.makedirs(DIR, exist_ok=True)
 NODES_FILE = os.path.join(DIR, "nodes.json")
 PK = re.compile(r"^[0-9a-f]{64}$")

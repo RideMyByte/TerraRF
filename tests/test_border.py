@@ -6,8 +6,8 @@ import numpy as np
 import rasterio
 from rasterio.transform import from_origin
 
-from app import terrain
-from app import coverage as cov
+from app.model import terrain
+from app.model import coverage as cov
 
 
 def test_wcs_4xx_marks_tile_empty(tmp_path, monkeypatch):

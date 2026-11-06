@@ -15,7 +15,8 @@ import numpy as np
 from PIL import Image
 
 from . import propagation as prop
-from . import sysstat, terrain
+from . import terrain
+from ..site import sysstat
 from .terrain import CACHE_DIR, Grid, SourceError, fill_nans, get_source, load_terrain, lonlat_to_merc, merc_to_lonlat
 
 log = logging.getLogger("terrarf.coverage")

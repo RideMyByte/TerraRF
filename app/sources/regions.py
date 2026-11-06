@@ -19,7 +19,7 @@ import httpx
 from rasterio.crs import CRS
 from rasterio.warp import transform_bounds
 
-from . import terrain
+from ..model import terrain
 
 log = logging.getLogger("terrarf.regions")
 

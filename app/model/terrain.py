@@ -31,9 +31,7 @@ from rasterio.warp import Resampling, reproject, transform_bounds
 
 log = logging.getLogger("terrarf.terrain")
 
-DATA_DIR = os.environ.get("RFP_DATA", "/data")
-CACHE_DIR = os.path.join(DATA_DIR, "cache")
-DEM_DIR = os.path.join(DATA_DIR, "dem")
+from ..paths import CACHE_DIR, DATA_DIR, DEM_DIR  # noqa: F401  (re-exported for older imports)
 WEBM = CRS.from_epsg(3857)
 R_EARTH = 6378137.0
 

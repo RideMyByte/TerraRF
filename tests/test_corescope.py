@@ -6,7 +6,7 @@ import httpx
 import pytest
 from fastapi.testclient import TestClient
 
-from app import corescope
+from app.sources import corescope
 from app.main import app
 
 D = os.path.join(os.path.dirname(__file__), "data")
