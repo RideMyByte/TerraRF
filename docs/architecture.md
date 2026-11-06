@@ -43,6 +43,7 @@ app/
     measurements.py  SQLite with drive-test rows and series
     catalog.py       antennas / devices / placements, seeded on first start
     appconfig.py     instance settings edited in Administration
+    accounts.py      collaborator logins that belong to one project
   site/            running the site
     auth.py          admin + optional user, signed session cookie
     legal.py         generated imprint and privacy policy (German)
@@ -56,6 +57,7 @@ app/
 | `settings.json` | global model settings (only values that differ from the defaults) |
 | `catalog.json` | antenna, device and placement catalog |
 | `appconfig.json` | access, website, legal, measurement key (mode 0600: contains the user password) |
+| `accounts.json` | collaborator logins per project (password hashes only, mode 0600) |
 | `measurements.db` | drive-test rows and series (SQLite) |
 | `buildings/footprints.json` | building footprints |
 | `corescope/` | cached CoreScope nodes, links, repeater overrides |
@@ -102,5 +104,7 @@ care about fire; nothing calls into a workspace directly except to open it.
 `locales/de.json`. `tests/test_i18n.py` fails when a literal string has no German entry or placeholders differ.
 Static markup uses `data-i18n`, `data-i18n-title`, `data-i18n-placeholder`.
 
-**Caching:** `index.html` loads `main.js?v=<version>`; modules import each other without a version tag, so the server
-sends `Cache-Control: no-cache` for `/static/js/`, `/static/locales/` and `style.css` (cheap 304 revalidation).
+**Caching:** `index.html` (never cached) loads `/assets/<version>/js/main.js`. Modules import each other by relative
+URL, so all of them – and `locales/` – live under the version path: every release has new URLs, the current version
+is cached for good, and a browser or proxy can never mix modules of two versions. `/static/js/` keeps working with
+`Cache-Control: no-cache`.

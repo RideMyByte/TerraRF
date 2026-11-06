@@ -5,7 +5,7 @@
  */
 (function () {
   "use strict";
-  if (document.querySelector('script[type="module"][src*="/static/js/main.js"]')) return;
+  if (document.querySelector('script[type="module"][src*="/js/main.js"]')) return;
   const url = new URL(location.href);
   if (url.searchParams.has("fresh")) return;           // already tried once – do not loop
   url.searchParams.set("fresh", Date.now().toString(36));

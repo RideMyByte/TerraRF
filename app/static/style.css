@@ -295,3 +295,7 @@ body:not(.role-admin):not(.role-user) .member-only { display: none !important; }
 
 /* #32: projects of others are read-only for the user */
 body.project-readonly #btnSave, body.project-readonly #dirtyDot { display: none; }
+
+/* share & collaborators */
+#membersDlg { width: min(560px, 94vw); }
+#membersDlg .secret textarea { display: block; width: 100%; margin: 6px 0; font-size: 12px; }

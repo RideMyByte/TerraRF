@@ -45,7 +45,23 @@ def test_named_imports_exist():
 
 def test_index_loads_the_entry_module():
     html = (STATIC / "index.html").read_text(encoding="utf-8")
-    assert 'type="module" src="/static/js/main.js' in html
+    assert 'type="module" src="/assets/__VERSION__/js/main.js"' in html
+
+
+def test_versioned_assets():
+    from fastapi.testclient import TestClient
+    from app.main import app
+    from app.version import VERSION
+    with TestClient(app) as c:
+        html = c.get("/").text
+        assert f'src="/assets/{VERSION}/js/main.js"' in html
+        r = c.get(f"/assets/{VERSION}/js/core/state.js")
+        assert r.status_code == 200 and "canEditProject" in r.text
+        assert c.get("/assets/0.0.1/js/core/state.js").headers["cache-control"] == "no-cache"
+        assert c.get(f"/assets/{VERSION}/locales/de.json").status_code == 200
+        for bad in ("../api/site.py", "..%2Fapi%2Fsite.py", "core/../../index.html"):
+            assert c.get(f"/assets/{VERSION}/js/{bad}").status_code == 404
+        assert c.get(f"/assets/{VERSION}/pwa/icon-192.png").status_code == 404
 
 
 def test_used_functions_are_imported():

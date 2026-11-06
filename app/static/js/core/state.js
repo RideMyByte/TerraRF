@@ -27,10 +27,15 @@ export function emit(event, payload) { for (const fn of listeners[event] || []) 
 
 export const isAdmin = () => state.role === "admin";
 export const isUser = () => state.role === "user";
+/** Collaborator account of one project (created by the admin under "Share & collaborators"). */
+export const isCollaborator = () => state.role === "project";
+/** Admin and user may create projects; a collaborator works on its one project only. */
+export const canCreateProjects = () => isAdmin() || isUser();
 /** Logged in (admin or user): may compute unsaved changes and enter measurements. */
-export const isMember = () => isAdmin() || isUser();
+export const isMember = () => isAdmin() || isUser() || isCollaborator();
 /** #32: a project is changed only by whoever created it, and by the admin. */
-export const canEditProject = () => isAdmin() || (isUser() && state.project?.owner === "user");
+export const canEditProject = () => isAdmin() || (isUser() && state.project?.owner === "user")
+  || (isCollaborator() && !!state.project?.id && state.project.id === state.config?.auth?.project);
 /** Stations follow their project. */
 export const canEditStation = () => canEditProject();
 

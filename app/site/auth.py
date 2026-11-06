@@ -1,5 +1,10 @@
-"""Logins: one admin (everything) and optionally one “user” (read, add own stations, enter measurements).
-Everybody else sees public projects read-only. The user is maintained in Administration → Access.
+"""Logins and roles.
+
+  admin    – everything (RFP_ADMIN_USER / RFP_ADMIN_PASSWORD)
+  user     – optional second login: own projects, measurements (Administration → Access)
+  project  – collaborator accounts the admin creates for one project (store/accounts.py): change that project,
+             compute, enter measurements
+Everybody else sees public projects read-only.
 
 Config (environment):
   RFP_ADMIN_USER       default "admin"
@@ -70,19 +75,29 @@ def _sign(payload: bytes) -> str:
     return hmac.new(_secret, payload, hashlib.sha256).hexdigest()
 
 
-def _pwtag(role):
-    """Short fingerprint of the current password: when the admin changes it, old sessions become invalid."""
+def _pwtag(role, user=None):
+    """Short fingerprint of the current password: when it changes, old sessions become invalid."""
+    if role == "project":
+        from ..store import accounts
+        return accounts.tag(user) or "-"
     from ..store import appconfig
     pw = _password if role == "admin" else appconfig.get()["user_password"]
     return hashlib.sha256((pw or "").encode()).hexdigest()[:10]
 
 
 def make_token(user: str, role: str = "admin") -> str:
-    payload = f"{user}|{int(time.time()) + SESSION_S}|{role}|{_pwtag(role)}".encode()
+    payload = f"{user}|{int(time.time()) + SESSION_S}|{role}|{_pwtag(role, user)}".encode()
     return base64.urlsafe_b64encode(payload).decode() + "." + _sign(payload)
 
 
 def verify(token: str | None) -> str | None:
+    """Role of a session token, or None."""
+    who = principal_of(token)
+    return who[0] if who else None
+
+
+def principal_of(token: str | None):
+    """(role, user name) of a session token, or None."""
     if not token or "." not in token or _secret is None:
         return None
     b64, sig = token.rsplit(".", 1)
@@ -103,15 +118,17 @@ def verify(token: str | None) -> str | None:
             return None
     except ValueError:
         return None
-    if not hmac.compare_digest(tag, _pwtag(role)):
+    if not hmac.compare_digest(tag, _pwtag(role, user)):
         return None
     if role == "admin" and user == ADMIN_USER:
-        return "admin"
+        return "admin", user
     if role == "user":
         from ..store import appconfig
         c = appconfig.get()
         if c["user_enabled"] and c["user_password"] and user == c["user_name"]:
-            return "user"
+            return "user", user
+    if role == "project":
+        return "project", user
     return None
 
 
@@ -119,13 +136,27 @@ def role(request: Request) -> str | None:
     return verify(request.cookies.get(COOKIE))
 
 
+def user_name(request: Request) -> str | None:
+    who = principal_of(request.cookies.get(COOKIE))
+    return who[1] if who else None
+
+
+def account_project(request: Request) -> str | None:
+    """Project id of a collaborator account, else None."""
+    who = principal_of(request.cookies.get(COOKIE))
+    if not who or who[0] != "project":
+        return None
+    from ..store import accounts
+    return accounts.project_of(who[1])
+
+
 def is_admin(request: Request) -> bool:
     return role(request) == "admin"
 
 
 def can_edit_any(request: Request) -> bool:
-    """Admin or user: may compute, send unsaved projects, add stations."""
-    return role(request) in ("admin", "user")
+    """Logged in (admin, user or collaborator): may compute, send unsaved projects, enter measurements."""
+    return role(request) in ("admin", "user", "project")
 
 
 def require_admin(request: Request):
@@ -144,7 +175,7 @@ def require_read(request: Request):
 
 
 def check_login(request: Request, user: str, password: str) -> str | None:
-    """Returns the role ("admin"/"user") or None."""
+    """Returns the role ("admin"/"user"/"project") or None."""
     ip = request.client.host if request.client else "?"
     now = time.time()
     with _lock:
@@ -161,6 +192,10 @@ def check_login(request: Request, user: str, password: str) -> str | None:
     elif c["user_enabled"] and c["user_password"] and hmac.compare_digest(user.encode(), c["user_name"].encode()) \
             & hmac.compare_digest((password or "").encode(), c["user_password"].encode()):
         got = "user"
+    else:
+        from ..store import accounts
+        if user not in (ADMIN_USER, c["user_name"]) and accounts.check(user, password):
+            got = "project"
     if not got:
         with _lock:
             _fail.setdefault(ip, []).append(now)

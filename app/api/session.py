@@ -7,7 +7,7 @@ from fastapi.responses import JSONResponse
 from ..model import buildings, settings, terrain
 from ..site import auth, legal, sysstat
 from ..sources import corescope, regions, tiles
-from ..store import appconfig, projects
+from ..store import accounts, appconfig, projects
 from ..version import VERSION
 
 router = APIRouter()
@@ -21,8 +21,8 @@ def health():
 @router.get("/api/me")
 def me(request: Request):
     role = auth.role(request)
-    name = auth.ADMIN_USER if role == "admin" else appconfig.get()["user_name"] if role == "user" else None
-    return {"admin": role == "admin", "role": role, "user": name, "public_read": auth.PUBLIC_READ}
+    return {"admin": role == "admin", "role": role, "user": auth.user_name(request) if role else None,
+            "project": auth.account_project(request), "public_read": auth.PUBLIC_READ}
 
 
 @router.post("/api/login")
@@ -30,7 +30,8 @@ def login(request: Request, body: dict = Body(...)):
     role = auth.check_login(request, str(body.get("user", "")), str(body.get("password", "")))
     if not role:
         raise HTTPException(401, "Benutzer oder Passwort falsch")
-    resp = JSONResponse({"ok": True, "admin": role == "admin", "role": role})
+    resp = JSONResponse({"ok": True, "admin": role == "admin", "role": role,
+                         "project": accounts.project_of(str(body.get("user", ""))) if role == "project" else None})
     # session cookie by default (ends with the browser); "stay logged in" only on request
     resp.set_cookie(auth.COOKIE, auth.make_token(str(body.get("user", "")), role),
                     max_age=auth.SESSION_S if body.get("remember") else None, httponly=True,

@@ -59,7 +59,7 @@ def exists(project_id):
     return valid_id(project_id) and os.path.exists(path(project_id))
 
 
-def list_all(role):
+def list_all(role, account_project=None):
     """Projects the role may see (see ``can_view``), newest first."""
     out = []
     for fn in sorted(os.listdir(PROJECT_DIR)):
@@ -70,11 +70,11 @@ def list_all(role):
                 p = json.load(f)
         except (OSError, ValueError):
             continue
-        if not can_view(role, p):
+        if not can_view(role, p, account_project):
             continue
         out.append({"id": p.get("id"), "name": p.get("name"), "stations": len(p.get("stations") or []),
                     "updated": p.get("updated"), "public": bool(p.get("public")), "owner": owner(p),
-                    "editable": can_edit(role, p)})
+                    "editable": can_edit(role, p, account_project)})
     out.sort(key=lambda p: p.get("updated") or "", reverse=True)
     return out
 
@@ -102,14 +102,17 @@ def owner(project):
     return "user" if project.get("owner") == "user" else "admin"
 
 
-def can_view(role, project):
-    """#32: admin sees everything, the user their own projects and public ones, visitors public ones."""
-    return role == "admin" or bool(project.get("public")) or (role == "user" and owner(project) == "user")
-
-
-def can_edit(role, project):
-    """#32: a project – public or not – is changed only by the one who created it, and by the admin."""
+def can_edit(role, project, account_project=None):
+    """#32: a project – public or not – is changed only by the one who created it, and by the admin.
+    A collaborator account (role "project") changes exactly the project it was created for."""
+    if role == "project":
+        return bool(account_project) and project.get("id") == account_project
     return role == "admin" or (role == "user" and owner(project) == "user")
+
+
+def can_view(role, project, account_project=None):
+    """Admin sees everything, the others public projects and the ones they may edit."""
+    return bool(project.get("public")) or can_edit(role, project, account_project)
 
 
 def remember_last(project_id):

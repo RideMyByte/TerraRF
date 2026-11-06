@@ -46,10 +46,13 @@ Further:
 |---|---|
 | **Admin** (`RFP_ADMIN_USER`) | everything: all projects, **global model settings**, **catalogs**, data sources, website & legal pages |
 | **User** (optional, set up in Administration) | create **own projects** (private or public) and change only those; see public projects and save a copy of them; enter measurements and edit series |
+| **Collaborator** (per project, created by the admin) | open, change and compute **one** shared project – private or public – and enter measurements; cannot publish, create or delete projects |
 | **Visitor** | view projects marked *public* (if `RFP_PUBLIC_READ`), measurements only if the admin allows it |
 
-A project – public or not – is changed only by whoever created it and by the admin. Projects from before 0.5.1
-belong to the admin.
+A project – public or not – is changed only by whoever created it, its collaborators and the admin. Projects from
+before 0.5.1 belong to the admin. To let someone work on a project: project menu → *Share & collaborators* → create a
+login; the password is shown once, together with a message to send. Collaborator passwords are stored only as
+PBKDF2-SHA256 hashes (`data/accounts.json`).
 
 ## Installation
 
