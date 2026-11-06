@@ -11,7 +11,7 @@ import { map } from "./map/map.js";
 import { RADIO_PRESETS, LORA_REQUIRED_SNR, sensitivityDbm, noiseFloorDbm, estimatedVerticalBeamwidth, applyCatalogAntenna, drawStation, removeStationMarker, startPlacing, newStation, withoutLabel } from "./map/stations.js";
 import { compute, resultsByStation, sampleStation, setSolo, view, requiredMargin } from "./map/coverage.js";
 import { showProfile } from "./profile.js";
-import { net, nodeByPk, linkTo, snrText, showNeighbours, clearNetworkSelection, setFocus, loadMeta, saveOverride, nearbyNodes, repeaterName, enabled as networkEnabled, nodePosition } from "./network.js";
+import { net, nodeByPk, linkTo, snrText, mastHeightGuess, showNeighbours, clearNetworkSelection, setFocus, loadMeta, saveOverride, nearbyNodes, repeaterName, enabled as networkEnabled, nodePosition } from "./network.js";
 import { meas, seriesById, seriesName, receiverText, receiverFor, loadMeasurements, focusSeries } from "./measurements.js";
 import { exportPdf } from "./workspaces/report.js";
 
@@ -234,7 +234,7 @@ function repeaterOverview(body, pk) {
       : `<p class="muted">${t("MeshCore does not announce height, antenna and power – enter them below if known.")}</p>`}
     <div class="actions">
       <button data-a="nb" class="primary">${isCentre ? t("Hide neighbours") : t("Show neighbours")}</button>
-      ${st ? `<button data-a="station">${t("Open station “{name}”", { name: escapeHtml(st.name) })}</button>` : isAdmin() ? `<button data-a="adopt">${t("Add as station")}</button>` : ""}
+      ${st ? `<button data-a="station">${t("Open station “{name}”", { name: escapeHtml(st.name) })}</button>` : canEditProject() ? `<button data-a="adopt">${t("Add as station")}</button>` : ""}
     </div>
     ${!st && isAdmin() ? `<h4>${t("Values for the comparison")}</h4><div class="grid2">
       <label>${t("Height (m)")}<input data-o="height_m" type="number" step="1" value="${own.height_m ?? ""}"></label>
@@ -267,21 +267,27 @@ function repeaterMeasurements(body, pk) {
   if (b) b.onclick = () => { emit("compare-station", { stationId: stationOfRepeater(pk).id }); openWorkspace("compare"); };
 }
 
-function adoptRepeater(pk) {
+/** Take a CoreScope repeater over as a station of the project (#45: also several at once from "Plan"). */
+export async function adoptRepeater(pk, { open = true } = {}) {
   const existing = stationOfRepeater(pk);
-  if (existing) { inspectStation(existing); return; }
+  if (existing) { if (open) inspectStation(existing); return existing; }
   const n = nodeByPk(pk) || linkTo(pk);
-  if (!n) return;
+  if (!n) return null;
   const own = net.overrides[pk] || {};
+  const roof = own.height_m == null ? await mastHeightGuess(n.lat, n.lon) : null;
   const st = newStation(n.lat, n.lon);
-  Object.assign(st, { name: n.name || st.name, corescope_pk: pk, height_m: own.height_m ?? 10, height_ref: "ground",
-    notes: t("Taken over from CoreScope. Height, antenna and power are assumptions – please check.") });
+  Object.assign(st, { name: n.name || st.name, corescope_pk: pk, height_m: own.height_m ?? roof ?? 10, height_ref: "ground",
+    notes: (roof != null ? t("Height: roof in the surface model + 1 m.") + " " : "")
+      + t("Taken over from CoreScope. Height, antenna and power are assumptions – please check.") });
   if (own.gain_dbi != null) st.antenna = { ...st.antenna, gain_dbi: own.gain_dbi, catalog_id: undefined };
   state.project.stations.push(st); drawStation(st);
   if (net.focusPk === pk) setFocus(null);
   emit("stations-changed"); emit("project-changed", { station: st });
-  inspectStation(st, "settings");
-  status(t("“{name}” added – check height, antenna and power, then save.", { name: st.name }));
+  if (open) {
+    inspectStation(st, "settings");
+    status(t("“{name}” added – check height, antenna and power, then save.", { name: st.name }));
+  }
+  return st;
 }
 
 // ================================================================ link between two repeaters (#26)
@@ -315,10 +321,11 @@ export function inspectLink(centrePk, partnerPk) {
   if (centreStation) openLinkProfile(centreStation, partnerStation, link);   // #26: profile right away
 }
 
-function openLinkProfile(centreStation, partnerStation, link) {
+async function openLinkProfile(centreStation, partnerStation, link) {
   if (partnerStation) { showProfile(centreStation.id, null, { rxStationId: partnerStation.id }); return; }
   const own = net.overrides[link.pk] || {};
-  showProfile(centreStation.id, L.latLng(link.lat, link.lon), { rx: { h: own.height_m ?? 10, g: own.gain_dbi ?? 3, c: 1, label: link.name || link.pk.slice(0, 8) }, repeaterPk: link.pk });
+  const roof = own.height_m == null && isMember() ? await mastHeightGuess(link.lat, link.lon) : null;
+  showProfile(centreStation.id, L.latLng(link.lat, link.lon), { rx: { h: own.height_m ?? roof ?? 10, g: own.gain_dbi ?? 3, c: 1, label: link.name || link.pk.slice(0, 8) }, repeaterPk: link.pk });
 }
 
 // ================================================================ measurement ping (#27)
@@ -373,9 +380,10 @@ const receiverSummary = (r) => `${fmt(r.h, 1)} m · ${fmt(r.g, 1)} dBi${r.c ? ` 
 /**
  * Profile from the repeater that heard a ping to the place of the ping, with the receiver of its series.
  * A repeater that is not a station of the project is computed as a temporary station (members only):
- * radio values like the last station, height and gain from the values entered for the repeater, else assumptions.
+ * radio values like the last station, height and gain from the values entered for the repeater, else the roof
+ * height nearby + 1 m (#43) or 10 m.
  */
-function openPingProfile(ping, row) {
+async function openPingProfile(ping, row) {
   if (!row?.rep_pk) return;
   const rx = { ...receiverFor(row, seriesById(row.series_id)), label: t("measurement point") };
   const station = stationOfRepeater(row.rep_pk);
@@ -384,8 +392,9 @@ function openPingProfile(ping, row) {
   if (!node || !isMember()) { status(t("A profile needs the repeater as a station of the project.")); return; }
   const own = net.overrides[row.rep_pk] || {};
   const temporary = newStation(node.lat, node.lon);
+  const roof = own.height_m == null ? await mastHeightGuess(node.lat, node.lon) : null;
   Object.assign(temporary, { id: "tmp-" + row.rep_pk.slice(0, 12), name: node.name || row.rep_pk.slice(0, 8), corescope_pk: row.rep_pk,
-    height_m: own.height_m ?? 10, height_ref: "ground" });
+    height_m: own.height_m ?? roof ?? 10, height_ref: "ground" });
   if (own.gain_dbi != null) temporary.antenna = { ...temporary.antenna, gain_dbi: own.gain_dbi, catalog_id: undefined };
   showProfile(temporary.id, L.latLng(ping.lat, ping.lon), { rx, txStation: temporary });
 }

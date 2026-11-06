@@ -148,7 +148,7 @@ function csHtml() {
   const head = `<h4>${sourceBadge("corescope")} ${t("CoreScope: repeater ↔ repeater")}</h4>`;
   if (result.csError) return head + `<div class="warn">${escapeHtml(result.csError)}</div>`;
   const r = result.cs; if (!r) return "";
-  const origin = { station: ["📍", t("values of the station in the project")], entered: ["✎", t("own values for the repeater")], standard: ["", t("default values above")] };
+  const origin = { station: ["📍", t("values of the station in the project")], entered: ["✎", t("own values for the repeater")], building: ["🏠", t("height from the roof in the surface model + 1 m")], standard: ["", t("default values above")] };
   return head + `<p class="muted">${t("Noise floor {n} dBm · {k} partners with directly reported SNR · window {d} days. Tap a row for the profile.", { n: fmt(r.noise_dbm), k: r.rows.length, d: r.window_days ?? "?" })}</p>
     <table class="mini clickable"><tr><th>${t("Partner")}</th><th>${t("Height")}</th><th>km</th><th>LOS</th><th>${t("meas.")}</th><th>${t("model")}</th><th>Δ</th></tr>
     ${r.rows.map((x, i) => x.error ? `<tr><td>${escapeHtml(x.name || "")}</td><td colspan="6" class="warn wrap">${escapeHtml(x.error)}</td></tr>`

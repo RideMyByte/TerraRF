@@ -498,7 +498,7 @@ def profile(project, station_id, lat, lon, rx_height=None, rx_gain=None, rx_stat
     res_true = cs * kscale
     n = int(min(6000, max(50, math.ceil(D / (res_true / 2)))))
     if float(s.get("near_m") or 0) > 0 and res_true > float(s.get("near_res_m") or 5.0) * 1.01:
-        n = int(min(6000, max(n, math.ceil(D / (float(s.get("near_res_m") or 5.0) / 2)))))  # Nahfeld fein (#23)
+        n = int(min(6000, max(n, math.ceil(D / (float(s.get("near_res_m") or 5.0) / 2)))))  # fine near field (#23)
     t = np.linspace(0, 1, n + 1)
     fxs = ((x0 + (x1 - x0) * t) - grid.x0) / cs - 0.5
     fys = (grid.y1 - (y0 + (y1 - y0) * t)) / cs - 0.5
@@ -603,7 +603,15 @@ def profile(project, station_id, lat, lon, rx_height=None, rx_gain=None, rx_stat
     }
 
 
-def point_elevation(project, lat, lon):
+# #43: a repeater whose GPS position lies on or right next to a building is assumed to stand on its roof.
+MAST_SEARCH_M = 8.0       # how far from the position to look for a roof (consumer GPS is off by a few metres)
+MIN_BUILDING_M = 2.5      # objects lower than this are not taken as a building (cars, hedges, noise)
+ABOVE_ROOF_M = 1.0        # antenna this much above the highest roof point nearby (wish in #43)
+
+
+def point_elevation(project, lat, lon, radius_m=0.0):
+    """Ground and surface height at a point. With radius_m also the highest object (surface − ground) within that
+    radius on the fine near-field grid, and a mast height guess for a repeater there (#43)."""
     s = merged_settings(project)
     cs = project_cs(project, s)
     x, y = lonlat_to_merc(lon, lat)
@@ -611,7 +619,27 @@ def point_elevation(project, lat, lon):
     G, S, _ = terrain_pair(s, grid)
     fx = (x - grid.x0) / cs - 0.5
     fy = (grid.y1 - y) / cs - 0.5
-    return {"ground_m": round(float(prop.sample(G, fx, fy)), 1), "surface_m": round(float(prop.sample(S, fx, fy)), 1)}
+    out = {"ground_m": round(float(prop.sample(G, fx, fy)), 1), "surface_m": round(float(prop.sample(S, fx, fy)), 1)}
+    if radius_m > 0:
+        fine = min(cs, float(s.get("near_res_m") or 5.0))
+        g = Grid.around(x, y, radius_m + 2 * fine, fine)
+        G2, S2, _ = terrain_pair(s, g)
+        xs = g.x0 + (np.arange(G2.shape[1]) + 0.5) * fine
+        ys = g.y1 - (np.arange(G2.shape[0]) + 0.5) * fine
+        inside = ((xs[None, :] - x) ** 2 + (ys[:, None] - y) ** 2) <= (radius_m + fine / 2) ** 2
+        heights = np.where(inside & np.isfinite(S2 - G2), S2 - G2, 0.0)
+        highest = float(heights.max()) if heights.size else 0.0
+        out["object_max_m"] = round(highest, 1)
+        out["mast_guess_m"] = round(highest + ABOVE_ROOF_M, 1) if highest >= MIN_BUILDING_M else None
+    return out
+
+
+def mast_height_guess(project, lat, lon):
+    """Antenna height above ground for a repeater that sits on a roof (#43), or None if no building is near."""
+    try:
+        return point_elevation(project, lat, lon, MAST_SEARCH_M).get("mast_guess_m")
+    except Exception:  # noqa: BLE001 – no elevation data there: no guess
+        return None
 
 
 def clear_memory_caches():

@@ -167,6 +167,20 @@ export function clearNetworkSelection() {
   drawNetwork(); emit("network-focus", { pk: null }); emit("neighbours-loaded", { pk: null });
 }
 
+const guesses = {};
+/**
+ * #43: antenna height of a repeater that stands on a roof – highest object within 8 m of its GPS position
+ * (surface model) + 1 m. null when there is no building or no elevation data. Logged-in users only.
+ */
+export async function mastHeightGuess(lat, lon) {
+  const key = `${lat.toFixed(5)},${lon.toFixed(5)}`;
+  if (!(key in guesses)) {
+    try { guesses[key] = (await api("/api/elevation", { method: "POST", body: { project: state.project, lat, lon, radius_m: 8 } })).mast_guess_m ?? null; }
+    catch { guesses[key] = null; }
+  }
+  return guesses[key];
+}
+
 /** Fade the neighbour lines (e.g. while drive-test points are compared, #40); showing neighbours again ends it. */
 export function muteLines(on) { net.muted = !!on; drawNetwork(); }
 

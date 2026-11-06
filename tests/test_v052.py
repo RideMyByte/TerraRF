@@ -64,3 +64,17 @@ def test_collaborator_works_on_its_project_only(admin, project):
     admin.post("/api/projects/geteilt2/members", json={"name": "carla"})
     assert admin.delete("/api/projects/geteilt2").status_code == 200
     assert accounts.project_of("carla") is None
+
+
+def test_notice_and_welcome_in_config(admin):
+    """#46 notice banner and #44 welcome switch reach every visitor through /api/config."""
+    with TestClient(app) as anon:
+        assert anon.get("/api/config").json()["site"]["notice"] is None
+        assert anon.get("/api/config").json()["site"]["welcome"] is True
+    assert admin.put("/api/admin/appconfig", json={"notice_kind": "nope"}).status_code == 400
+    assert admin.put("/api/admin/appconfig", json={"notice_enabled": True, "notice_kind": "construction", "notice_text": "Bis 20 Uhr",
+                                                  "welcome_enabled": False}).status_code == 200
+    with TestClient(app) as anon:
+        site = anon.get("/api/config").json()["site"]
+        assert site["notice"] == {"kind": "construction", "text": "Bis 20 Uhr"} and site["welcome"] is False
+    admin.put("/api/admin/appconfig", json={"notice_enabled": False, "welcome_enabled": True})

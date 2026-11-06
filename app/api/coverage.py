@@ -59,6 +59,7 @@ async def profile(request: Request, body: dict = Body(...)):
 @router.post("/api/elevation", dependencies=MEMBER)
 async def elevation(body: dict = Body(...)):
     try:
-        return await run_in_threadpool(cov.point_elevation, body.get("project") or {}, float(body["lat"]), float(body["lon"]))
+        radius = min(30.0, max(0.0, float(body.get("radius_m") or 0)))
+        return await run_in_threadpool(cov.point_elevation, body.get("project") or {}, float(body["lat"]), float(body["lon"]), radius)
     except (ValueError, terrain.SourceError, KeyError) as e:
         fail(e)

@@ -2,6 +2,19 @@
 
 ## [Unreleased]
 
+## 0.5.4
+### Neu
+- **Begrüßungsseite** für neue Besucher (#44): was TerraRF ist, die fünf Bereiche, wie man anfängt – auch wie man den
+  eigenen Repeater aus MeshCore übernimmt. Jederzeit wieder über „?“ oben. Abschaltbar unter Administration → Zugang.
+- **„Aus MeshCore übernehmen“** in „Planen“ (#45): Repeater nahe der Kartenmitte oder per Suche auswählen und auf einmal
+  als Stationen übernehmen. Auch Benutzer und Mitarbeitende können das in Projekten, die sie bearbeiten dürfen.
+- **Repeater-Höhe vom Dach** (#43): Steht ein Repeater laut GPS auf oder direkt an einem Gebäude (höchstes Objekt im
+  Umkreis von 8 m im Oberflächenmodell, mindestens 2,5 m), gilt diese Höhe + 1 m als Vorgabe – beim Übernehmen, im
+  Profil von Strecken und Messpunkten und im CoreScope-Abgleich (🏠). Sonst bleibt es bei 10 m.
+- **Hinweis-Banner** (#46): Der Admin schaltet unter Administration → Zugang einen Hinweis für alle ein (Beta, Baustelle,
+  Wartung, Updates kommen oder eigener Text).
+- Datenschutzerklärung: erwähnt den Browser-Eintrag, dass die Begrüßung schon gesehen wurde.
+
 ## 0.5.3
 ### Behoben
 - Projektmenü: Die Einträge waren weiß auf weiß und damit unsichtbar (die Schriftfarbe der oberen Leiste galt auch im Menü).

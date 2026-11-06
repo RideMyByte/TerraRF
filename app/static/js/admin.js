@@ -38,7 +38,8 @@ async function reloadConfig() {
 
 // ---------------------------------------------------------------- access & website
 const ACCESS_KEYS = ["user_enabled", "user_name", "user_password", "parent_name", "parent_url", "show_github", "imprint_mode", "imprint_url",
-  "imprint_name", "imprint_email", "imprint_address", "imprint_extra", "privacy_mode", "privacy_url", "privacy_extra", "measurements_public"];
+  "imprint_name", "imprint_email", "imprint_address", "imprint_extra", "privacy_mode", "privacy_url", "privacy_extra", "measurements_public",
+  "notice_enabled", "notice_kind", "notice_text", "welcome_enabled"];
 
 async function accessPage(body) {
   const c = await api("/api/admin/appconfig");
@@ -51,7 +52,13 @@ async function accessPage(body) {
       ${check("user_enabled", "enabled")}<div class="grid2">${input("user_name", "User name")}${input("user_password", "Password", "password")}</div></section>
     <section><h3>${t("Visitors")}</h3>
       <p class="muted">${t("Visitors without login see projects marked “public” (read only).")}</p>
-      ${check("measurements_public", "Visitors may see measurements (without time and notes)")}</section>
+      ${check("measurements_public", "Visitors may see measurements (without time and notes)")}
+      ${check("welcome_enabled", "Show the welcome page to first-time visitors")}</section>
+    <section><h3>${t("Notice banner")}</h3>
+      <p class="muted">${t("A strip below the top bar for everybody – e.g. while you are working on the site. Visitors can close it until the next visit.")}</p>
+      ${check("notice_enabled", "Show the notice")}
+      ${select("notice_kind", "Kind", [["beta", "Beta – things may change"], ["construction", "Under construction – I am working on it right now"], ["maintenance", "Maintenance – the site may be gone for a while"], ["updates", "Updates are coming"], ["custom", "Own text only"]])}
+      <label>${t("Own text (optional, added to the notice)")}<textarea data-k="notice_text" rows="2" maxlength="500">${escapeHtml(c.notice_text || "")}</textarea></label></section>
     <section><h3>${t("Website")}</h3>
       <div class="grid2">${input("parent_name", "Belongs to (name)")}${input("parent_url", "Belongs to (link)")}</div>
       ${check("show_github", "Show link to the source code")}

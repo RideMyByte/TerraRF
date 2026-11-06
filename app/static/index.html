@@ -30,6 +30,7 @@
   </div>
   <div class="spacer"></div>
   <select id="langSelect" aria-label="Language"><option value="de">DE</option><option value="en">EN</option></select>
+  <button id="btnHelp" class="iconbtn" data-i18n-title="What is TerraRF?">?</button>
   <button id="btnAdmin" class="iconbtn admin-only" data-i18n-title="Administration">⚙</button>
   <button id="btnLogin" class="login"></button>
 </header>
@@ -61,6 +62,7 @@
   <div id="map"></div>
   <button id="btnLayers" class="mapbtn" data-i18n-title="Layers">☰ <span data-i18n="Layers"></span></button>
   <div id="layersPanel" class="floatcard hidden"></div>
+  <div id="noticeBar" class="hidden" role="status"></div>
   <div id="soloChip" class="hidden"></div>
   <div id="placingBanner" class="hidden"></div>
   <div id="toast" role="status"></div>
@@ -89,6 +91,7 @@
 <dialog id="adminDlg" class="fullscreen" aria-label="Administration"></dialog>
 <dialog id="installDlg"></dialog>
 <dialog id="membersDlg"></dialog>
+<dialog id="welcomeDlg"></dialog>
 
 <script src="/static/vendor/leaflet/leaflet.js"></script>
 <script type="module" src="/assets/__VERSION__/js/main.js"></script>

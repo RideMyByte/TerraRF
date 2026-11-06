@@ -16,7 +16,7 @@ PATH = os.path.join(DATA_DIR, "appconfig.json")
 _lock = threading.Lock()
 
 DEFAULTS = {
-    # zweiter Zugang: lesen + eigene Stationen anlegen
+    # second login: own projects, measurements
     "user_enabled": False,
     "user_name": os.environ.get("RFP_USER_NAME", "user"),
     "user_password": os.environ.get("RFP_USER_PASSWORD", ""),
@@ -38,11 +38,18 @@ DEFAULTS = {
     # measurements: key for the MeshMapper forwarding, visibility for visitors
     "mm_api_key": os.environ.get("RFP_MEASURE_KEY", ""),
     "measurements_public": False,
+    # #46: notice banner for everybody (beta, under construction, maintenance …); kind picks a ready-made text
+    "notice_enabled": False,
+    "notice_kind": "beta",
+    "notice_text": "",
+    # #44: welcome page for first-time visitors
+    "welcome_enabled": True,
 }
 if DEFAULTS["user_password"]:
     DEFAULTS["user_enabled"] = True
 
-MODES = {"imprint_mode": ("generated", "link", "off"), "privacy_mode": ("generated", "link")}
+MODES = {"imprint_mode": ("generated", "link", "off"), "privacy_mode": ("generated", "link"),
+         "notice_kind": ("beta", "construction", "maintenance", "updates", "custom")}
 GITHUB_URL = "https://github.com/RideMyByte/TerraRF"
 
 
@@ -93,4 +100,6 @@ def public():
         "github": GITHUB_URL if c["show_github"] else None,
         "user_enabled": bool(c["user_enabled"]),
         "measurements_public": bool(c["measurements_public"]),
+        "notice": {"kind": c["notice_kind"], "text": c["notice_text"]} if c["notice_enabled"] else None,
+        "welcome": bool(c["welcome_enabled"]),
     }
