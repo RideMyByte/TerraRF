@@ -29,7 +29,7 @@ def visible_project(request: Request, project_id: str):
         raise HTTPException(400, str(e))
     except projects.NotFound:
         raise HTTPException(404, "Projekt nicht gefunden")
-    if not projects.can_view(auth.role(request), p):
+    if not projects.can_view(auth.role(request), p, auth.account_project(request)):
         auth.require_read(request)
         raise HTTPException(404, "Projekt nicht gefunden")
     return p

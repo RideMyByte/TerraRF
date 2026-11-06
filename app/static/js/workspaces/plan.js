@@ -3,7 +3,7 @@
  */
 import { t } from "../core/i18n.js";
 import { $, escapeHtml, fmt } from "../core/util.js";
-import { state, on, emit, isMember, canEditProject } from "../core/state.js";
+import { state, on, emit, isMember, isCollaborator, canEditProject } from "../core/state.js";
 import { status } from "../core/ui.js";
 import { map } from "../map/map.js";
 import { compute, resultsByStation, busy, stale, isComputing, composite } from "../map/coverage.js";
@@ -33,7 +33,7 @@ export function renderPlan() {
         <span class="nm"><b>${escapeHtml(st.name)}</b><span class="sub">${fmt(st.freq_mhz, 3)} MHz · ${fmt(st.tx_power_dbm, 0)} dBm · ${fmt(st.height_m, 0)} m</span></span>
         <span class="${stale.has(st.id) ? "stale" : "muted"}">${escapeHtml(state_)}</span></div>`;
     }).join("") || `<p class="muted">${t("No stations yet.")} ${canEditProject() ? t("Add one with “Add station” and a click on the map.") : ""}</p>`}</div>
-    ${!isMember() ? `<p class="muted">${t("Log in to add stations or change them.")}</p>` : !canEditProject() ? `<p class="muted">${t("Only the creator of this project and the admin can change it. Create your own project in the project menu.")}</p>` : ""}`;
+    ${!isMember() ? `<p class="muted">${t("Log in to add stations or change them.")}</p>` : !canEditProject() ? `<p class="muted">${isCollaborator() ? t("Your login works on its shared project only; this one you can only look at.") : t("Only the creator of this project and the admin can change it. Create your own project in the project menu.")}</p>` : ""}`;
   const add = el.querySelector("#btnAddStation");
   if (add) add.onclick = () => startPlacing("new");
   const run = el.querySelector("#btnCompute");

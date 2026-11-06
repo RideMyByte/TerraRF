@@ -1,6 +1,14 @@
 # Changelog
 
 ## [Unreleased]
+
+## 0.5.2
+### Neu
+- **Projekte teilen mit Mitarbeitenden:** Im Projektmenü unter „Teilen & Mitarbeitende“ legt der Admin je Projekt
+  eigene Zugänge an. Wer so einen Zugang hat, kann genau dieses Projekt – privat oder öffentlich – öffnen, ändern und
+  berechnen und Messungen eintragen. Veröffentlichen, neue Projekte und Löschen bleiben beim Admin. Das Passwort wird
+  einmal angezeigt, zusammen mit einer fertigen Nachricht zum Weitergeben; gespeichert wird nur ein Hash. Ein neues
+  Passwort oder das Löschen eines Zugangs beendet dessen Sitzungen.
 ### Behoben
 - Nach einem Update konnte die Seite mit „module does not provide an export“ hängen bleiben, wenn Browser oder
   Reverse-Proxy noch alte Module im Cache hatten. Module und Übersetzungen liegen jetzt unter einem Pfad mit der

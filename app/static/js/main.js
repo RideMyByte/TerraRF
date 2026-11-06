@@ -11,7 +11,7 @@
  */
 import { t, setLanguage, detectLanguage, lang } from "./core/i18n.js";
 import { $, escapeHtml, fmt, fmtBytes, download } from "./core/util.js";
-import { state, on, emit, isAdmin, isMember, canEditProject } from "./core/state.js";
+import { state, on, emit, isAdmin, isMember, isCollaborator, canCreateProjects, canEditProject } from "./core/state.js";
 import { api } from "./core/api.js";
 import { initShell, status, openWorkspace, closeInspector } from "./core/ui.js";
 import { map, initMap, refreshLayersPanel } from "./map/map.js";
@@ -27,6 +27,7 @@ import { renderMeasure } from "./workspaces/measure.js";
 import { renderCompare } from "./workspaces/compare.js";
 import { renderReport } from "./workspaces/report.js";
 import { openAdmin } from "./admin.js";
+import { openMembers } from "./members.js";
 
 // ---------------------------------------------------------------- projects
 function emptyProject() { return { id: null, name: t("New project"), public: false, owner: state.role || "admin", stations: [] }; }
@@ -76,13 +77,14 @@ async function openProjectMenu() {
   const p = state.project;
   menu.innerHTML = `
     ${list.length ? `<div class="menu-h">${t("Open")}</div>${list.map((x) => `<button data-open="${escapeHtml(x.id)}" class="${x.id === p.id ? "sel" : ""}">${escapeHtml(x.name)} <span class="muted">${t("{n} st.", { n: x.stations })}${isMember() ? " · " + (x.public ? t("public") : t("private")) : ""}${isAdmin() && x.owner === "user" ? " · " + t("by the user") : ""}${isMember() && !x.editable ? " · 🔒" : ""}</span></button>`).join("")}<hr>` : ""}
-    ${isMember() ? `<button data-a="new">＋ ${t("New project")}</button>` : ""}
-    ${canEditProject() ? `<label class="chk menu-chk"><input type="checkbox" data-a="public" ${p.public ? "checked" : ""}> ${t("public (visitors can see it)")}</label>` : ""}
-    ${isMember() && !canEditProject() ? `<button data-a="copy">⧉ ${t("Save as my own copy")}</button>` : ""}
+    ${canCreateProjects() ? `<button data-a="new">＋ ${t("New project")}</button>` : ""}
+    ${canEditProject() && canCreateProjects() ? `<label class="chk menu-chk"><input type="checkbox" data-a="public" ${p.public ? "checked" : ""}> ${t("public (visitors can see it)")}</label>` : ""}
+    ${canCreateProjects() && !canEditProject() ? `<button data-a="copy">⧉ ${t("Save as my own copy")}</button>` : ""}
     ${p.id ? `<button data-a="share">🔗 ${t("Copy link")}</button>` : ""}
     <button data-a="export">⇩ ${t("Export (JSON)")}</button>
-    ${isMember() ? `<button data-a="import">⇧ ${t("Import (JSON)")}</button>` : ""}
-    ${canEditProject() && p.id ? `<button data-a="delete" class="danger">🗑 ${t("Delete project")}</button>` : ""}`;
+    ${isAdmin() && p.id ? `<button data-a="members">👥 ${t("Share & collaborators")}</button>` : ""}
+    ${canCreateProjects() ? `<button data-a="import">⇧ ${t("Import (JSON)")}</button>` : ""}
+    ${canEditProject() && canCreateProjects() && p.id ? `<button data-a="delete" class="danger">🗑 ${t("Delete project")}</button>` : ""}`;
   menu.classList.remove("hidden");
   menu.querySelectorAll("[data-open]").forEach((b) => b.onclick = async () => {
     menu.classList.add("hidden");
@@ -91,6 +93,7 @@ async function openProjectMenu() {
   });
   const act = (a, fn) => { const el = menu.querySelector(`[data-a="${a}"]`); if (el) el[el.type === "checkbox" ? "onchange" : "onclick"] = (e) => { if (el.type !== "checkbox") menu.classList.add("hidden"); fn(e); }; };
   act("new", () => { if (discardOk()) loadProject(emptyProject()); });
+  act("members", () => openMembers(p));
   act("public", (e) => { p.public = e.target.checked; setDirty(true); });
   act("copy", () => {
     const copy = JSON.parse(JSON.stringify({ ...p, id: null, public: false, owner: state.role, name: t("Copy of {name}", { name: p.name }) }));
@@ -125,7 +128,7 @@ async function openProjectMenu() {
 function applyRole() {
   const role = state.role;
   document.body.classList.toggle("role-admin", role === "admin");
-  document.body.classList.toggle("role-user", role === "user");
+  document.body.classList.toggle("role-user", role === "user" || role === "project");   // member-only elements
   document.body.classList.toggle("readonly", !isMember());
   $("btnLogin").textContent = isMember() ? t("Log out ({user})", { user: state.config.auth.user }) : t("Log in");
 }
@@ -255,7 +258,7 @@ async function init() {
   if (!isMember() && !state.config.auth?.public_read) { loadProject(emptyProject()); status(t("Please log in.")); $("loginDlg").showModal(); return; }
   const list = await api("/api/projects").catch(() => []);
   const wanted = new URLSearchParams(location.search).get("p");
-  const fallback = isAdmin() ? state.config.last_project : list[0]?.id;
+  const fallback = isAdmin() ? state.config.last_project : isCollaborator() ? state.config.auth.project : list[0]?.id;
   for (const pick of [...new Set([wanted, fallback].filter(Boolean))]) {
     try {
       // a link to a project this visitor may not see: keep it in the address bar, so logging in opens it

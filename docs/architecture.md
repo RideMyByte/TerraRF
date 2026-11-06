@@ -43,6 +43,7 @@ app/
     measurements.py  SQLite with drive-test rows and series
     catalog.py       antennas / devices / placements, seeded on first start
     appconfig.py     instance settings edited in Administration
+    accounts.py      collaborator logins that belong to one project
   site/            running the site
     auth.py          admin + optional user, signed session cookie
     legal.py         generated imprint and privacy policy (German)
@@ -56,6 +57,7 @@ app/
 | `settings.json` | global model settings (only values that differ from the defaults) |
 | `catalog.json` | antenna, device and placement catalog |
 | `appconfig.json` | access, website, legal, measurement key (mode 0600: contains the user password) |
+| `accounts.json` | collaborator logins per project (password hashes only, mode 0600) |
 | `measurements.db` | drive-test rows and series (SQLite) |
 | `buildings/footprints.json` | building footprints |
 | `corescope/` | cached CoreScope nodes, links, repeater overrides |
