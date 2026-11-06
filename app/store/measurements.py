@@ -1,10 +1,12 @@
-"""Messungen am Boden: MeshMapper-Weiterleitung (Custom API Endpoint), Eingabe von Hand, CSV.
+"""Ground measurements (drive tests): MeshMapper forwarding (custom API endpoint), manual entry, CSV.
 
-Eine Zeile = ein Repeater, der an einem Ort gehört wurde (bzw. uns gehört hat).
-  snr_down  SNR beim Messgerät (Repeater -> wir)      – Grundlage für den Abgleich mit der Abdeckung
-  snr_up    SNR beim Repeater (wir -> Repeater), nur DISC/TRACE
-Alle MeshMapper-Arten mit Repeater-Angabe sind direkte Empfänge (DISC/TRACE ohne Hop, TX-Echos und RX
-sind die direkt gehörte Wiederholung des Repeaters).
+One row = one repeater heard at one place (or that heard us there).
+  snr_down  SNR at the measuring device (repeater -> us)   – basis of the comparison with the coverage
+  snr_up    SNR at the repeater (us -> repeater), DISC/TRACE only
+All MeshMapper kinds that name a repeater are direct receptions (DISC/TRACE without hop; TX echoes and RX are
+the repeater's directly heard retransmission).
+
+Rows are grouped into series (one drive with the same receiver); see ``series_list`` and ``update_series``.
 """
 from __future__ import annotations
 
@@ -17,19 +19,21 @@ import sqlite3
 import threading
 import time
 
-from . import corescope, terrain
+from .. import paths
+from . import catalog
+from ..sources import corescope
 
-DB = os.path.join(terrain.DATA_DIR, "measurements.db")
+DB = os.path.join(paths.DATA_DIR, "measurements.db")
 _lock = threading.Lock()
-GRID_LAT, GRID_LON = 0.0027, 0.00384  # Rasterzelle wie MeshMapper (~300 m)
+GRID_LAT, GRID_LON = 0.0027, 0.00384  # grid cell as in MeshMapper (~300 m)
 PLAN_MIN_N, PLAN_MAX_SPREAD_DB = 3, 6.0
 HEX = re.compile(r"^[0-9a-fA-F]{2,64}$")
 _REP = re.compile(r"([0-9A-Fa-f]{2,64})\s*\(\s*(-?\d+(?:\.\d+)?|null|None)?\s*\)")
 
 COLS = ("ts", "src", "kind", "lat", "lon", "alt", "rep_prefix", "rep_pk", "snr_down", "snr_up", "rssi_down",
         "noise", "power", "ext_ant", "radio", "contact", "rx_h", "note")
-SERIES_GAP_S = 1800   # neue Messreihe nach 30 min Pause
-SERIES_EDIT = ("name", "rx_h", "rx_gain_dbi", "rx_cable_db", "ext_ant", "note")
+SERIES_GAP_S = 1800   # new series after a 30 min break
+SERIES_EDIT = ("name", "rx_h", "rx_gain_dbi", "rx_cable_db", "ext_ant", "note", "device_id", "placement_id")
 
 
 def _db():
@@ -45,14 +49,18 @@ def init():
             ext_ant INTEGER, radio TEXT, contact TEXT, rx_h REAL, note TEXT, uniq TEXT UNIQUE)""")
         c.execute("CREATE INDEX IF NOT EXISTS m_pk ON m(rep_pk)")
         c.execute("CREATE INDEX IF NOT EXISTS m_ll ON m(lat, lon)")
-        # Messreihen (#22): zusammenhängende Fahrten mit gemeinsamen Angaben zur Empfangsantenne
+        # series (#22): continuous drives sharing the same receiving antenna
         c.execute("""CREATE TABLE IF NOT EXISTS series (id INTEGER PRIMARY KEY, src TEXT, skey TEXT, t0 INTEGER, t1 INTEGER,
             name TEXT, rx_h REAL, rx_gain_dbi REAL, rx_cable_db REAL, ext_ant INTEGER, note TEXT)""")
         if "series_id" not in [r[1] for r in c.execute("PRAGMA table_info(m)")]:
             c.execute("ALTER TABLE m ADD COLUMN series_id INTEGER")
+        have = [r[1] for r in c.execute("PRAGMA table_info(series)")]
+        for col in ("device_id", "placement_id"):   # 0.5: catalog profiles (#29)
+            if col not in have:
+                c.execute(f"ALTER TABLE series ADD COLUMN {col} TEXT")
         c.execute("CREATE INDEX IF NOT EXISTS m_series ON m(series_id)")
         todo = c.execute("SELECT id, ts, src, contact, power, ext_ant FROM m WHERE series_id IS NULL ORDER BY ts").fetchall()
-        for r in todo:  # alte Daten nachträglich in Reihen einteilen
+        for r in todo:  # put old data into series afterwards
             c.execute("UPDATE m SET series_id = ? WHERE id = ?", (_series_for(c, dict(r)), r["id"]))
 
 
@@ -66,7 +74,7 @@ def _f(v):
 
 
 def resolve(prefix, lat, lon, max_km=80.0):
-    """Kurze Repeater-ID (2–6 Hex) -> voller Schlüssel, wenn im Umkreis eindeutig. Sonst None."""
+    """Short repeater id (2–6 hex) -> full key if unique in the area, else None."""
     p = (prefix or "").lower()
     if len(p) == 64:
         return p
@@ -92,7 +100,7 @@ def _row(**kw):
 
 
 def from_meshmapper(item):
-    """Ein Ping-Objekt der MeshMapper-Weiterleitung -> Messzeilen (eine je gehörtem Repeater)."""
+    """One ping object of the MeshMapper forwarding -> measurement rows (one per repeater heard)."""
     kind = str(item.get("type") or "").upper()
     lat, lon = _f(item.get("lat")), _f(item.get("lon"))
     if lat is None or lon is None or not (-90 <= lat <= 90 and -180 <= lon <= 180):
@@ -111,7 +119,7 @@ def from_meshmapper(item):
     elif kind in ("TX", "RX"):
         for rid, snr in _REP.findall(str(item.get("heard_repeats") or "")):
             out.append(_row(**base, rep_prefix=rid, snr_down=_f(snr)))
-    # 0 bedeutet bei MeshMapper „nicht lesbar“ – bei DISC/TRACE dann lieber ohne Wert
+    # in MeshMapper 0 means “not readable” – for DISC/TRACE store no value then
     for r in out:
         if r["kind"] in ("DISC", "TRACE") and r["snr_down"] == 0 and r["rssi_down"] == 0:
             r["snr_down"] = r["rssi_down"] = None
@@ -119,13 +127,13 @@ def from_meshmapper(item):
 
 
 def _skey(r):
-    if r.get("src") == "meshmapper":  # je Gerät/Leistung/Antenne eine Reihe
+    if r.get("src") == "meshmapper":  # one series per device/power/antenna
         return "|".join(str(r.get(k) or "") for k in ("src", "contact", "power", "ext_ant"))
     return str(r.get("src") or "manual")
 
 
 def _series_for(c, r, skey=None):
-    """Passende Messreihe (gleiche Quelle/Gerät, höchstens 30 min Abstand) oder eine neue."""
+    """Matching series (same source/device, at most 30 min apart) or a new one."""
     skey = skey or _skey(r)
     ts = int(r.get("ts") or time.time())
     hit = c.execute("SELECT id, t0, t1 FROM series WHERE skey = ? AND t0 - ? <= ? AND t1 + ? >= ? ORDER BY t1 DESC LIMIT 1",
@@ -139,14 +147,14 @@ def _series_for(c, r, skey=None):
 
 
 def add(rows, skey=None):
-    """skey: alle Zeilen in eine eigene Reihe (z. B. ein CSV-Import)."""
+    """skey: put all rows into one series of their own (e.g. a CSV import)."""
     if not rows:
         return 0
     n = 0
     with _lock, _db() as c:
         for r in rows:
             if r["kind"] in ("TX", "RX") and r.get("snr_down") is not None and c.execute(
-                    # MeshMapper meldet ein Echo im TX-Eintrag und zusätzlich als eigenes RX – nur einmal zählen
+                    # MeshMapper reports an echo in the TX entry and again as its own RX – count it once
                     "SELECT 1 FROM m WHERE kind IN ('TX','RX') AND rep_prefix = ? AND snr_down = ? AND ABS(ts - ?) <= 30 "
                     "AND ABS(lat - ?) < 0.0005 AND ABS(lon - ?) < 0.0008 LIMIT 1",
                     (r["rep_prefix"], r["snr_down"], r["ts"], r["lat"], r["lon"])).fetchone():
@@ -161,7 +169,7 @@ def add(rows, skey=None):
 
 
 def manual(d):
-    """Eingabe von Hand: lat, lon, Repeater (Schlüssel/Präfix), snr_down Pflicht; Rest optional."""
+    """Manual entry: lat, lon, repeater (key/prefix) and snr_down are required; the rest is optional."""
     lat, lon, rep = _f(d.get("lat")), _f(d.get("lon")), str(d.get("rep") or d.get("rep_pk") or d.get("rep_prefix") or "").strip()
     if lat is None or lon is None or not HEX.match(rep):
         raise ValueError("Ort und Repeater (Hex-Schlüssel oder -Präfix) sind nötig")
@@ -175,7 +183,7 @@ def manual(d):
 
 
 def from_csv(text):
-    """CSV mit Kopfzeile: lat,lon,rep,snr[,snr_up,rssi,rx_h,ts,note] (Trennzeichen , oder ;)."""
+    """CSV with header: lat,lon,rep,snr[,snr_up,rssi,rx_h,ts,note] (separator , or ;)."""
     dialect = csv.Sniffer().sniff(text[:2000], delimiters=",;\t")
     rows, errs = [], []
     for i, d in enumerate(csv.DictReader(io.StringIO(text), dialect=dialect), start=2):
@@ -207,7 +215,7 @@ def query(bbox=None, pk=None, days=None, public=False, series=None):
         rows = [dict(r) for r in c.execute(sql, args)]
     for r in rows:
         r.pop("uniq", None)
-        if public:  # Besucher: keine Zeit, kein Gerät
+        if public:  # visitors: no time, no device
             for k in ("ts", "contact", "note", "power"):
                 r.pop(k, None)
     return rows
@@ -227,7 +235,7 @@ def delete(ids=None, src=None, series=None):
 
 
 def series_list(public=False):
-    """Messreihen mit Zählung, Zeitraum und den Angaben zur Empfangsantenne."""
+    """Series with counts, period and the receiving antenna."""
     with _db() as c:
         out = []
         for r in c.execute("""SELECT s.*, COUNT(m.id) AS n, COUNT(DISTINCT COALESCE(m.rep_pk, m.rep_prefix)) AS repeaters,
@@ -257,6 +265,12 @@ def update_series(sid, d):
         v = d[k]
         if k in ("name", "note"):
             vals[k] = (str(v or "").strip()[:120 if k == "name" else 500]) or None
+        elif k in ("device_id", "placement_id"):
+            v = str(v or "").strip()
+            kind = "devices" if k == "device_id" else "placements"
+            if v and catalog.get(kind, v) is None:
+                raise ValueError(f"{k}: not in the catalog")
+            vals[k] = v or None
         elif k == "ext_ant":
             vals[k] = None if v in (None, "") else (1 if v else 0)
         else:
@@ -282,7 +296,7 @@ def cell_of(lat, lon):
 
 
 def plan(rows):
-    """Messplan: je ~300-m-Zelle „genug“, wenn ein Repeater dort ≥ 3 Messungen mit Streuung ≤ 6 dB hat."""
+    """Measurement plan: a ~300 m cell is “enough” once one repeater has ≥ 3 measurements there with ≤ 6 dB scatter."""
     cells = {}
     for r in rows:
         if r.get("snr_down") is None:

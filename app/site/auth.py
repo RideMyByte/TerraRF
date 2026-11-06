@@ -1,5 +1,5 @@
-"""Logins: ein Admin (alles) und optional ein Benutzer „user“ (lesen + eigene Stationen anlegen).
-Alle anderen sehen öffentliche Projekte nur lesend. Der Benutzer wird in den Einstellungen gepflegt.
+"""Logins: one admin (everything) and optionally one “user” (read, add own stations, enter measurements).
+Everybody else sees public projects read-only. The user is maintained in Administration → Access.
 
 Config (environment):
   RFP_ADMIN_USER       default "admin"
@@ -22,7 +22,7 @@ import time
 
 from fastapi import HTTPException, Request
 
-from .terrain import DATA_DIR
+from ..paths import DATA_DIR
 
 log = logging.getLogger("terrarf.auth")
 
@@ -71,8 +71,8 @@ def _sign(payload: bytes) -> str:
 
 
 def _pwtag(role):
-    """Kurzer Fingerabdruck des aktuellen Passworts: ändert der Admin es, werden alte Sitzungen ungültig."""
-    from . import appconfig
+    """Short fingerprint of the current password: when the admin changes it, old sessions become invalid."""
+    from ..store import appconfig
     pw = _password if role == "admin" else appconfig.get()["user_password"]
     return hashlib.sha256((pw or "").encode()).hexdigest()[:10]
 
@@ -93,7 +93,7 @@ def verify(token: str | None) -> str | None:
     if not hmac.compare_digest(_sign(payload), sig):
         return None
     parts = payload.decode(errors="replace").split("|")
-    if len(parts) == 2:          # Sitzung aus älteren Versionen: nur Admin
+    if len(parts) == 2:          # session from older versions: admin only
         parts += ["admin", _pwtag("admin")]
     if len(parts) != 4:
         return None
@@ -108,7 +108,7 @@ def verify(token: str | None) -> str | None:
     if role == "admin" and user == ADMIN_USER:
         return "admin"
     if role == "user":
-        from . import appconfig
+        from ..store import appconfig
         c = appconfig.get()
         if c["user_enabled"] and c["user_password"] and user == c["user_name"]:
             return "user"
@@ -124,7 +124,7 @@ def is_admin(request: Request) -> bool:
 
 
 def can_edit_any(request: Request) -> bool:
-    """Admin oder Benutzer: darf rechnen, ungespeicherte Projekte schicken, Stationen anlegen."""
+    """Admin or user: may compute, send unsaved projects, add stations."""
     return role(request) in ("admin", "user")
 
 
@@ -144,7 +144,7 @@ def require_read(request: Request):
 
 
 def check_login(request: Request, user: str, password: str) -> str | None:
-    """Gibt die Rolle zurück ("admin"/"user") oder None."""
+    """Returns the role ("admin"/"user") or None."""
     ip = request.client.host if request.client else "?"
     now = time.time()
     with _lock:
@@ -152,7 +152,7 @@ def check_login(request: Request, user: str, password: str) -> str | None:
         _fail[ip] = recent
         if len(recent) >= 10:
             raise HTTPException(429, "Zu viele Fehlversuche, bitte später erneut versuchen")
-    from . import appconfig
+    from ..store import appconfig
     c = appconfig.get()
     got = None
     if hmac.compare_digest(user.encode(), ADMIN_USER.encode()) & hmac.compare_digest(

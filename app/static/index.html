@@ -1,10 +1,10 @@
 <!DOCTYPE html>
-<html lang="de">
+<html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>TerraRF</title>
-<meta name="description" content="Funkabdeckung, Sichtlinie und Linkbudget für MeshCore, LoRa und Amateurfunk planen">
+<meta name="description" content="Plan, observe, measure and compare radio coverage for MeshCore, LoRa and amateur radio">
 <meta name="theme-color" content="#0d2236">
 <link rel="manifest" href="/manifest.webmanifest">
 <link rel="icon" type="image/svg+xml" href="/static/icon.svg">
@@ -16,355 +16,80 @@
 <link rel="stylesheet" href="/static/vendor/leaflet/leaflet.css">
 <link rel="stylesheet" href="/static/style.css?v=__VERSION__">
 </head>
-<body>
-<div id="app">
-  <aside id="side">
-    <header>
-      <div class="brand"><img src="/static/icon.svg" alt="" class="logo"> Terra<span class="rf">RF</span> <span id="ver" class="note"></span>
-        <button id="btnSettings" class="iconbtn admin-only" title="Einstellungen" aria-label="Einstellungen">⚙</button>
-        <button id="btnLogin" class="login">Anmelden</button>
-        <button id="btnSideClose" class="sideclose" aria-label="Menü schließen">✕</button>
-        <button id="btnSideHide" class="iconbtn sidehide" title="Seitenleiste ausblenden" aria-label="Seitenleiste ausblenden">«</button></div>
-      <div class="proj">
-        <input id="projName" value="Neues Projekt" title="Projektname" class="admin-ro">
-        <span id="dirty" title="Ungespeicherte Änderungen"></span>
-      </div>
-      <div class="row tight">
-        <button id="btnSave" class="member-only" title="Projekt auf dem Server speichern">💾 Speichern</button>
-        <select id="projList" title="Projekt laden"><option value="">Laden …</option></select>
-        <button id="btnNew" class="admin-only" title="Neues Projekt">Neu</button>
-        <button id="btnMore" class="admin-only" title="Import/Export">⋯</button>
-      </div>
-      <div class="row tight">
-        <label class="chk admin-only" style="margin:0"><input type="checkbox" id="projPublic"> öffentlich sichtbar</label>
-        <button id="btnShare" title="Link zu diesem Projekt kopieren">🔗 Link teilen</button>
-      </div>
-      <div id="moreMenu" class="menu hidden">
-        <button id="btnExport">Projekt als JSON exportieren</button>
-        <button id="btnImport">JSON importieren</button>
-        <button id="btnDelete" class="danger">Projekt löschen</button>
-        <input type="file" id="fileImport" accept=".json,application/json" class="hidden">
-      </div>
-    </header>
+<body class="ws-plan">
+<!-- Layout: top bar · workspace rail · workspace panel · map (shared) · inspector (whatever was clicked).
+     Everything inside the panel, inspector and dialogs is rendered by the modules in /static/js/. -->
+<header id="topbar">
+  <div class="brand"><img src="/static/icon.svg" alt="" class="logo"><span>Terra<b>RF</b></span><span id="version" class="muted"></span></div>
+  <div id="projectBar">
+    <input id="projectName" class="member-edit" data-i18n-title="Project name" aria-label="Project name">
+    <span id="dirtyDot" data-i18n-title="Unsaved changes"></span>
+    <button id="btnSave" class="member-only primary" data-i18n="Save"></button>
+    <button id="btnProjectMenu" class="iconbtn" aria-haspopup="true" data-i18n-title="Projects">▾</button>
+    <div id="projectMenu" class="menu hidden" role="menu"></div>
+  </div>
+  <div class="spacer"></div>
+  <select id="langSelect" aria-label="Language"><option value="de">DE</option><option value="en">EN</option></select>
+  <button id="btnAdmin" class="iconbtn admin-only" data-i18n-title="Administration">⚙</button>
+  <button id="btnLogin" class="login"></button>
+</header>
 
-    <nav class="tabs">
-      <button data-tab="stations" class="active">Stationen</button>
-      <button data-tab="net" id="tabNetBtn">MeshCore</button>
-      <button data-tab="results">Ergebnis</button>
-    </nav>
+<nav id="rail" aria-label="Workspaces">
+  <button data-ws="plan" class="active"><span class="ico">◎</span><span data-i18n="Plan"></span></button>
+  <button data-ws="network"><span class="ico">⋈</span><span data-i18n="Network"></span></button>
+  <button data-ws="measure"><span class="ico">⌖</span><span data-i18n="Measure"></span></button>
+  <button data-ws="compare"><span class="ico">⇄</span><span data-i18n="Compare"></span></button>
+  <button data-ws="report"><span class="ico">▤</span><span data-i18n="Report"></span></button>
+</nav>
 
-    <section id="tab-stations" class="tab active">
-      <div class="row">
-        <button id="btnAdd" class="primary member-only">＋ Station platzieren</button>
-        <button id="btnCompute" class="go">▶ Berechnen</button>
-      </div>
-      <p class="note" style="margin:2px 0 6px">▶ an einer Station rechnet nur diese neu. „Berechnen“ rechnet alle, was unverändert ist, kommt aus dem Cache.</p>
-      <div id="stationList"></div>
-    </section>
+<aside id="panel" aria-label="Workspace">
+  <div class="sheet-handle" id="panelHandle" aria-hidden="true"></div>
+  <div id="panelBody">
+    <section id="ws-plan" class="ws active"></section>
+    <section id="ws-network" class="ws"></section>
+    <section id="ws-measure" class="ws"></section>
+    <section id="ws-compare" class="ws"></section>
+    <section id="ws-report" class="ws"></section>
+  </div>
+  <footer id="panelFoot">
+    <div id="status" role="status"></div>
+    <div id="siteLinks" class="muted"></div>
+  </footer>
+</aside>
 
+<main id="mapwrap">
+  <div id="map"></div>
+  <button id="btnLayers" class="mapbtn" data-i18n-title="Layers">☰ <span data-i18n="Layers"></span></button>
+  <div id="layersPanel" class="floatcard hidden"></div>
+  <div id="soloChip" class="hidden"></div>
+  <div id="placingBanner" class="hidden"></div>
+  <div id="toast" role="status"></div>
+  <div id="sysbox" data-i18n-title="Server status"><span class="dot"></span><span id="sysText">…</span><span id="sysRes"></span></div>
+  <section id="profile" class="hidden" aria-label="Profile"></section>
+</main>
 
+<aside id="inspector" class="hidden" aria-label="Details">
+  <div class="sheet-handle" aria-hidden="true"></div>
+  <div id="inspectorHead"></div>
+  <nav id="inspectorTabs"></nav>
+  <div id="inspectorBody"></div>
+</aside>
 
-    <section id="tab-net" class="tab">
-      <div id="csOff" class="note">Keine CoreScope-Instanz eingerichtet. Setze im Container <code>RFP_CORESCOPE_URL</code>, z. B. <code>https://corescope.meshrheinland.de</code>.</div>
-      <div id="csOn" class="hidden">
-        <div class="card">
-          <div class="cardhead">Karte <span id="csSrcShort" class="note"></span></div>
-          <label class="chk"><input type="checkbox" id="csShow"> alle Repeater zeigen</label>
-          <div class="grid2">
-            <label>Zuletzt gehört innerhalb<select id="csAge">
-              <option value="1">1 Tag</option><option value="7" selected>7 Tagen</option><option value="30">30 Tagen</option><option value="0">egal</option></select></label>
-            <label>Rolle<select id="csRole"><option value="">alle</option><option value="repeater">Repeater</option><option value="room">Room</option></select></label>
-          </div>
-          <p class="note">Repeater oder verknüpfte Station antippen: Infos und Aktionen. Erneut antippen hebt die Auswahl auf.</p>
-        </div>
-
-        <details class="card" id="csFilterCard">
-          <summary class="cardhead">Filter für Nachbarn <span id="csFilterShort" class="note"></span></summary>
-          <label class="chk" style="margin-top:6px"><input type="checkbox" id="csBidir" checked> nur beidseitig beobachtete</label>
-          <label class="chk" style="margin-top:2px"><input type="checkbox" id="csMeas" checked> direkt gemeldete Partner immer zeigen</label>
-          <label title="Wie oft der Nachbar den gewählten Repeater gehört hat (→)">Tx mindestens <b id="csMinTxVal"></b>×<input type="range" id="csMinTx" min="0" max="500" value="10"></label>
-          <label title="Wie oft der gewählte Repeater den Nachbarn gehört hat (←)">Rx mindestens <b id="csMinRxVal"></b>×<input type="range" id="csMinRx" min="0" max="500" value="10"></label>
-          <label>SNR mindestens <b id="csSnrVal"></b><input type="range" id="csSnr" min="-21" max="15" step="1" value="-21"></label>
-          <label class="chk" style="margin-top:2px"><input type="checkbox" id="csLines" checked> Linien zu den Nachbarn</label>
-          <label>Deckkraft der Linien <b id="csLineOpVal"></b><input type="range" id="csLineOp" min="0.1" max="1" step="0.05" value="0.6"></label>
-          <p class="note">Kurze Hop-Präfixe können falsche Nachbarn erzeugen; „beidseitig“ und eine Mindestanzahl blenden die meisten aus. Derselbe Filter gilt für den Abgleich.</p>
-        </details>
-
-        <div class="card" id="csSelCard">
-          <div class="cardhead">Auswahl</div>
-          <div id="csSel"></div>
-        </div>
-
-        <details class="card">
-          <summary class="cardhead">Datenquelle</summary>
-          <div id="csStatus" class="note"></div>
-          <button id="btnCsSync" class="admin-only" style="margin-top:6px">Repeater jetzt synchronisieren</button>
-        </details>
-      </div>
-
-      <div class="card" id="cmpCard">
-        <div class="cardhead">Vergleich mit dem Modell</div>
-        <label>Station (mit Repeater verknüpft)<select id="calSt"></select></label>
-        <label class="chk" style="margin-top:4px"><input type="checkbox" id="cmpCs" checked> <span class="srcb cs">CS</span> CoreScope: Repeater ↔ Repeater, direkt (0 Hop)</label>
-        <label class="chk"><input type="checkbox" id="cmpMm" checked> <span class="srcb mm">MM</span> Messfahrten: Repeater → Handy</label>
-        <details><summary class="note">Was wird womit verglichen?</summary>
-          <p class="note"><span class="srcb cs">CS</span> <b>Gemessen</b>: SNR, das ein Partner-Repeater in seiner Nachbartabelle für ein
-            <i>direkt</i> gehörtes Advert der Station an CoreScope meldet (0 Hop; aus Paketpfaden abgeleitete Werte zählen nicht).
-            <b>Modell</b>: Strecke Station → Partner mit dessen Höhe und Gewinn (Werte der Station im Projekt, sonst eigene Angabe
-            zum Repeater, sonst die Standardwerte unten). Es zählen die Partner, die der Nachbarfilter oben zeigt.</p>
-          <p class="note"><span class="srcb mm">MM</span> <b>Gemessen</b>: SNR (und RSSI) am Handy für den direkt gehörten Repeater
-            – MeshMapper-DISC-Antwort oder -Echo, von Hand oder CSV. <b>Modell</b>: berechnete Abdeckung der Station am Messort mit
-            Empfängerhöhe und Antennengewinn der jeweiligen Messreihe (sonst Projekt-Einstellungen).</p>
-          <p class="note">Δ = gemessen − Modell, negativ heißt: das Modell ist zu optimistisch. SNR-Werte am oberen Ende (≈ 10 dB)
-            zählen nicht, dort sagt nur RSSI etwas.</p>
-        </details>
-        <details><summary class="note">CoreScope: Standardwerte für Partner ohne eigene Angaben</summary>
-          <div class="grid3">
-            <label>Höhe (m)<input id="calH" type="number" value="10" step="1"></label>
-            <label>Gewinn (dBi)<input id="calG" type="number" value="3" step="0.5"></label>
-            <label>Kabel (dB)<input id="calC" type="number" value="1" step="0.5"></label>
-          </div></details>
-        <button id="btnCalRun" class="primary" style="width:100%;margin-top:6px">▶ Vergleichen</button>
-        <div id="cmpSum"></div>
-        <div id="calOut"></div>
-        <div id="mCmpOut"></div>
-      </div>
-
-      <div class="card" id="mCard">
-        <div class="cardhead">Messfahrten <span id="mShort" class="note"></span></div>
-        <div id="mOff" class="note hidden">Messungen sind nur für angemeldete Nutzer sichtbar.</div>
-        <div id="mOn">
-          <div id="mStats" class="note"></div>
-          <div id="mFocus" class="note hidden"></div>
-          <label class="chk"><input type="checkbox" id="mShowPts"> Messpunkte zeigen</label>
-          <label class="chk"><input type="checkbox" id="mShowPlan"> Messplan zeigen (grün = genug, orange = weiter messen)</label>
-          <div class="grid2">
-            <label>Zeitraum<select id="mDays"><option value="">alles</option><option value="1">letzter Tag</option><option value="7">7 Tage</option>
-              <option value="30">30 Tage</option><option value="365">1 Jahr</option></select></label>
-            <label>Repeater<select id="mRep"><option value="">alle</option></select></label>
-          </div>
-          <p class="note">Messplan: eine ~300-m-Zelle gilt als „genug“, wenn ein Repeater dort mindestens 3 Messungen mit höchstens 6 dB Streuung hat.
-            Einen Repeater antippen zeigt nur seine Messungen.</p>
-          <h4>Messreihen</h4>
-          <p class="note">Eine Reihe = eine Fahrt (Pause &gt; 30 min trennt). Angaben zur Empfangsantenne gelten für den Vergleich.</p>
-          <div id="mSeries"></div>
-          <details class="member-only" style="margin-top:8px"><summary class="note">Messungen eintragen / importieren</summary>
-            <p class="note">Einzeln: Rechtsklick (Handy: lange tippen) in die Karte → „Messung hier eintragen“.
-              CSV mit Kopfzeile: <code>lat;lon;rep;snr_down</code>, optional <code>snr_up;rssi;ts;rx_h;note</code> (Trenner ; oder , – Dezimalkomma geht). Ein Import = eine Messreihe.</p>
-            <input type="file" id="mCsvFile" accept=".csv,text/csv,text/plain">
-            <div id="mCsvOut" class="note"></div>
-          </details>
-          <details class="admin-only" style="margin-top:4px"><summary class="note">Löschen nach Quelle</summary>
-            <div class="row"><select id="mDelSrc"></select><button id="btnMDel">Quelle löschen</button></div>
-          </details>
-        </div>
-      </div>
-    </section>
-
-    <section id="tab-results" class="tab">
-      <div id="resultInfo" class="note">Noch nicht berechnet.</div>
-    </section>
-    <div id="preloadInfo" class="note" style="padding:0 12px"></div>
-    <footer id="status">Bereit.</footer>
-    <div class="legal"><div id="parentLink"></div><div id="legalLinks"><a href="#" id="lnkInstall">Als App installieren</a></div></div>
-  </aside>
-
-  <div id="sideResize" title="Breite ziehen"></div>
-  <div id="sideBackdrop"></div>
-  <main id="mapwrap">
-    <div id="map"></div>
-    <div id="mstatus" role="status"></div>
-    <div id="stPanel" class="hidden" role="dialog" aria-label="Station bearbeiten"><div id="editor"></div></div>
-    <div id="ovLegend" class="hidden"></div>
-    <div id="soloChip" class="hidden"><span id="soloText"></span><button type="button" id="soloOff">alle Stationen zeigen</button></div>
-    <div id="sysbox" title="Server-Status"><span class="dot"></span><span id="sysText">…</span><span id="sysRes"></span></div>
-    <button id="btnSide" class="mapbtn" title="Menü" aria-label="Menü öffnen">☰</button>
-    <div id="layerbox" class="hidden">
-      <button id="layerToggle" class="lbhead" aria-expanded="true">Ansicht &amp; Legende <span>▾</span></button>
-      <div id="layerBody">
-      <label>Anzeige
-        <select id="layerSel">
-          <option value="margin">Bester Pegel (Reserve über Empfindlichkeit)</option>
-          <option value="overlap">Überlappung (Anzahl Stationen)</option>
-          <option value="server">Bester Server (Stationsfarbe)</option>
-          <option value="los">Sichtlinie / Fresnelzone / Dächer</option></select></label>
-      <label>Deckkraft <input id="opacity" type="range" min="0" max="1" step="0.05" value="0.6"></label>
-      <label>Mindest-Reserve: <b id="reqVal">10</b> dB <input id="reqSlider" type="range" min="-10" max="40" step="1" value="10"></label>
-      <div id="legend"></div>
-      </div>
-    </div>
-    <div id="placing" class="hidden">Klicke in die Karte, um die Station zu setzen (Esc bricht ab)</div>
-    <div id="profile" class="hidden">
-      <div class="phead"><b id="profTitle">Profil</b>
-        <span id="profMeta"></span>
-        <span class="profrx" id="profRxBox" title="Gilt nur für dieses Profil, die Karte bleibt unverändert">Empfänger
-          <input id="profRxH" type="number" step="0.5" min="0" max="300"> m
-          <input id="profRxG" type="number" step="0.5" min="-10" max="40"> dBi
-          <button id="profReset" title="Auf Projektwerte zurücksetzen">↺</button></span>
-        <button id="profClose" title="Schließen">✕</button></div>
-      <div class="pbody">
-        <canvas id="profCanvas"></canvas>
-        <table id="profBudget"></table>
-      </div>
-    </div>
-  </main>
-</div>
 <dialog id="loginDlg">
-  <form id="loginForm">
-    <h3>Anmelden</h3>
-    <label>Benutzer<input id="loginUser" autocomplete="username" value="admin"></label>
-    <label>Passwort<input id="loginPw" type="password" autocomplete="current-password"></label>
-    <label class="chk" style="margin-top:6px"><input type="checkbox" id="loginRemember"> angemeldet bleiben (setzt ein dauerhaftes Cookie)</label>
-    <div id="loginErr" class="warn"></div>
-    <div class="row"><button type="button" id="loginCancel">Abbrechen</button><button type="submit" class="primary">Anmelden</button></div>
+  <form id="loginForm" method="dialog">
+    <h3 data-i18n="Log in"></h3>
+    <label><span data-i18n="User"></span><input id="loginUser" autocomplete="username"></label>
+    <label><span data-i18n="Password"></span><input id="loginPassword" type="password" autocomplete="current-password"></label>
+    <label class="chk"><input type="checkbox" id="loginRemember"> <span data-i18n="Stay logged in on this device"></span></label>
+    <div id="loginError" class="warn"></div>
+    <div class="row"><button type="button" id="loginCancel" data-i18n="Cancel"></button><button class="primary" data-i18n="Log in"></button></div>
   </form>
 </dialog>
-<dialog id="settingsDlg" class="wide">
-  <div class="dlghead"><h3>Einstellungen</h3><button type="button" id="settingsClose" class="iconbtn" aria-label="Schließen">✕</button></div>
-  <div class="dlgbody">
-      <details class="esec" open><summary>Webseite &amp; Zugang</summary><div class="esbody">
-      <h3>Zweiter Zugang („Benutzer“)</h3>
-      <p class="note">Darf alles ansehen, Stationen anlegen und eigene Stationen ändern und speichern – an fremden Stationen, Einstellungen und Projekten ändert er nichts.</p>
-      <label class="chk" style="margin-top:2px"><input type="checkbox" id="ac_user_enabled"> Benutzer-Zugang aktiv</label>
-      <div class="grid2">
-        <label>Name<input id="ac_user_name" autocomplete="off"></label>
-        <label>Passwort (Klartext)<input id="ac_user_password" autocomplete="off" spellcheck="false"></label>
-      </div>
-      <h3>Zugehörigkeit</h3>
-      <div class="grid2">
-        <label>„Diese Seite gehört zu …“<input id="ac_parent_name" placeholder="z. B. funk.nrw"></label>
-        <label>Link dazu<input id="ac_parent_url" placeholder="https://…"></label>
-      </div>
-      <label class="chk" style="margin-top:2px"><input type="checkbox" id="ac_show_github"> Link zum Quellcode (GitHub) zeigen</label>
-      <h3>Impressum</h3>
-      <label>Art<select id="ac_imprint_mode">
-        <option value="generated">aus den Angaben hier erzeugen</option>
-        <option value="link">auf eine andere Seite verlinken</option>
-        <option value="off">kein Impressum</option></select></label>
-      <label>Link (bei „verlinken“)<input id="ac_imprint_url" placeholder="https://forum…/impressum"></label>
-      <div class="grid2">
-        <label>Name<input id="ac_imprint_name"></label>
-        <label>E-Mail<input id="ac_imprint_email"></label>
-      </div>
-      <label>Anschrift (Zeilen mit | trennen)<input id="ac_imprint_address" placeholder="Musterstr. 1|45964 Gladbeck"></label>
-      <h3>Datenschutz</h3>
-      <label>Art<select id="ac_privacy_mode">
-        <option value="generated">passend zu TerraRF erzeugen</option>
-        <option value="link">auf eine andere Seite verlinken</option></select></label>
-      <label>Link (bei „verlinken“)<input id="ac_privacy_url" placeholder="https://…/datenschutz"></label>
-      <label>Zusatz zur Datenschutzerklärung (z. B. Reverse-Proxy-Logs)<input id="ac_privacy_extra"></label>
-      <h3>Messfahrten (MeshMapper)</h3>
-      <p class="note">Schlüssel setzen, speichern, dann den Link unten kopieren und in der MeshMapper-App unter
-        <i>Settings → API Endpoints → Import from Clipboard</i> einfügen (oder Adresse und Schlüssel von Hand eintragen).
-        Die App schickt dann jeden erfolgreich hochgeladenen Messblock zusätzlich hierher. TerraRF muss per HTTPS erreichbar sein.</p>
-      <label>API-Schlüssel (mind. 16 Zeichen, leer = Empfang aus)
-        <div class="row"><input id="ac_mm_api_key" autocomplete="off" spellcheck="false" style="flex:1"><button type="button" id="btnMmKey" style="flex:0 0 auto">neu</button></div></label>
-      <label>Adresse<input id="mmUrl" readonly></label>
-      <label>Link für die App<div class="row"><input id="mmLink" readonly style="flex:1"><button type="button" id="btnMmCopy" style="flex:0 0 auto">kopieren</button></div></label>
-      <label class="chk" style="margin-top:2px"><input type="checkbox" id="ac_measurements_public"> Messpunkte auch ohne Anmeldung zeigen (ohne Zeit und Gerät)</label>
-      <div class="row"><button id="btnAcSave" class="primary">Webseite &amp; Zugang speichern</button></div>
-      <div id="acOut" class="note"></div>
-      </div></details>
-      <details class="esec" open><summary>Projekt &amp; Rechnung</summary><div class="esbody">    
-      <h3>Höhendaten</h3>
-      <label>Gelände (Boden, für Antennen-/Empfängerhöhe)
-        <select id="s_ground_source"></select></label>
-      <label>Hindernisse (Oberfläche: Gebäude, Bäume)
-        <select id="s_surface_source"></select></label>
-      <label>Ersatz außerhalb der Hauptquelle (z. B. jenseits der NRW-Grenze)
-        <select id="s_fallback_source"></select></label>
-      <p class="note">Wo die Hauptquelle keine Daten hat, füllt die Ersatzquelle die Lücken – im Grenzgebiet rechnet TerraRF also mit beiden. Copernicus ist ein 30-m-Oberflächenmodell: Gebäude und Bäume stecken dort in der „Geländehöhe“ und werden nicht als Hindernis erkannt. Für Gebiete jenseits der Grenze einen Mindest-Clutter setzen.</p>
-      <div class="row tight">
-        <button id="btnTestGround">Gelände-Quelle testen</button>
-        <button id="btnTestSurface">Oberfl.-Quelle testen</button>
-      </div>
-      <div id="testOut" class="note mono"></div>
-      <p class="note">Eigene GeoTIFFs in <code>data/dem/&lt;ordner&gt;/</code> erscheinen als „Lokal: …“.</p>
 
-      <h3>Höhendaten offline vorhalten</h3>
-      <div class="grid2">
-        <label>Quelle<select id="r_source">
-          <option value="nrw_dgm">NRW DGM (Gelände)</option>
-          <option value="nrw_dom">NRW DOM1 (Oberfläche)</option>
-          <option value="copernicus">Copernicus GLO-30</option></select></label>
-        <label>Gebiet<select id="r_area">
-          <option value="view">Aktueller Kartenausschnitt</option>
-          <option value="stations">Stationen + Radius</option>
-          <option value="nrw">Ganz NRW</option></select></label>
-        <label>Auflösung (m)<select id="r_res">
-          <option>5</option><option selected>10</option><option>20</option><option>25</option></select></label>
-        <label>Ordnername<input id="r_name" placeholder="automatisch"></label>
-      </div>
-      <div class="row tight">
-        <button id="btnPlan">Größe schätzen</button>
-        <button id="btnDownload" class="primary">Download starten</button>
-      </div>
-      <div id="planOut" class="note"></div>
-      <div id="jobs"></div>
-      <div class="row tight"><button id="btnCache">Cache anzeigen</button><button id="btnCacheClear">Rechen-Cache leeren</button></div>
-      <div id="cacheOut" class="note mono"></div>
+<dialog id="adminDlg" class="fullscreen" aria-label="Administration"></dialog>
+<dialog id="installDlg"></dialog>
 
-      <h3>Rechnung</h3>
-      <div class="grid2">
-        <label>Auflösung (m)<input id="s_res_m" type="number" min="2" max="100" step="1"></label>
-        <label>k-Faktor Erdradius<input id="s_k_factor" type="number" step="0.01"></label>
-        <label>Profilpunkte je Strahl<input id="s_max_profile_points" type="number" min="100" max="2000" step="50"></label>
-        <label>Max. Strahlen<input id="s_max_rays" type="number" min="360" max="20000" step="360"></label>
-      </div>
-      <h3>Ausbreitungsmodell</h3>
-      <label>Beugungsmodell<select id="s_diffraction_model">
-        <option value="deygout">Deygout, 3 Kanten (Standard, passt besser zu Messungen in bebautem Gebiet)</option>
-        <option value="bullington">Bullington (ITU-R P.526, optimistischer)</option></select></label>
-      <div class="grid3">
-        <label>Hindernisdämpfung (P.833)<select id="s_veg_mode">
-          <option value="auto">automatisch</option><option value="custom">eigene Werte</option><option value="off">aus</option></select></label>
-        <label>dB/m<input id="s_veg_gamma_db_m" type="number" step="0.01" placeholder="auto"></label>
-        <label>max. dB<input id="s_veg_max_db" type="number" step="1" placeholder="auto"></label>
-      </div>
-      <p class="note">Wo die direkte Linie durch Bäume/Gebäude läuft (über Gelände, unter der Oberfläche), kommt eine Dämpfung pro Meter dazu, begrenzt auf ein Maximum. Standard aus ITU-R P.833: bei 869 MHz ca. 0,16 dB/m, max. 25 dB.</p>
-      <div class="grid2">
-        <label>Clutter am Empfänger (ITU-R P.2108)<select id="s_clutter_mode">
-          <option value="auto">automatisch aus Oberflächenmodell</option>
-          <option value="off">aus</option>
-          <option value="suburban">fest: vorstädtisch (R 10 m)</option>
-          <option value="urban">fest: städtisch (R 15 m)</option>
-          <option value="dense">fest: dicht städtisch (R 20 m)</option>
-          <option value="trees">fest: Wald/Bäume (R 15 m)</option></select></label>
-        <label>Mindest-Clutter (bei „automatisch“)<select id="s_clutter_floor">
-          <option value="none">keiner</option>
-          <option value="suburban">vorstädtisch</option>
-          <option value="urban">städtisch</option>
-          <option value="dense">dicht städtisch</option>
-          <option value="trees">Wald/Bäume</option></select></label>
-        <label>Nahbereich Empfänger (m)<input id="s_clutter_exclude_m" type="number" min="0" max="500" step="10"></label>
-        <label title="Bis zu dieser Entfernung wird um jede Station in 5 m abgetastet – Gebäude direkt an der Antenne. 0 = aus">Nahfeld Station, 5 m fein (m)<input id="s_near_m" type="number" min="0" max="500" step="10"></label>
-        <label class="chk"><input id="s_two_ray" type="checkbox"> Bodenreflexion (2-Strahl)</label>
-      </div>
-      <p class="note">„Automatisch“ nimmt die Hindernishöhe (Oberfläche − Gelände) im Nahbereich des Empfängers (höchstens die halbe Strecke) als Clutter-Höhe und ersetzt dort die Beugung durch den P.2108-Zuschlag. Mit grober Oberfläche (Copernicus) besser einen Mindest-Clutter setzen.</p>
-      <h3>Empfänger (Client)</h3>
-      <div class="grid2">
-        <label>Höhe über Grund (m)<input id="s_rx_height_m" type="number" step="0.5"></label>
-        <label>Antennengewinn (dBi)<input id="s_rx_gain_dbi" type="number" step="0.1"></label>
-        <label>Kabelverlust (dB)<input id="s_rx_cable_db" type="number" step="0.1"></label>
-        <label>Zusatzverlust Rx: Körper/Gebäude (dB)<input id="s_rx_extra_loss_db" type="number" step="1"></label>
-        <label>Rauschanhebung ggü. thermisch (dB)<input id="s_noise_rise_db" type="number" step="1"></label>
-        <label>Fading-/Standortreserve (dB)<input id="s_min_margin_db" type="number" step="1"></label>
-      </div>
-      <p class="note">Richtwerte: Handgerät am Körper 3–6 dB, im Gebäude 10–20 dB. Die Reserve deckt die Streuung über Standorte und Fading ab; als „versorgt“ zählt nur, was darüber liegt.</p>
-      <p class="note">Die Empfindlichkeit des Empfängers kommt aus den Funkparametern der jeweiligen Station (Bandbreite, SF, Rauschzahl). Man nimmt also an, dass auf beiden Seiten dasselbe Funkmodul sitzt.</p>
-    </div></details>
-  </div>
-</dialog>
-<dialog id="installDlg">
-  <h3>TerraRF als App</h3>
-  <p class="note">TerraRF lässt sich auf den Startbildschirm legen und öffnet sich dann ohne Browserleiste.</p>
-  <p><b>Android (Chrome, Edge, Samsung):</b> Menü ⋮ → „App installieren“ bzw. „Zum Startbildschirm hinzufügen“.</p>
-  <p><b>iPhone/iPad (Safari):</b> Teilen-Symbol □↑ → „Zum Home-Bildschirm“.</p>
-  <p><b>Desktop (Chrome, Edge):</b> Installieren-Symbol rechts in der Adressleiste.</p>
-  <p class="note" id="installHttp"></p>
-  <div class="row"><button type="button" id="installClose" class="primary">OK</button></div>
-</dialog>
 <script src="/static/vendor/leaflet/leaflet.js"></script>
-<script src="/static/app.js?v=__VERSION__"></script>
+<script type="module" src="/static/js/main.js?v=__VERSION__"></script>
 </body>
 </html>

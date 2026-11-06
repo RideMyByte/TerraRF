@@ -1,16 +1,16 @@
-"""CoreScope (MeshCore-Analyzer) als Datenquelle: Repeater-Standorte, Verbindungen, gemessene SNR.
+"""CoreScope (MeshCore analyzer) as a data source: repeater locations, links, measured SNR.
 
-Nur lesende GET-Abfragen, serverseitig mit Cache (CORS der Instanzen erlaubt keinen Browserzugriff).
-Höflich: eigene User-Agent-Kennung, Pause zwischen Seiten, Verbindungen höchstens alle LINKS_TTL_S neu.
+Read-only GET requests, cached on the server (the instances' CORS does not allow browser access).
+Polite: own User-Agent, pause between pages, links refreshed at most every LINKS_TTL_S.
 
-Verwendete Endpunkte (CoreScope OpenAPI):
-  /api/nodes?role=repeater&limit=&offset=   -> Knoten, seitenweise bis has_more false
-  /api/nodes/{pk}/reach                     -> Verbindungen (we_hear/they_hear) + direct_observers mit avg_snr
-  /api/nodes/{pk}/neighbors                 -> Nachbarn mit avg_snr und observers
+Endpoints used (CoreScope OpenAPI):
+  /api/nodes?role=repeater&limit=&offset=   -> nodes, page by page until has_more is false
+  /api/nodes/{pk}/reach                     -> links (we_hear/they_hear) + direct_observers with avg_snr
+  /api/nodes/{pk}/neighbors                 -> neighbours with avg_snr and observers
 
-SNR-Bewertung: Ein avg_snr gilt nur dann als Messung der Strecke Knoten -> Partner, wenn der Partner selbst
-Observer ist (steht in seiner eigenen observers-Liste) bzw. in direct_observers auftaucht. Sonst ist es
-das SNR des letzten Hops zu irgendeinem Observer und sagt über die Strecke nichts.
+SNR rating: an avg_snr only counts as a measurement of the link node -> partner when the partner itself is an
+observer (listed in its own observers) or appears in direct_observers. Otherwise it is the SNR of the last
+hop to some observer and says nothing about the link.
 """
 from __future__ import annotations
 
@@ -23,8 +23,9 @@ import time
 
 import httpx
 
-from . import terrain
-from .version import VERSION
+from .. import paths
+from ..model import terrain
+from ..version import VERSION
 
 log = logging.getLogger("terrarf.corescope")
 
@@ -35,12 +36,12 @@ PAGE = 200
 MAX_PAGES = 100
 PAUSE_S = 0.3
 UA = f"TerraRF/{VERSION} (+https://github.com/RideMyByte/TerraRF)"
-DIR = os.path.join(terrain.DATA_DIR, "corescope")
+DIR = os.path.join(paths.DATA_DIR, "corescope")
 os.makedirs(DIR, exist_ok=True)
 NODES_FILE = os.path.join(DIR, "nodes.json")
 PK = re.compile(r"^[0-9a-f]{64}$")
 ROLES = ("repeater", "room")
-LINKS_VERSION = 3
+LINKS_VERSION = 4
 OVERRIDES_FILE = os.path.join(DIR, "overrides.json")
 _ovr_lock = threading.Lock()
 
@@ -60,7 +61,7 @@ def _client():
 
 
 def _get(client, path, params=None):
-    with _req_lock:  # höchstens eine Anfrage gleichzeitig, mit Mindestabstand
+    with _req_lock:  # at most one request at a time, with a minimum gap
         wait = PAUSE_S - (time.time() - _last_req[0])
         if wait > 0:
             time.sleep(wait)
@@ -126,7 +127,7 @@ def _sync():
         os.replace(tmp, NODES_FILE)
         _state["error"] = None
         log.info("CoreScope: %d Knoten mit Standort übernommen", len(nodes))
-    except Exception as e:  # noqa: BLE001 – Status für die Oberfläche
+    except Exception as e:  # noqa: BLE001 – status for the interface
         _state["error"] = f"{type(e).__name__}: {e}"
         log.warning("CoreScope-Sync fehlgeschlagen: %s", e)
     finally:
@@ -146,7 +147,7 @@ def start_sync():
 
 
 def auto_sync_loop():
-    """Beim Start synchronisieren, wenn nichts oder Veraltetes da ist, danach alle SYNC_H Stunden."""
+    """Sync at start-up when nothing or only stale data is there, then every SYNC_H hours."""
     if not enabled() or SYNC_H <= 0:
         return
     while True:
@@ -210,7 +211,7 @@ def links(pk, refresh=False):
 
 
 def merge_links(pk, reach, nb, reports=None):
-    """Verbindungen aus reach + neighbors zusammenführen; SNR nur dort, wo es die Strecke misst."""
+    """Merge links from reach + neighbors; SNR only where it measures the link itself."""
     me = reach.get("node") or {}
     L = {}
     for x in reach.get("links") or []:
@@ -218,6 +219,7 @@ def merge_links(pk, reach, nb, reports=None):
         if not PK.match(q) or x.get("lat") is None or x.get("lon") is None:
             continue
         L[q] = {"pk": q, "name": x.get("name"), "role": x.get("role"), "lat": x["lat"], "lon": x["lon"],
+                "last_seen": x.get("last_seen") or x.get("last_heard"),
                 "we_hear": int(x.get("we_hear") or 0), "they_hear": int(x.get("they_hear") or 0),
                 "bidir": bool(x.get("bidir")), "distance_km": x.get("distance_km"), "snr": None, "snr_n": 0}
     meas, where = {}, {}
@@ -233,7 +235,7 @@ def merge_links(pk, reach, nb, reports=None):
         if not PK.match(q):
             continue
         e = L.get(q)
-        if e is None:  # nur aus /neighbors bekannt -> Standort aus der Knotenliste
+        if e is None:  # only known from /neighbors -> location from the node list
             kn = node(q)
             if kn:
                 e = L[q] = {"pk": q, "name": x.get("name") or kn["name"], "role": x.get("role") or kn.get("role"),
@@ -242,9 +244,9 @@ def merge_links(pk, reach, nb, reports=None):
         if e is not None:
             e["count"] = int(x.get("count") or 0)
             if x.get("avg_snr") is not None:
-                e["snr_any"] = round(float(x["avg_snr"]), 2)  # Mittel über alle Observer – nicht die Strecke
+                e["snr_any"] = round(float(x["avg_snr"]), 2)  # average over all observers – not the link
         if x.get("avg_snr") is not None and q in [str(v).lower() for v in x.get("observers") or []]:
-            meas[q] = (float(x["avg_snr"]), int(x.get("count") or 0), x)  # neuer/vollständiger als reach
+            meas[q] = (float(x["avg_snr"]), int(x.get("count") or 0), x)  # newer / more complete than reach
     for q, (snr, cnt, src) in meas.items():
         e = L.get(q)
         if e is None:
@@ -258,8 +260,8 @@ def merge_links(pk, reach, nb, reports=None):
                         "we_hear": 0, "they_hear": 0, "bidir": False, "distance_km": dist or src.get("distance_km")}
         e["snr"] = round(snr, 2)
         e["snr_n"] = cnt
-    # Pfad-abgeleitetes SNR ist unsicher (Observer hören nur den letzten Hop, kurze Präfixe sind mehrdeutig):
-    # nur noch als Hinweis. Als Messung zählen allein die Nachbartabellen, die Knoten selbst melden.
+    # path-derived SNR is uncertain (observers only hear the last hop, short prefixes are ambiguous):
+    # shown as a hint only. Only the neighbour tables the nodes report themselves count as measurements.
     for e in L.values():
         e.setdefault("count", 0)
         if e.get("snr") is not None and e.get("snr_any") is None:
@@ -269,7 +271,7 @@ def merge_links(pk, reach, nb, reports=None):
         rep = (reports or observer_reports())
     except Exception:  # noqa: BLE001
         rep = {"by_neighbor": {}}
-    for x in rep.get("by_neighbor", {}).get(pk, []):  # Observer x hat unseren Knoten direkt gehört: pk -> x
+    for x in rep.get("by_neighbor", {}).get(pk, []):  # observer x heard our node directly: pk -> x
         e = L.get(x["observer"])
         if e is None:
             kn = node(x["observer"])
@@ -279,20 +281,22 @@ def merge_links(pk, reach, nb, reports=None):
                                     "lat": kn["lat"], "lon": kn["lon"], "we_hear": 0, "they_hear": 0, "bidir": False,
                                     "distance_km": None, "count": 0, "snr_any": None}
         e["snr"], e["snr_n"], e["snr_src"] = round(x["snr"], 2), 1, "neighbor_report"
+        e["heard_at"] = x.get("heard_at")   # #26: when the partner last heard this node directly
     mine = {}
     for q, lst in rep.get("by_neighbor", {}).items():  # unser Knoten meldet selbst: q -> pk
         for x in lst:
             if x["observer"] == pk:
-                mine[q] = x["snr"]
+                mine[q] = x
     for q, v in mine.items():
         if q in L:
-            L[q]["snr_rev"] = round(v, 2)
+            L[q]["snr_rev"] = round(v["snr"], 2)
+            L[q]["heard_rev_at"] = v.get("heard_at")
     return {"v": LINKS_VERSION, "pk": pk, "name": me.get("name"), "lat": me.get("lat"), "lon": me.get("lon"),
             "fetched_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
             "window_days": (reach.get("window") or {}).get("days"), "links": list(L.values())}
 
 
-# ---------------------------------------------------------------- eigene Angaben je Repeater (ohne Station)
+# ---------------------------------------------------------------- own values per repeater (without a station)
 def overrides():
     try:
         with open(OVERRIDES_FILE) as f:
@@ -302,7 +306,7 @@ def overrides():
 
 
 def set_override(pk, data):
-    """Höhe/Gewinn/Kabel für einen Repeater, der nicht als Station angelegt ist (für den Abgleich)."""
+    """Height/gain/cable of a repeater that is not a station of the project (used by the comparison)."""
     if not PK.match(pk):
         raise ValueError("ungültiger Schlüssel")
     clean = {}
@@ -347,7 +351,7 @@ def _rf_params(c):
 
 
 def _rf_for(d, pk):
-    """Antwortformat von /api/rf-params ist in der Spezifikation nicht beschrieben – defensiv suchen."""
+    """The response format of /api/rf-params is not specified – search defensively."""
     if not isinstance(d, dict) or d.get("enabled") is False:
         return None
     for k in ("nodes", "params", "rf", "data"):
@@ -359,7 +363,7 @@ def _rf_for(d, pk):
 
 
 def node_meta(pk):
-    """Was CoreScope über einen Knoten weiß. Höhe, Antenne und Sendeleistung sendet MeshCore nicht aus."""
+    """What CoreScope knows about a node. MeshCore does not announce height, antenna and transmit power."""
     if not PK.match(pk):
         raise ValueError("ungültiger Schlüssel")
     p = os.path.join(DIR, f"node_{pk}.json")
@@ -380,7 +384,7 @@ def node_meta(pk):
 
 
 
-# ---------------------------------------------------------------- direkte Messwerte: Nachbartabellen der Observer
+# ---------------------------------------------------------------- direct measurements: the observers' neighbour tables
 REPORTS_FILE = os.path.join(DIR, "observer_reports.json")
 REPORTS_TTL_S = 6 * 3600
 
@@ -396,8 +400,8 @@ def _items(d, *keys):
 
 
 def observer_reports(refresh=False):
-    """Nachbartabellen, die Observer selbst melden (/api/observers/{id} -> neighbor_report): SNR direkt gehörter
-    Adverts, also sicher direkte Verbindungen. Ergebnis: {nachbar_pk: [{observer, name, snr, heard_secs_ago}]}."""
+    """Neighbour tables the observers report themselves (/api/observers/{id} -> neighbor_report): SNR of directly
+    heard adverts, so certainly direct links. Result: {neighbour_pk: [{observer, name, snr, heard_secs_ago}]}."""
     if not refresh and os.path.exists(REPORTS_FILE) and time.time() - os.path.getmtime(REPORTS_FILE) < REPORTS_TTL_S:
         with open(REPORTS_FILE) as f:
             return json.load(f)
@@ -423,8 +427,11 @@ def observer_reports(refresh=False):
             for nb in rep.get("neighbors") or []:
                 q = str(nb.get("pubkey") or "").lower()
                 if PK.match(q) and nb.get("snr") is not None:
+                    ago = nb.get("heard_secs_ago")
                     idx.setdefault(q, []).append({"observer": opk, "name": obs[opk]["name"], "snr": float(nb["snr"]),
-                                                  "heard_secs_ago": nb.get("heard_secs_ago")})
+                                                  "heard_secs_ago": ago,
+                                                  # absolute time, so the age stays right while the cache is reused
+                                                  "heard_at": int(time.time() - float(ago)) if isinstance(ago, (int, float)) else None})
     out = {"by_neighbor": idx, "observers": obs, "fetched_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
     with open(REPORTS_FILE, "w") as f:
         json.dump(out, f)

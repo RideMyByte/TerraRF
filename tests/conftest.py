@@ -28,6 +28,9 @@ def _write(name, arr):
         ds.write(arr.astype(np.float32), 1)
 
 
+TEST_SETTINGS = {"ground_source": "local:tdgm", "surface_source": "local:tdom", "res_m": 25}
+
+
 @pytest.fixture(scope="session", autouse=True)
 def terrain():
     yy, xx = np.mgrid[0:N, 0:N] * RES
@@ -36,6 +39,9 @@ def terrain():
     surface[300:340, 200:600] += 20  # a 0.8 km x 8 km "forest" band
     _write("tdgm", ground)
     _write("tdom", surface)
+    # model settings are global since 0.5: every test computes on the synthetic terrain
+    from app.model import settings
+    settings.save(TEST_SETTINGS)
     return _DATA
 
 
@@ -49,5 +55,4 @@ def station():
 
 @pytest.fixture
 def project(station):
-    return {"name": "Test", "settings": {"ground_source": "local:tdgm", "surface_source": "local:tdom", "res_m": 25},
-            "stations": [station]}
+    return {"name": "Test", "stations": [station]}

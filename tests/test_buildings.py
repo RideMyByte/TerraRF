@@ -8,8 +8,8 @@ import rasterio
 from rasterio.warp import transform as _warp
 from rasterio.transform import from_origin
 
-from app import coverage as cov
-from app.terrain import lonlat_to_merc
+from app.model import coverage as cov
+from app.model.terrain import lonlat_to_merc
 
 X0, Y1, RES, N = 360000.0, 5718000.0, 5.0, 800   # 4 km, 5 m
 CX, CY = X0 + 2000, Y1 - 2000
@@ -37,12 +37,18 @@ def bldg(terrain):
     return lat, lon
 
 
+from app.model import settings as settings_store
+
+
+def _settings(res):
+    return {"ground_source": "local:bg", "surface_source": "local:bs", "res_m": res, "fallback_source": "none"}
+
+
 def _proj(lat, lon, res, ant=None):
     st = {"id": "a", "name": "A", "enabled": True, "lat": lat, "lon": lon, "height_m": 10, "height_ref": "ground",
           "tx_power_dbm": 22, "freq_mhz": 869.618, "bw_khz": 62.5, "mode": "lora", "sf": 8, "nf_db": 6, "cable_loss_db": 0,
           "radius_km": 1.2, "antenna": ant or {"type": "omni", "gain_dbi": 2}}
-    return {"settings": {"ground_source": "local:bg", "surface_source": "local:bs", "res_m": res, "fallback_source": "none"},
-            "stations": [st]}
+    return {"stations": [st], "_res": res}
 
 
 def _at(dx, dy):
@@ -51,12 +57,18 @@ def _at(dx, dy):
 
 
 def _raster(pj, dx, dy):
-    s = cov.merged_settings(pj)
-    r, _ = cov.compute_station(pj["stations"][0], s, cov.project_cs(pj, s))
+    with settings_store.temporary(_settings(pj["_res"])):
+        s = cov.merged_settings(pj)
+        r, _ = cov.compute_station(pj["stations"][0], s, cov.project_cs(pj, s))
     lat, lon = _at(dx, dy)
     x, y = lonlat_to_merc(lon, lat)
     g = r.grid
     return float(r.prx[int((g.y1 - y) / g.cs), int((x - g.x0) / g.cs)])
+
+
+def _profile(pj, lat, lon):
+    with settings_store.temporary(_settings(pj["_res"])):
+        return cov.profile(pj, "a", lat, lon)
 
 
 @pytest.mark.parametrize("res", [10, 25])
@@ -64,13 +76,13 @@ def test_building_next_to_station_shadows_one_side(bldg, res):
     pj = _proj(*bldg, res)
     east, west = _raster(pj, 300, 0), _raster(pj, -300, 0)
     assert west - east > 40, (west, east)            # vorher bei 25 m kaum Unterschied bzw. 360° verschattet
-    p = cov.profile(pj, "a", *_at(300, 0))["budget"]
+    p = _profile(pj, *_at(300, 0))["budget"]
     assert abs(p["prx_dbm"] - east) < 4               # Profil und Fläche stimmen überein
-    assert cov.profile(pj, "a", *_at(-300, 0))["budget"]["diffraction_db"] < 1   # Rückseite frei
+    assert _profile(pj, *_at(-300, 0))["budget"]["diffraction_db"] < 1   # Rückseite frei
 
 
 def test_short_path_behind_building_is_diffracted(bldg):
-    p = cov.profile(_proj(*bldg, 10), "a", *_at(60, 0))["budget"]   # ganze Strecke im Empfänger-Nahbereich (60 m)
+    p = _profile(_proj(*bldg, 10), *_at(60, 0))["budget"]   # ganze Strecke im Empfänger-Nahbereich (60 m)
     assert p["diffraction_db"] > 30, p
 
 

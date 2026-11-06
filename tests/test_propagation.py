@@ -2,7 +2,7 @@ import math
 
 import numpy as np
 
-from app import propagation as prop
+from app.model import propagation as prop
 
 
 def test_knife_edge_reference_values():
@@ -47,7 +47,8 @@ def test_obstructed_path_costs_more_than_free():
         nd = surface - ground
         nd[0] = 0
         return prop.endpoint_terms(d, z, z.copy(), ground.copy(), nd, gsum, n, 80.0, 30.0, 1.5, lam, 869.0, 1,
-                                   0, 0.0, 0.0, 0, 0.0, 0, False, *prop.p833_params(869.0))
+                                   0, 0.0, 0.0, 0, 0.0, 0, False, *prop.p833_params(869.0),
+                                   np.zeros(n + 1, dtype=np.int8), 0)
 
     free = terms(surf)
     surf2 = surf.copy()

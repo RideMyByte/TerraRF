@@ -3,9 +3,10 @@
 Path loss per receiver location:
 
     L = FSPL(d3D)
-      + Bodenreflexion  (2-Strahl/plane-earth Zuschlag, nur bei freier Sicht)
-      + Beugung         (Bullington nach ITU-R P.526 oder Deygout, über Gelände + Oberfläche)
-      + Terminal-Clutter (ITU-R P.2108 §3.1 Height-Gain-Terminal-Correction am Empfänger)
+      + ground reflection (two-ray / plane-earth term, line of sight only)
+      + diffraction       (Bullington per ITU-R P.526 or Deygout, over ground + surface)
+      + obstacle loss     (ITU-R P.833 where the direct ray runs through objects of the surface model)
+      + terminal clutter  (ITU-R P.2108 §3.1 height-gain terminal correction at the receiver)
 
 * Effective earth radius k * 6371 km (default k = 4/3), applied as earth bulge.
 * To avoid double counting, obstacles within `excl_m` of the receiver are taken
@@ -30,10 +31,10 @@ C = 299792458.0
 # clutter classes: (R m, model) model 0 = height gain, 1 = diffraction (P.2108 Table 3)
 CLUTTER_CLASSES = {
     "none": (0.0, 0),
-    "suburban": (10.0, 0),   # vorstädtisch
-    "urban": (15.0, 1),      # städtisch
-    "trees": (15.0, 1),      # Bäume / Wald
-    "dense": (20.0, 1),      # dicht städtisch
+    "suburban": (10.0, 0),   # suburban
+    "urban": (15.0, 1),      # urban
+    "trees": (15.0, 1),      # trees / forest
+    "dense": (20.0, 1),      # dense urban
 }
 
 
@@ -158,20 +159,33 @@ def diffraction(d, z, j, ztx, zrx, lam, model):
     return bullington(d, z, j, ztx, zrx, lam)
 
 
+@njit(cache=True)
+def mask_at(mask, fx, fy):
+    """Nearest-cell lookup in a 0/1 mask (building footprints); 0 outside."""
+    ny, nx = mask.shape
+    ix = int(fx + 0.5)
+    iy = int(fy + 0.5)
+    if ix < 0 or iy < 0 or ix >= nx or iy >= ny:
+        return 0
+    return mask[iy, ix]
+
+
 @njit(cache=True, fastmath=True)
 def endpoint_terms(d, z, zt, zg, nd, gsum, j, ztx, tx_agl, rx_h, lam, f_mhz, model,
-                   clut_mode, excl_m, cl_R, cl_typ, fl_R, fl_typ, two_ray, veg_g, veg_am):
+                   clut_mode, excl_m, cl_R, cl_typ, fl_R, fl_typ, two_ray, veg_g, veg_am, bld, bld_mode):
     """Loss terms for receiver at index j.
     d: distances, z: obstacle heights (bulge-corrected), zt: scratch copy of z,
     zg: ground (bulge-corrected), nd: obstacle height above ground, gsum: cumulative
     raw ground sum (for effective tx height).
+    bld: 1 where the obstacle at a sample is a known building; bld_mode 1 = buildings act only through
+    diffraction (no P.833 attenuation through them), 0 = like vegetation.
     Returns (diffraction dB, v_main, clutter dB, ground-reflection dB, clutter height R,
              obstacle/vegetation dB, path length through clutter layer m)."""
     zrx = zg[j] + rx_h
     lo = j
     R_dsm = 0.0
-    # Nahbereich höchstens die halbe Strecke: sonst verschwinden bei kurzen Strecken Hindernisse zwischen
-    # Sender und Empfänger ganz aus der Beugung (#25)
+    # exclusion zone at most half the path: otherwise obstacles between transmitter and receiver vanish from
+    # the diffraction on short paths (#25)
     ex = min(excl_m, 0.5 * d[j])
     if clut_mode > 0 and excl_m > 0.0:
         while lo > 1 and d[j] - d[lo - 1] <= ex:
@@ -218,6 +232,8 @@ def endpoint_terms(d, z, zt, zg, nd, gsum, j, ztx, tx_agl, rx_h, lam, f_mhz, mod
         D = d[j]
         stop = lo if (clut_mode > 0 and excl_m > 0.0) else j
         for i in range(1, stop):
+            if bld_mode == 1 and bld[i] == 1:
+                continue
             li = ztx + (zrx - ztx) * d[i] / D
             if li < z[i] and li > zg[i]:
                 dveg += d[i] - d[i - 1]
@@ -229,13 +245,14 @@ def endpoint_terms(d, z, zt, zg, nd, gsum, j, ztx, tx_agl, rx_h, lam, f_mhz, mod
 @njit(parallel=True, cache=True, fastmath=True)
 def coverage_rays(G, S, sx, sy, cs, kscale, ztx_abs, tx_agl, rx_h, lam, f_mhz, n_rays, n_bins, step, sub, re,
                   model, clut_mode, excl_m, cl_R, cl_typ, fl_R, fl_typ, two_ray, veg_g, veg_am, a0, a1,
-                  G2, S2, sx2, sy2, cs2, rnear):
+                  G2, S2, sx2, sy2, cs2, rnear, B, B2, bld_mode):
     """Radial sweep. Returns per (ray, bin): diffraction, v_main, dz, clutter, reflection,
     obstacle/vegetation loss, and visibility of the surface (roof/tree top) from the antenna.
-    G2/S2: feines Raster (Zellgröße cs2) um die Station. Bis rnear (m) läuft das Profil intern in feinen Schritten
-    aus diesem Raster, damit Gebäude direkt neben der Antenne nicht im groben Rechenraster verschmieren und
-    mit Vorder- und Hinterkante in die Beugung eingehen (#23). Ausgegeben wird weiter je grobem Bin. rnear <= 0: aus."""
-    shape = (a1 - a0, n_bins + 1)  # nur Strahlen a0..a1-1 (Fortschritt in Blöcken)
+    G2/S2: fine grid (cell size cs2) around the station. Up to rnear (m) the profile is sampled internally in fine
+    steps from this grid, so buildings right next to the antenna are not smeared by the coarse grid and enter the
+    diffraction with front and back edge (#23). Output stays per coarse bin. rnear <= 0: off.
+    B/B2: building masks (0/1) on the same two grids; bld_mode see endpoint_terms."""
+    shape = (a1 - a0, n_bins + 1)  # only rays a0..a1-1 (progress in blocks)
     o_diff = np.zeros(shape, dtype=np.float32)
     o_v = np.full(shape, -1e9, dtype=np.float32)
     o_dz = np.zeros(shape, dtype=np.float32)
@@ -243,12 +260,12 @@ def coverage_rays(G, S, sx, sy, cs, kscale, ztx_abs, tx_agl, rx_h, lam, f_mhz, n
     o_pe = np.zeros(shape, dtype=np.float32)
     o_veg = np.zeros(shape, dtype=np.float32)
     o_vis = np.zeros(shape, dtype=np.int8)
-    # interne Stützstellen: fein bis zur Nahfeldgrenze (auf grobe Bins ausgerichtet), dann die groben Bins
+    # internal samples: fine up to the near-field limit (aligned to coarse bins), then the coarse bins
     fs = cs2 * kscale
     c0 = 0
     nf = 0
     if rnear > 0.0 and step > fs * 1.01:
-        c0 = int(rnear / step)                     # grobe Bins 1..c0 liegen im Nahfeld
+        c0 = int(rnear / step)                     # coarse bins 1..c0 lie in the near field
         if c0 > n_bins:
             c0 = n_bins
         nf = int(((c0 + 0.5) * step) / fs)         # feine Punkte k*fs, k = 1..nf
@@ -280,6 +297,7 @@ def coverage_rays(G, S, sx, sy, cs, kscale, ztx_abs, tx_agl, rx_h, lam, f_mhz, n
         zg = np.empty(n_int + 1, dtype=np.float64)
         nd = np.empty(n_int + 1, dtype=np.float64)
         gsum = np.empty(n_int + 1, dtype=np.float64)
+        bld = np.zeros(n_int + 1, dtype=np.int8)
         d[0] = 0.0
         z[0] = ztx_abs
         zg[0] = 0.0
@@ -292,27 +310,33 @@ def coverage_rays(G, S, sx, sy, cs, kscale, ztx_abs, tx_agl, rx_h, lam, f_mhz, n
                 dc = q * fs
                 lo_d = dc - 0.5 * fs
                 if q == 1:
-                    lo_d = 0.6 * fs  # eigene feine Zelle der Antenne auslassen
+                    lo_d = 0.6 * fs  # skip the antenna's own fine cell
                 hi_d = dc + 0.5 * fs
+                dmx = dc
                 for k in range(3):
                     dd = lo_d + (k + 0.5) * (hi_d - lo_d) / 3.0
                     v = sample(S2, sx2 + ux2 * dd, sy2 + uy2 * dd)
                     if v > mx:
                         mx = v
+                        dmx = dd
                 g = sample(G2, sx2 + ux2 * dc, sy2 + uy2 * dc)
+                bld[q] = mask_at(B2, sx2 + ux2 * dmx, sy2 + uy2 * dmx)
             else:
                 i = c0 + (q - nf)
                 dc = i * step
                 lo_d = dc - 0.5 * step
                 if nf > 0 and lo_d < nf * fs + 0.5 * fs:
-                    lo_d = nf * fs + 0.5 * fs  # direkt an das Nahfeld anschließen
+                    lo_d = nf * fs + 0.5 * fs  # continue right after the near field
                 hi_d = dc + 0.5 * step
+                dmx = dc
                 for k in range(sub):
                     dd = lo_d + (k + 0.5) * (hi_d - lo_d) / sub
                     v = sample(S, sx + ux * dd, sy + uy * dd)
                     if v > mx:
                         mx = v
+                        dmx = dd
                 g = sample(G, sx + ux * dc, sy + uy * dc)
+                bld[q] = mask_at(B, sx + ux * dmx, sy + uy * dmx)
             if mx < g:
                 mx = g
             bulge = dc * dc / (2.0 * re)
@@ -332,7 +356,7 @@ def coverage_rays(G, S, sx, sy, cs, kscale, ztx_abs, tx_agl, rx_h, lam, f_mhz, n
                     o_vis[r, j] = 1
                 ldiff, v1, lcl, lpe, _r, lveg, _dv = endpoint_terms(
                     d, z, zt, zg, nd, gsum, q, ztx_abs, tx_agl, rx_h, lam, f_mhz,
-                    model, clut_mode, excl_m, cl_R, cl_typ, fl_R, fl_typ, two_ray, veg_g, veg_am)
+                    model, clut_mode, excl_m, cl_R, cl_typ, fl_R, fl_typ, two_ray, veg_g, veg_am, bld, bld_mode)
                 o_veg[r, j] = lveg
                 o_diff[r, j] = ldiff
                 o_v[r, j] = v1
@@ -401,15 +425,15 @@ def antenna_gain(az_deg, elev_deg, ant):
 
 
 def sector_loss(az_deg, ant):
-    """#23: freier Abstrahlsektor (z. B. Antenne an einer Hauswand). Außerhalb des Sektors zusätzlich sector_loss_db,
-    mit 15° weichem Übergang an den Rändern – keine Richtcharakteristik, innerhalb bleibt der Rundstrahler unverändert."""
+    """#23: open radiation sector (e.g. an antenna on a house wall). Outside the sector sector_loss_db is added,
+    with a soft 15° transition at the edges – not a directional pattern; inside, the omni stays unchanged."""
     if not ant.get("sector_on"):
         return 0.0
     width = min(359.0, max(10.0, float(ant.get("sector_width_deg", 180.0) or 180.0)))
     loss = max(0.0, float(ant.get("sector_loss_db", 25.0) or 0.0))
     daz = np.abs((np.asarray(az_deg, dtype=np.float64) - float(ant.get("sector_az_deg", 0.0) or 0.0) + 180.0) % 360.0 - 180.0)
     edge = 15.0
-    t = np.clip((daz - width / 2.0) / edge + 0.5, 0.0, 1.0)  # 0 innen, 1 außen
+    t = np.clip((daz - width / 2.0) / edge + 0.5, 0.0, 1.0)  # 0 inside, 1 outside
     return loss * t
 
 
@@ -478,4 +502,5 @@ def clutter_params(s):
 def warmup():
     G = np.zeros((20, 20), dtype=np.float32)
     coverage_rays(G, G, 10.0, 10.0, 10.0, 0.6, 10.0, 10.0, 1.5, 0.35, 869.0, 8, 5, 10.0, 2, 8.5e6,
-                  0, 1, 30.0, 0.0, 0, 10.0, 0, True, 0.17, 26.5, 0, 8, G, G, 10.0, 10.0, 5.0, 50.0)
+                  0, 1, 30.0, 0.0, 0, 10.0, 0, True, 0.17, 26.5, 0, 8, G, G, 10.0, 10.0, 5.0, 50.0,
+                  np.zeros((2, 2), dtype=np.uint8), np.zeros((2, 2), dtype=np.uint8), 0)

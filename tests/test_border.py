@@ -6,8 +6,8 @@ import numpy as np
 import rasterio
 from rasterio.transform import from_origin
 
-from app import terrain
-from app import coverage as cov
+from app.model import terrain
+from app.model import coverage as cov
 
 
 def test_wcs_4xx_marks_tile_empty(tmp_path, monkeypatch):
@@ -32,7 +32,7 @@ def test_holes_filled_from_fallback(project):
                        crs="EPSG:25832", transform=from_origin(330000, 5750000, 300, 300), nodata=-9999) as ds:
         ds.write(np.full((200, 200), 77, np.float32), 1)
     terrain._SOURCES.pop("local:tfb", None)
-    s = cov.merged_settings({**project, "settings": {**project["settings"], "fallback_source": "local:tfb"}})
+    s = {**cov.merged_settings(), "fallback_source": "local:tfb"}
     # Gitter, das zur Hälfte über den Rand des Test-DGM hinausragt
     x, y = terrain.lonlat_to_merc(6.99, 51.575)
     g = terrain.Grid.around(x - 10000, y, 4000, 40.0)

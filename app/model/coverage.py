@@ -14,8 +14,11 @@ from collections import OrderedDict
 import numpy as np
 from PIL import Image
 
+from . import buildings
 from . import propagation as prop
-from . import sysstat, terrain
+from . import settings as settings_store
+from . import terrain
+from ..site import sysstat
 from .terrain import CACHE_DIR, Grid, SourceError, fill_nans, get_source, load_terrain, lonlat_to_merc, merc_to_lonlat
 
 log = logging.getLogger("terrarf.coverage")
@@ -24,33 +27,9 @@ RE_EARTH = 6371000.0
 MAX_COMPOSITE_CELLS = int(os.environ.get("RFP_MAX_COMPOSITE_CELLS", "30000000"))
 COV_DIR = os.path.join(CACHE_DIR, "coverage")
 os.makedirs(COV_DIR, exist_ok=True)
-MODEL_VERSION = "9"  # 9: feines Nahfeld um die Station, Empfänger-Nahbereich höchstens halbe Strecke
+MODEL_VERSION = "10"  # 9: fine near field; 10: building footprints (#25)
 
-DEFAULT_SETTINGS = {
-    "ground_source": "nrw_dgm",
-    "surface_source": "nrw_dom",
-    "res_m": 10.0,
-    "rx_height_m": 1.5,
-    "rx_gain_dbi": 0.0,
-    "rx_cable_db": 0.0,
-    "rx_extra_loss_db": 0.0,
-    "noise_rise_db": 0.0,
-    "k_factor": 1.3333,
-    "min_margin_db": 10.0,
-    "max_profile_points": 500,
-    "max_rays": 7200,
-    "diffraction_model": "deygout",
-    "fallback_source": "copernicus",
-    "clutter_mode": "auto",
-    "clutter_floor": "none",
-    "clutter_exclude_m": 60.0,
-    "near_m": 150.0,       # #23: bis hierhin um die Station mit near_res_m abtasten (Gebäude direkt an der Antenne)
-    "near_res_m": 5.0,
-    "two_ray": True,
-    "veg_mode": "auto",
-    "veg_gamma_db_m": None,
-    "veg_max_db": None,
-}
+DEFAULT_SETTINGS = settings_store.DEFAULTS  # kept for older imports
 
 MARGIN_COLORS = [(215, 48, 39, 255), (252, 141, 89, 255), (254, 224, 139, 255), (145, 207, 96, 255), (26, 150, 65, 255)]
 
@@ -72,20 +51,10 @@ def _model(s):
     return 1 if s.get("diffraction_model") == "deygout" else 0
 
 
-def merged_settings(project):
-    s = dict(DEFAULT_SETTINGS)
-    s.update({k: v for k, v in (project.get("settings") or {}).items() if v is not None})
-    return s
-
-
-def hex_rgba(h, a=255):
-    h = (h or "#3388ff").lstrip("#")
-    if len(h) == 3:
-        h = "".join(c * 2 for c in h)
-    try:
-        return (int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16), a)
-    except ValueError:
-        return (51, 136, 255, a)
+def merged_settings(project=None):
+    """Settings for a computation. Global since 0.5 (#30): the project argument is accepted for
+    compatibility, its own ``settings`` are ignored."""
+    return settings_store.effective()
 
 
 # --------------------------------------------------------------------------
@@ -113,7 +82,7 @@ class StationResult:
 _station_cache: "OrderedDict[str, StationResult]" = OrderedDict()
 _station_cache_lock = threading.Lock()
 _STATION_CACHE_MAX = int(os.environ.get("RFP_STATION_CACHE", "16"))
-# Obergrenze in Bytes: große Radien erzeugen Ergebnisse von mehreren hundert MB pro Station
+# upper limit in bytes: large radii produce results of several hundred MB per station
 _STATION_CACHE_BYTES = float(os.environ.get("RFP_STATION_CACHE_MB", "1200")) * 1e6
 _compute_lock = threading.Lock()
 
@@ -124,14 +93,14 @@ def _station_key(st, s, cs):
     rs = {k: s.get(k) for k in ("ground_source", "surface_source", "fallback_source", "rx_height_m", "rx_gain_dbi", "rx_cable_db",
                             "rx_extra_loss_db", "k_factor", "max_profile_points", "max_rays", "diffraction_model",
                             "clutter_mode", "clutter_floor", "clutter_exclude_m", "two_ray", "veg_mode", "near_m", "near_res_m",
-                            "veg_gamma_db_m", "veg_max_db")}
-    blob = json.dumps([MODEL_VERSION, relevant, rs, round(cs, 6)], sort_keys=True)
+                            "veg_gamma_db_m", "veg_max_db", "building_mode")}
+    blob = json.dumps([MODEL_VERSION, relevant, rs, round(cs, 6), buildings.version()], sort_keys=True)
     return hashlib.sha1(blob.encode()).hexdigest()[:24]
 
 
 def terrain_pair(s, grid):
-    """Gelände und Oberfläche für das Rechengitter. Lücken der Hauptquelle (z. B. außerhalb NRW) werden mit der
-    Ersatzquelle (Standard Copernicus GLO-30, 30 m) gefüllt – im Grenzgebiet werden also beide kombiniert."""
+    """Ground and surface for the computation grid. Holes of the main source (e.g. outside NRW) are filled from the
+    fallback source (default Copernicus GLO-30, 30 m), so near the border both are combined."""
     G = load_terrain(s["ground_source"], grid, "ground")
     surf_id = s.get("surface_source") or "none"
     S = load_terrain(surf_id, grid, "surface") if surf_id != "none" else None
@@ -148,7 +117,7 @@ def terrain_pair(s, grid):
         frac = float(np.isnan(G).mean())
         try:
             C = load_terrain(fb_id, grid, "surface")
-        except Exception as e:  # noqa: BLE001 – Netz/Proxy/Datei: dann eben ohne Ersatz
+        except Exception as e:  # noqa: BLE001 – network/proxy/file: carry on without fallback
             C = None
             warn.append(f"Ersatzquelle nicht verfügbar ({e}) – Lücken mit Nachbarwerten gefüllt")
         if C is not None:
@@ -191,30 +160,32 @@ def drop_station_cache(st, s, cs):
 
 
 def near_grid(s, x, y, kscale, cs, r_true):
-    """Feines Höhenraster um die Station (#23). Rückgabe für den Kernel; rnear = 0 heißt aus
-    (Rechenraster ohnehin fein genug, Nahbereich 0 oder Daten nicht ladbar)."""
+    """Fine elevation grid around the station (#23), returned in the form the kernel expects. rnear = 0 means off
+    (computation grid already fine enough, near field 0, or the data could not be loaded)."""
     near_res = float(s.get("near_res_m") or 5.0)
     rnear = min(float(s.get("near_m") or 0.0), r_true)
     dummy = np.zeros((2, 2), dtype=np.float32)
+    no_mask = np.zeros((2, 2), dtype=np.uint8)
     if rnear <= 0.0 or cs * kscale <= near_res * 1.01:
-        return dummy, dummy, 0.0, 0.0, cs, 0.0
+        return dummy, dummy, 0.0, 0.0, cs, 0.0, no_mask
     cs2 = near_res / kscale
     g2 = Grid.around(x, y, rnear / kscale + 3 * cs2, cs2)
     try:
         G2, S2, _w = terrain_pair(s, g2)
-    except Exception as e:  # noqa: BLE001 – ohne Nahfeld weiterrechnen
+    except Exception as e:  # noqa: BLE001 – carry on without near field
         log.warning("Nahfeld nicht geladen: %s", e)
-        return dummy, dummy, 0.0, 0.0, cs, 0.0
+        return dummy, dummy, 0.0, 0.0, cs, 0.0, no_mask
     if S2 is None:
         S2 = G2
     if np.isnan(G2).any() or np.isnan(S2).any():
-        return dummy, dummy, 0.0, 0.0, cs, 0.0
+        return dummy, dummy, 0.0, 0.0, cs, 0.0, no_mask
     S2 = np.maximum(S2, G2).astype(np.float32)
-    return G2.astype(np.float32), S2, (x - g2.x0) / cs2 - 0.5, (g2.y1 - y) / cs2 - 0.5, cs2, rnear
+    return (G2.astype(np.float32), S2, (x - g2.x0) / cs2 - 0.5, (g2.y1 - y) / cs2 - 0.5, cs2, rnear,
+            buildings.mask(g2))
 
 
 def compute_station(st, s, cs, progress=None):
-    """progress(frac, stage) wird während der Rechnung aufgerufen (0…1)."""
+    """progress(frac, stage) is called while computing (frac 0…1)."""
     progress = progress or (lambda f, stage: None)
     key = _station_key(st, s, cs)
     with _station_cache_lock:
@@ -240,7 +211,9 @@ def compute_station(st, s, cs, progress=None):
     grid = Grid.around(x, y, r_true / kscale + 3 * cs, cs)
     progress(0.02, "Höhendaten")
     G, S, warn = terrain_pair(s, grid)
-    G2, S2, fx2, fy2, cs2, rnear = near_grid(s, x, y, kscale, cs, r_true)
+    B = buildings.mask(grid)
+    G2, S2, fx2, fy2, cs2, rnear, B2 = near_grid(s, x, y, kscale, cs, r_true)
+    building_mode = 1 if s.get("building_mode") == "diffraction" else 0
     progress(0.15, "Strahlen")
     t_terrain = time.time() - t0
 
@@ -265,11 +238,11 @@ def compute_station(st, s, cs, progress=None):
     parts = []
     nblk = 20 if n_rays >= 2000 else 5
     edges = np.linspace(0, n_rays, nblk + 1).astype(int)
-    for bi_ in range(nblk):  # in Blöcken, damit der Fortschritt sichtbar wird
+    for bi_ in range(nblk):  # in blocks so that the progress becomes visible
         parts.append(prop.coverage_rays(
             G, S, fx, fy, cs, kscale, ztx, ztx - g0, float(s["rx_height_m"]), lam, f_mhz, n_rays, n_bins, step, sub,
             re, _model(s), cm, excl, clR, clT, flR, flT, bool(s.get("two_ray", True)), vg, vam,
-            int(edges[bi_]), int(edges[bi_ + 1]), G2, S2, fx2, fy2, cs2, rnear))
+            int(edges[bi_]), int(edges[bi_ + 1]), G2, S2, fx2, fy2, cs2, rnear, B, B2, building_mode))
         progress(0.15 + 0.75 * (bi_ + 1) / nblk, "Strahlen")
     loss, vmain, dz, lclut, lpe, lveg, vis_rays = (np.concatenate([p_[i] for p_ in parts]) for i in range(7))
     progress(0.92, "Raster")
@@ -359,7 +332,7 @@ def run_coverage(project, station_ids=None, max_dim=None, force=None):
             drop_station_cache(st, s, cs)
     for st in stations:
         with sysstat.activity(f"Abdeckung {st.get('name') or st['id']}", station=st["id"], progress=0.0, stage="wartet") as h:
-            with _compute_lock:  # eine schwere Rechnung zur Zeit
+            with _compute_lock:  # one heavy computation at a time
                 def prog(f, stage, h=h):
                     h["progress"], h["stage"] = f, stage
                 r, cached = compute_station(st, s, cs, progress=prog)
@@ -407,11 +380,11 @@ def _down_grid(g, f):
 
 _png_cache: "OrderedDict[str, bytes]" = OrderedDict()
 _png_lock = threading.Lock()
-_png_gen_lock = threading.Lock()  # immer nur ein Bild gleichzeitig erzeugen (Speicher)
+_png_gen_lock = threading.Lock()  # render one image at a time (memory)
 
 
 def station_png(key, f):
-    """Data image of one station: R = Pegel (dBm + 200, 0 = außerhalb), G = Sichtklasse | Dachsicht << 2."""
+    """Data image of one station: R = level (dBm + 200, 0 = outside), G = sight class | roof visible << 2."""
     ck = f"{key}@{f}"
     with _png_lock:
         if ck in _png_cache:
@@ -422,7 +395,7 @@ def station_png(key, f):
         with open(disk, "rb") as fh:
             return fh.read()
     with _png_gen_lock:
-        if os.path.exists(disk):  # inzwischen von einer parallelen Anfrage erzeugt
+        if os.path.exists(disk):  # created meanwhile by a parallel request
             with open(disk, "rb") as fh:
                 return fh.read()
         data = _make_png(key, f)
@@ -481,15 +454,18 @@ def load_station(key):
     return res
 
 
-def profile(project, station_id, lat, lon, rx_height=None, rx_gain=None, rx_station_id=None, rx_cable=None):
-    """Geländeprofil und Linkbudget Station -> Punkt.
-    rx_station_id: Gegenstelle ist eine Station des Projekts -> deren Höhe, Antenne (Richtdiagramm zur
-    Sendestation) und Kabelverlust statt der Client-Werte (Richtfunk/Repeater-Strecken)."""
+def profile(project, station_id, lat, lon, rx_height=None, rx_gain=None, rx_station_id=None, rx_cable=None,
+            rx_extra_loss=None):
+    """Terrain profile and link budget station -> point.
+    rx_station_id: the far end is a station of the project -> its height, antenna (pattern towards the
+    transmitter) and cable loss replace the client values (point-to-point and repeater links)."""
     s = merged_settings(project)
     if rx_gain not in (None, ""):
         s = {**s, "rx_gain_dbi": float(rx_gain)}
     if rx_cable not in (None, ""):
         s = {**s, "rx_cable_db": float(rx_cable)}
+    if rx_extra_loss not in (None, ""):
+        s = {**s, "rx_extra_loss_db": float(rx_extra_loss)}
     st = next((x for x in project.get("stations") or [] if x["id"] == station_id), None)
     if st is None:
         raise KeyError("Station nicht gefunden")
@@ -518,6 +494,7 @@ def profile(project, station_id, lat, lon, rx_height=None, rx_gain=None, rx_stat
     iy1 = int(math.ceil(-(min(y0, y1) - pad) / cs))
     grid = Grid(cs, ix0, iy0, ix1 - ix0, iy1 - iy0)
     G, S, warn = terrain_pair(s, grid)
+    B = buildings.mask(grid)
     res_true = cs * kscale
     n = int(min(6000, max(50, math.ceil(D / (res_true / 2)))))
     if float(s.get("near_m") or 0) > 0 and res_true > float(s.get("near_res_m") or 5.0) * 1.01:
@@ -527,9 +504,10 @@ def profile(project, station_id, lat, lon, rx_height=None, rx_gain=None, rx_stat
     fys = (grid.y1 - (y0 + (y1 - y0) * t)) / cs - 0.5
     ground = np.array([prop.sample(G, a, b) for a, b in zip(fxs, fys)])
     surf = np.array([prop.sample(S, a, b) for a, b in zip(fxs, fys)])
+    bld = np.array([prop.mask_at(B, a, b) for a, b in zip(fxs, fys)], dtype=np.int8)
     d = t * D
-    # Nahbereich der Station fein abtasten (#23), wie in der Flächenrechnung
-    G2, S2, fx2, fy2, cs2, rnear = near_grid(s, x0, y0, math.cos(math.radians(lat0)), cs, D)
+    # sample the station's near field finely (#23), as in the area computation
+    G2, S2, fx2, fy2, cs2, rnear, B2 = near_grid(s, x0, y0, math.cos(math.radians(lat0)), cs, D)
     if rnear > 0:
         k0 = math.cos(math.radians(lat0))
         for i in np.nonzero(d < rnear)[0]:
@@ -537,8 +515,9 @@ def profile(project, station_id, lat, lon, rx_height=None, rx_gain=None, rx_stat
             ux, uy = (x1 - x0) / (D / kscale), (y1 - y0) / (D / kscale)
             ground[i] = prop.sample(G2, fx2 + ux * dd, fy2 - uy * dd)
             surf[i] = prop.sample(S2, fx2 + ux * dd, fy2 - uy * dd)
-    # eigene Zelle der Antenne gilt als frei (wie in der Flächenrechnung) – sonst entscheidet die Interpolation
-    # an der Hauswand über 20 dB mehr oder weniger
+            bld[i] = prop.mask_at(B2, fx2 + ux * dd, fy2 - uy * dd)
+    # the antenna's own cell counts as free (as in the area computation) – otherwise interpolation at the house
+    # wall decides about 20 dB more or less
     own = 0.6 * (float(s.get("near_res_m") or 5.0) if rnear > 0 else res_true)
     surf = np.where(d < own, ground, surf)
     surf = np.maximum(surf, ground)
@@ -548,7 +527,7 @@ def profile(project, station_id, lat, lon, rx_height=None, rx_gain=None, rx_stat
     ztx = base + float(st.get("height_m", 10))
     rxh = float(s["rx_height_m"] if rx_height is None else rx_height)
     if rx_st is not None and rx_st.get("height_ref") == "surface":
-        rxh += float(surf[-1] - ground[-1])  # Höhe über Dach -> über Grund umrechnen
+        rxh += float(surf[-1] - ground[-1])  # height above roof -> height above ground
     zrx = ground[-1] + rxh
     # for the loss computation: earth curvature relative to the tx tangent
     curv = d * d / (2 * re)
@@ -564,13 +543,14 @@ def profile(project, station_id, lat, lon, rx_height=None, rx_gain=None, rx_stat
     vg, vam = prop.veg_params(s, f_mhz)
     loss_diff, v1, lclut, lpe, R_cl, lveg, dveg = prop.endpoint_terms(
         d.astype(np.float64), z, z.copy(), zg, nd, gsum, n, ztx, ztx - ground[0], rxh, lam, f_mhz, _model(s),
-        cm, excl, clR, clT, flR, flT, bool(s.get("two_ray", True)), vg, vam)
+        cm, excl, clR, clT, flR, flT, bool(s.get("two_ray", True)), vg, vam, bld,
+        1 if s.get("building_mode") == "diffraction" else 0)
     dz = (zrx - curv[-1]) - ztx
     d3 = math.hypot(D, dz)
     elev = math.degrees(math.atan2(dz, D))
     az = (math.degrees(math.atan2(x1 - x0, y1 - y0)) + 360) % 360
     gtx = float(prop.antenna_gain(np.array([az]), np.array([elev]), st.get("antenna") or {})[0])
-    if rx_st is not None:  # Gewinn der Gegenstelle in Richtung Sendestation (Rückrichtung, Elevation umgekehrt)
+    if rx_st is not None:  # gain of the far end towards the transmitter (reverse direction, elevation inverted)
         grx = float(prop.antenna_gain(np.array([(az + 180.0) % 360.0]), np.array([-elev]), rx_st.get("antenna") or {})[0])
         s = {**s, "rx_gain_dbi": grx}
     fspl = float(prop.fspl_db(np.array([d3]), f_mhz)[0])
@@ -597,6 +577,8 @@ def profile(project, station_id, lat, lon, rx_height=None, rx_gain=None, rx_stat
         "d": np.round(d[idx], 1).tolist(),
         "ground": np.round((ground + bulge)[idx], 2).tolist(),
         "surface": np.round((surf + bulge)[idx], 2).tolist(),
+        # 1 where the surface at a sample is a known building footprint (drawn grey, #25)
+        "building": [int(v) for v in np.maximum.reduceat(np.where(surf - ground > 1.0, bld, 0), idx)] if len(idx) else [],
         "los": np.round(los_line[idx], 2).tolist(),
         "fresnel": np.round(fr[idx], 2).tolist(),
         "tx_alt": round(ztx, 1), "rx_alt": round(zrx, 1),
@@ -632,133 +614,12 @@ def point_elevation(project, lat, lon):
     return {"ground_m": round(float(prop.sample(G, fx, fy)), 1), "surface_m": round(float(prop.sample(S, fx, fy)), 1)}
 
 
+def clear_memory_caches():
+    """Forget computed stations and rendered PNGs held in RAM (after the disk cache was cleared)."""
+    with _station_cache_lock:
+        _station_cache.clear()
+    with _png_lock:
+        _png_cache.clear()
+
+
 __all__ = ["run_coverage", "station_png", "profile", "point_elevation", "DEFAULT_SETTINGS"]
-
-
-SNR_SAT_DB = 10.0  # LoRa-SNR-Meldungen sind nach oben begrenzt; darüber nicht für die Statistik nutzen
-
-
-def calibrate(project, station_id, points, rx_height=10.0, rx_gain=3.0, rx_cable=1.0, overrides=None):
-    """Gemessenes SNR (Station -> Partner) gegen das Modell. points: [{pk,name,lat,lon,snr,snr_n}].
-    Werte der Gegenstelle, in dieser Reihenfolge: als Station im Projekt eingetragen (Höhe, Antenne mit
-    Richtdiagramm, Kabel) -> eigene Angaben je Repeater -> die allgemeinen Standardwerte."""
-    overrides = overrides or {}
-    s = dict(merged_settings(project))
-    st = next((x for x in project.get("stations") or [] if x["id"] == station_id), None)
-    if st is None:
-        raise KeyError("Station nicht gefunden")
-    by_pk = {x.get("corescope_pk"): x for x in project.get("stations") or [] if x.get("corescope_pk")}
-    noise = -174.0 + 10.0 * math.log10(float(st.get("bw_khz", 125.0)) * 1000.0) + float(st.get("nf_db", 6.0)) \
-        + float(s.get("noise_rise_db", 0.0))
-    proj = {**project, "settings": {**s, "rx_extra_loss_db": 0.0}}
-    rows = []
-    with sysstat.activity(f"Abgleich ({len(points)} Strecken)"):
-        _calibrate_rows(proj, station_id, points, by_pk, overrides, rx_height, rx_gain, rx_cable, noise, rows)
-    return _calibrate_result(st, noise, rx_height, rx_gain, rx_cable, rows)
-
-
-def _calibrate_rows(proj, station_id, points, by_pk, overrides, rx_height, rx_gain, rx_cable, noise, rows):
-    for p in points:
-        r = {"pk": p.get("pk"), "name": p.get("name"), "lat": p["lat"], "lon": p["lon"],
-             "measured_snr": float(p["snr"]), "n": int(p.get("snr_n") or 0)}
-        ps, ov = by_pk.get(p.get("pk")), overrides.get(p.get("pk")) or {}
-        try:
-            if ps is not None and ps["id"] != station_id:
-                r.update(rx_src="station", rx_station_id=ps["id"])
-                pr = profile(proj, station_id, 0, 0, rx_station_id=ps["id"])
-            else:
-                h, g, c = ov.get("height_m", rx_height), ov.get("gain_dbi", rx_gain), ov.get("cable_db", rx_cable)
-                r.update(rx_src="angabe" if ov else "standard")
-                pr = profile(proj, station_id, float(p["lat"]), float(p["lon"]), rx_height=float(h), rx_gain=float(g),
-                             rx_cable=float(c))
-        except (ValueError, KeyError, terrain.SourceError) as e:
-            r["error"] = str(e)
-            rows.append(r)
-            continue
-        b = pr["budget"]
-        pred = b["prx_dbm"] - noise
-        r.update(distance_km=round(pr["distance_m"] / 1000, 2), los_class=pr["los_class"], prx_dbm=b["prx_dbm"],
-                 rx_height_m=b["rx_height_m"], rx_gain_dbi=b["rx_gain_dbi"], rx_cable_db=b["rx_cable_db"],
-                 predicted_snr=round(pred, 1), delta_db=round(r["measured_snr"] - pred, 1),
-                 saturated=r["measured_snr"] >= SNR_SAT_DB or pred >= SNR_SAT_DB)
-        rows.append(r)
-
-
-def _calibrate_result(st, noise, rx_height, rx_gain, rx_cable, rows):
-    use = [r for r in rows if "delta_db" in r and not r["saturated"]]
-    stats = None
-    if use:
-        d = np.array([r["delta_db"] for r in use])
-        stats = {"n": len(use), "mean_db": round(float(d.mean()), 1), "median_db": round(float(np.median(d)), 1),
-                 "std_db": round(float(d.std()), 1), "rmse_db": round(float(np.sqrt((d ** 2).mean())), 1)}
-    return {"station": st.get("name"), "noise_dbm": round(noise, 1), "rx_height_m": rx_height, "rx_gain_dbi": rx_gain,
-            "rx_cable_db": rx_cable, "sat_db": SNR_SAT_DB, "rows": rows, "stats": stats}
-
-
-def compare_measurements(project, station_id, rows, rx_gain=None, series=None):
-    """Messungen (snr_down am Messort, Repeater -> Handy) gegen die berechnete Abdeckung der Station.
-    Empfänger je Messung: Höhe aus der Messung, sonst aus der Messreihe, sonst aus dem Projekt; Gewinn und Kabel aus
-    der Messreihe, sonst aus dem Projekt (rx_gain überschreibt den Projektwert). Für jede vorkommende Empfängerhöhe
-    wird die Abdeckung einmal gerechnet (Cache)."""
-    s0 = merged_settings(project)
-    st = next((x for x in project.get("stations") or [] if x["id"] == station_id), None)
-    if st is None:
-        raise KeyError("Station nicht gefunden")
-    series = series or {}
-    cs = project_cs(project, s0)
-    noise = -174.0 + 10.0 * math.log10(float(st.get("bw_khz", 125.0)) * 1000.0) + float(st.get("nf_db", 6.0)) \
-        + float(s0.get("noise_rise_db", 0.0))
-    base_gain = float(s0["rx_gain_dbi"]) if rx_gain in (None, "") else float(rx_gain)
-    base_h, base_cable = float(s0["rx_height_m"]), float(s0["rx_cable_db"])
-    rasters = {}
-    x0, y0 = lonlat_to_merc(float(st["lon"]), float(st["lat"]))
-    out = []
-    for m in rows:
-        if m.get("snr_down") is None:
-            continue
-        se = series.get(m.get("series_id")) or {}
-        h = m.get("rx_h") if m.get("rx_h") is not None else se.get("rx_h")
-        h = round(float(h if h is not None else base_h) * 2) / 2
-        gain = float(se["rx_gain_dbi"]) if se.get("rx_gain_dbi") is not None else base_gain
-        cable = float(se["rx_cable_db"]) if se.get("rx_cable_db") is not None else base_cable
-        if h not in rasters:
-            rasters[h] = compute_station(st, {**s0, "rx_height_m": h}, cs)[0]
-        r = rasters[h]
-        g = r.grid
-        x, y = lonlat_to_merc(m["lon"], m["lat"])
-        ix, iy = int((x - g.x0) / g.cs), int((g.y1 - y) / g.cs)
-        pred = prx = None
-        if 0 <= ix < g.nx and 0 <= iy < g.ny:
-            v = float(r.prx[iy, ix])
-            if not math.isnan(v):
-                # das Raster enthält Gewinn und Kabel des Projekts -> auf die Messreihe umrechnen
-                prx = round(v + (gain - float(s0["rx_gain_dbi"])) - (cable - base_cable), 1)
-                pred = round(prx - noise, 1)
-        km = math.hypot(x - x0, y - y0) * math.cos(math.radians(m["lat"])) / 1000
-        out.append({"id": m.get("id"), "lat": m["lat"], "lon": m["lon"], "kind": m.get("kind"), "src": m.get("src"),
-                    "series_id": m.get("series_id"), "rx_height_m": h, "rx_gain_dbi": gain, "rx_cable_db": cable,
-                    "measured_snr": m["snr_down"], "predicted_snr": pred, "distance_km": round(km, 2),
-                    "delta_db": round(m["snr_down"] - pred, 1) if pred is not None else None,
-                    # SNR-Meldungen sind nach oben begrenzt: sagt das Modell mehr als das Maximum voraus, ist der Vergleich wertlos
-                    "saturated": pred is not None and (m["snr_down"] >= SNR_SAT_DB or pred >= SNR_SAT_DB),
-                    "outside": pred is None, "measured_rssi": m.get("rssi_down"), "predicted_rssi": prx,
-                    "delta_rssi_db": round(m["rssi_down"] - prx, 1) if prx is not None and m.get("rssi_down") is not None else None})
-
-    def st_(vals):
-        if not vals:
-            return None
-        d = np.array(vals)
-        return {"n": len(vals), "mean_db": round(float(d.mean()), 1), "median_db": round(float(np.median(d)), 1),
-                "std_db": round(float(d.std()), 1), "rmse_db": round(float(np.sqrt((d ** 2).mean())), 1)}
-    stats = st_([o["delta_db"] for o in out if o["delta_db"] is not None and not o["saturated"]])
-    # RSSI ist nicht begrenzt und deshalb auch nahe am Repeater brauchbar
-    rssi_stats = st_([o["delta_rssi_db"] for o in out if o["delta_rssi_db"] is not None])
-    per_series = {}
-    for o in out:
-        if o["delta_db"] is not None and not o["saturated"]:
-            per_series.setdefault(o["series_id"], []).append(o["delta_db"])
-    return {"station": st.get("name"), "noise_dbm": round(noise, 1), "rx_height_m": base_h, "rx_gain_dbi": base_gain,
-            "rx_heights": sorted(rasters), "rows": out, "stats": stats, "rssi_stats": rssi_stats,
-            "series_stats": {str(k): st_(v) for k, v in per_series.items()},
-            "saturated": sum(1 for o in out if o["saturated"]),
-            "outside": sum(1 for o in out if o["outside"]), "sat_db": SNR_SAT_DB}

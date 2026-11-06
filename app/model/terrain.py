@@ -31,9 +31,7 @@ from rasterio.warp import Resampling, reproject, transform_bounds
 
 log = logging.getLogger("terrarf.terrain")
 
-DATA_DIR = os.environ.get("RFP_DATA", "/data")
-CACHE_DIR = os.path.join(DATA_DIR, "cache")
-DEM_DIR = os.path.join(DATA_DIR, "dem")
+from ..paths import CACHE_DIR, DATA_DIR, DEM_DIR  # noqa: F401  (re-exported for older imports)
 WEBM = CRS.from_epsg(3857)
 R_EARTH = 6378137.0
 
@@ -137,8 +135,8 @@ class _NeedNative(Exception):
 
 
 class OutsideCoverage(SourceError):
-    """Der Dienst hat die Anfrage mit einem Client-Fehler (4xx) abgelehnt – typisch für Bereiche außerhalb
-    seines Gebiets (z. B. NRW-WCS jenseits der Landesgrenze)."""
+    """The service rejected the request with a client error (4xx) – typical for areas outside its coverage
+    (e.g. the NRW WCS beyond the state border)."""
 
 
 class BaseSource:
@@ -178,7 +176,7 @@ class WCSSource(BaseSource):
 
     def __init__(self, sid, label, url, coverage, epsg, native_res, kind="ground", chunk_px=2000, bbox=None):
         self.id = sid
-        self.bbox = bbox  # (x0, y0, x1, y1) im Quell-KBS: außerhalb gar nicht erst anfragen
+        self.bbox = bbox  # (x0, y0, x1, y1) in the source CRS: do not even ask outside of it
         self.failed_tiles = 0
         self.label = label
         self.url = url
@@ -358,7 +356,7 @@ class WCSSource(BaseSource):
                 return None
             os.makedirs(self.store_dir, exist_ok=True)
             if self.bbox and (x0 + TILE_M <= self.bbox[0] or x0 >= self.bbox[2] or y0 + TILE_M <= self.bbox[1] or y0 >= self.bbox[3]):
-                open(p + ".empty", "w").close()  # sicher außerhalb des Dienstgebiets
+                open(p + ".empty", "w").close()  # certainly outside the service area
                 return None
             own = client is None
             client = client or httpx.Client(timeout=HTTP_TIMEOUT, follow_redirects=True)
@@ -403,7 +401,7 @@ class WCSSource(BaseSource):
                 try:
                     self.ensure_tile(*t)
                     return None
-                except SourceError as e:  # einzelne Kachel: weiterrechnen, Lücke füllt die Ersatzquelle
+                except SourceError as e:  # single tile: carry on, the fallback source fills the hole
                     return str(e)
                 except Exception as e:  # noqa: BLE001 – Netzfehler (Proxy, DNS, Timeout) genauso behandeln
                     return f"{type(e).__name__}: {e}"
@@ -588,7 +586,7 @@ def _tile_lock(path):
         return lk
 
 
-# NRW umschließendes Rechteck in EPSG:25832 (großzügig); exakte Grenze liefert der Dienst selbst
+# rectangle around NRW in EPSG:25832 (generous); the service itself knows the exact border
 NRW_BBOX_25832 = (270000.0, 5550000.0, 540000.0, 5840000.0)
 
 

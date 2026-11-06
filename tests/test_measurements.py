@@ -2,7 +2,7 @@
 import pytest
 from fastapi.testclient import TestClient
 
-from app import measurements
+from app.store import measurements
 from app.main import app
 
 KEY = "testkey_1234567890abcdef"
