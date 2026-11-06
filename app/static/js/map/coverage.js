@@ -7,7 +7,7 @@
  */
 import { t } from "../core/i18n.js";
 import { $, escapeHtml, fmt, hexToRgb } from "../core/util.js";
-import { state, on, emit, activeStations, stationById, canEditAny, settings } from "../core/state.js";
+import { state, on, emit, activeStations, stationById, isMember, settings } from "../core/state.js";
 import { apiPatient, projectRef } from "../core/api.js";
 import { status, isPhone } from "../core/ui.js";
 import { map, registerLayerSection, refreshLayersPanel } from "./map.js";
@@ -189,7 +189,7 @@ function requestBody(ids) {
 export async function compute({ only = null, force = [] } = {}) {
   const active = activeStations();
   if (!active.length) { clearCoverage(); status(t("No active station.")); return; }
-  if (!canEditAny() && !state.project.id) return;
+  if (!isMember() && !state.project.id) return;
   if (computing) { pendingRun = pendingRun || { only, force }; return; }
   computing = true; emit("computing", true);
   const queue = only ? active.filter((s) => only.includes(s.id)) : active;
@@ -219,6 +219,8 @@ export async function compute({ only = null, force = [] } = {}) {
     status(t("Error: {msg}", { msg: e.message }), "err");
   } finally {
     queue.forEach((st) => { if (busy[st.id]) setBusy(st.id, null); });
+    // #36: never leave a ring behind (station deleted or moved while it was computing)
+    for (const id of Object.keys(busyMarkers)) if (!busy[id]) { map.removeLayer(busyMarkers[id]); delete busyMarkers[id]; }
     computing = false; emit("computing", false);
     if (pendingRun) { const p = pendingRun; pendingRun = null; compute(p); }
   }

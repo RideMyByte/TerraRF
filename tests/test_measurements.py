@@ -46,7 +46,7 @@ def test_meshmapper_ingest_and_query(admin):
 
 def test_manual_csv_plan_and_compare(admin, project):
     for snr in (-2, -1, 0):  # drei stimmige Messungen in einer Zelle -> „genug“
-        assert admin.post("/api/measurements", json={"lat": 51.5651, "lon": 7.0451, "rep": REP, "snr": snr, "rssi": -100 + snr, "ts": 1762000000 + snr}).status_code == 200
+        assert admin.post("/api/measurements", json={"lat": 51.5651, "lon": 7.0451, "rep": REP, "snr": snr, "rssi": -100 + snr, "ts": 1762000000 + snr, "rx_h": 1.5}).status_code == 200
     csv_text = "lat;lon;rep;snr;note\n51,560;7,050;" + REP + ";-12;Feld\n51.59;7.01;" + REP + ";4;\nkaputt;;;;\n"
     r = admin.post("/api/measurements", json={"csv": csv_text}).json()
     assert r["stored"] == 2 and len(r["errors"]) == 1
@@ -63,7 +63,7 @@ def test_manual_csv_plan_and_compare(admin, project):
     assert all(x["saturated"] == (x["measured_snr"] >= res["sat_db"] or x["predicted_snr"] >= res["sat_db"]) for x in rows)
     assert all(abs(x["measured_snr"] - x["predicted_snr"] - x["delta_db"]) < 0.11 for x in rows)
     assert res["rssi_stats"] and res["rssi_stats"]["n"] >= 1
-    assert admin.post("/api/measurements", json={"lat": 1, "lon": 2, "rep": "xyz", "snr": 1}).status_code == 400
+    assert admin.post("/api/measurements", json={"lat": 1, "lon": 2, "rep": "xyz", "snr": 1, "rx_h": 1.5}).status_code == 400
 
 
 def test_series_settings_change_model_and_pdf(admin, project):

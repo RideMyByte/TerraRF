@@ -22,6 +22,7 @@ import math
 import numpy as np
 
 from ..model import coverage as cov
+from ..model import propagation as prop
 from ..model import terrain
 from ..model.terrain import lonlat_to_merc
 from ..site import sysstat
@@ -31,10 +32,10 @@ SNR_SAT_DB = 10.0
 
 
 def noise_floor_dbm(station, settings):
-    """Thermal noise in the station's LoRa bandwidth plus receiver noise figure and local noise rise."""
-    bandwidth_hz = float(station.get("bw_khz", 125.0)) * 1000.0
-    return -174.0 + 10.0 * math.log10(bandwidth_hz) + float(station.get("nf_db", 6.0)) \
-        + float(settings.get("noise_rise_db", 0.0))
+    """Noise at a receiver with the station's radio settings (see ``propagation.noise_floor_dbm``).
+    The station's own measured noise floor (#37) is used only where the station itself receives."""
+    return prop.noise_floor_dbm({k: v for k, v in station.items() if k != "noise_floor_dbm"},
+                                settings.get("noise_rise_db", 0.0))
 
 
 def delta_stats(deltas):
@@ -97,6 +98,9 @@ def _calibrate_one(project, station_id, partner, stations_by_pk, overrides, rx_h
         row["error"] = str(e)
         return row
     budget = prof["budget"]
+    if as_station is not None and as_station.get("noise_floor_dbm") not in (None, ""):
+        noise = float(as_station["noise_floor_dbm"])     # #37: the partner station receives – its measured noise
+        row["noise_dbm"] = noise
     predicted = budget["prx_dbm"] - noise
     row.update(distance_km=round(prof["distance_m"] / 1000, 2), los_class=prof["los_class"], prx_dbm=budget["prx_dbm"],
                rx_height_m=budget["rx_height_m"], rx_gain_dbi=budget["rx_gain_dbi"], rx_cable_db=budget["rx_cable_db"],
@@ -216,7 +220,13 @@ def suggest_settings(results):
         out["advice"] = "fits"
     elif spread > 2 * abs(median):
         out["advice"] = "scatter"
-    else:
+    elif current - median >= 0:
         out["advice"] = "offset"
-        out["suggested_extra_loss_db"] = round(max(0.0, current - median), 1)
+        out["suggested_extra_loss_db"] = round(current - median, 1)
+    else:
+        # #40: the model is more pessimistic than a receiver loss of 0 dB can undo – diffraction, obstacle
+        # and clutter settings are where the extra loss comes from. Lowering an existing extra loss still helps.
+        out["advice"] = "pessimistic"
+        if current > 0:
+            out["suggested_extra_loss_db"] = 0.0
     return out

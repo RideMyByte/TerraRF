@@ -1,5 +1,5 @@
 /** Talking to the server. */
-import { state, canEditAny } from "./state.js";
+import { state, isMember } from "./state.js";
 
 export class ApiError extends Error {
   constructor(message, status) { super(message); this.status = status; }
@@ -34,7 +34,7 @@ export async function apiPatient(path, options, onWait) {
 
 /** Members send the project as it is in the editor; visitors reference the saved public project. */
 export function projectRef() {
-  return canEditAny() ? { project: state.project } : { project_id: state.project.id };
+  return isMember() ? { project: state.project } : { project_id: state.project.id };
 }
 
 /** POST that returns a file (PDF). */

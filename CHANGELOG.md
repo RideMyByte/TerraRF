@@ -2,6 +2,31 @@
 
 ## [Unreleased]
 
+## 0.5.1
+### Neu
+- **Messpunkt zeigt das Profil:** Ein Messpunkt öffnet sofort das Profil vom stärksten Repeater zum Messort, mit dem
+  Empfänger der Messreihe; ⛰ neben jedem Repeater zeigt dessen Strecke. Repeater ohne Station werden mit angenommenen
+  Werten gerechnet (≈ im Titel).
+- Messpunkt-Details: Höhe über NHN und Höhe der Objekte am Messort (#35).
+- **Eigene Projekte für den Benutzer** (#32): Er legt eigene Projekte an (privat oder öffentlich) und ändert nur diese;
+  öffentliche Projekte anderer kann er ansehen und als eigene Kopie speichern. Der Admin sieht und ändert alles.
+- **Gemessenes Grundrauschen je Station** (#37): Ersetzt das thermische Rauschen dort, wo die Station empfängt –
+  Empfindlichkeit auf der Karte und SNR im Abgleich.
+- **Messung von Hand** (#38): fragt die Antennenhöhe (Pflicht), Gerät, Trageort, Antennengewinn, Kabel-/Körperdämpfung,
+  Sendeleistung und externe Antenne ab.
+- **Neue Trageorte** (#39): im Auto (9 dB nach 3GPP TR 38.901), Hosentasche, Rucksack oben, Rucksack innen. Neue
+  Katalogeinträge kommen einmalig auch in bestehende Kataloge.
+### Behoben
+- Profil einer Repeater-Strecke: Empfängerhöhe und -gewinn lassen sich wieder verstellen; der Admin kann sie mit 💾 als
+  Werte des Repeaters speichern (#34).
+- Abgleich: Ist das Modell zu pessimistisch, gibt es keinen sinnlosen Vorschlag „0 statt 0 dB“ mehr, sondern einen
+  Hinweis auf Beugung, Hindernisse und Clutter (#40).
+- Abgleich-Tabelle: Zahlen und Quellen-Kürzel brechen nicht mehr um, lange Namen werden mit … gekürzt (#40).
+- Nach einem Abgleich mit Messfahrten werden die Nachbar-Linien abgeschwächt, damit die Messpunkte sichtbar bleiben (#40).
+- Der Ring um eine Station, deren Repeater-Nachbarn eingeblendet sind, ist jetzt gestrichelt und nicht mehr mit dem
+  Fortschrittsring zu verwechseln; Fortschrittsringe werden nach jeder Rechnung sicher entfernt (#36).
+- Ein Link auf ein nicht öffentliches Projekt bleibt in der Adresszeile, damit es nach dem Anmelden geöffnet wird.
+
 ## 0.5.0
 TerraRF ist inzwischen mehr als ein Planungswerkzeug: ein Hub für alles rund um Empfang – planen, das echte Netz
 ansehen, messen, abgleichen. Diese Version stellt Oberfläche und Code darauf neu auf.

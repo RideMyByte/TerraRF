@@ -59,7 +59,8 @@ def exists(project_id):
     return valid_id(project_id) and os.path.exists(path(project_id))
 
 
-def list_all(include_private):
+def list_all(role):
+    """Projects the role may see (see ``can_view``), newest first."""
     out = []
     for fn in sorted(os.listdir(PROJECT_DIR)):
         if not fn.endswith(".json"):
@@ -69,10 +70,11 @@ def list_all(include_private):
                 p = json.load(f)
         except (OSError, ValueError):
             continue
-        if not include_private and not p.get("public"):
+        if not can_view(role, p):
             continue
         out.append({"id": p.get("id"), "name": p.get("name"), "stations": len(p.get("stations") or []),
-                    "updated": p.get("updated"), "public": bool(p.get("public"))})
+                    "updated": p.get("updated"), "public": bool(p.get("public")), "owner": owner(p),
+                    "editable": can_edit(role, p)})
     out.sort(key=lambda p: p.get("updated") or "", reverse=True)
     return out
 
@@ -95,15 +97,19 @@ def delete(project_id):
         os.remove(p)
 
 
-def merge_user_changes(stored, sent):
-    """Role "user": may only add, change and delete their own stations (owner = "user"). Everything else stays
-    as stored, whatever the browser sends."""
-    own = [st for st in sent.get("stations") or [] if st.get("owner") == "user"]
-    foreign_ids = {st["id"] for st in stored.get("stations") or [] if st.get("owner") != "user"}
-    own = [st for st in own if st.get("id") not in foreign_ids]
-    merged = dict(stored)
-    merged["stations"] = [st for st in stored.get("stations") or [] if st.get("owner") != "user"] + own
-    return merged
+def owner(project):
+    """Who created a project: "admin" or "user". Projects from before 0.5.1 belong to the admin."""
+    return "user" if project.get("owner") == "user" else "admin"
+
+
+def can_view(role, project):
+    """#32: admin sees everything, the user their own projects and public ones, visitors public ones."""
+    return role == "admin" or bool(project.get("public")) or (role == "user" and owner(project) == "user")
+
+
+def can_edit(role, project):
+    """#32: a project – public or not – is changed only by the one who created it, and by the admin."""
+    return role == "admin" or (role == "user" and owner(project) == "user")
 
 
 def remember_last(project_id):

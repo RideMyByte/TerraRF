@@ -27,10 +27,12 @@ export function emit(event, payload) { for (const fn of listeners[event] || []) 
 
 export const isAdmin = () => state.role === "admin";
 export const isUser = () => state.role === "user";
-/** Admin and user may add stations and enter measurements. */
-export const canEditAny = () => isAdmin() || isUser();
-/** The user role may only change stations it created itself. */
-export const canEditStation = (station) => isAdmin() || (isUser() && station && station.owner === "user");
+/** Logged in (admin or user): may compute unsaved changes and enter measurements. */
+export const isMember = () => isAdmin() || isUser();
+/** #32: a project is changed only by whoever created it, and by the admin. */
+export const canEditProject = () => isAdmin() || (isUser() && state.project?.owner === "user");
+/** Stations follow their project. */
+export const canEditStation = () => canEditProject();
 
 export const stationById = (id) => (state.project?.stations || []).find((s) => s.id === id);
 export const stationOfRepeater = (pk) => (state.project?.stations || []).find((s) => s.corescope_pk === pk);

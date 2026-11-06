@@ -52,7 +52,11 @@ details.card > summary { margin: -2px 0; }
 .kv td { overflow-wrap: anywhere; }
 table.mini { border-collapse: collapse; width: 100%; font-size: 12px; margin: 6px 0; }
 table.mini th { text-align: left; color: var(--mut); font-weight: 500; border-bottom: 1px solid var(--line); padding: 2px 4px; }
-table.mini td { padding: 2px 4px; border-bottom: 1px solid #f3f4f6; overflow-wrap: anywhere; }
+table.mini td { padding: 2px 4px; border-bottom: 1px solid #f3f4f6; white-space: nowrap; }
+/* #40: numbers and source badges never wrap; long names are cut with … (full text in the tooltip) */
+.srcb { white-space: nowrap; display: inline-block; }
+table.mini td.wrap { white-space: normal; overflow-wrap: anywhere; }
+table.mini td.ellipsis { max-width: 9em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 table.mini tr[data-pick] { cursor: pointer; }
 table.mini tr[data-pick]:hover td { background: var(--acc-soft); }
 table.mini tr.on td { background: #dbeafe; }
@@ -176,7 +180,8 @@ table.mini.clickable tr:hover td { background: var(--acc-soft); }
 @media (pointer: coarse) { .az-handle { width: 22px; height: 22px; margin: -2px; } }
 .node-sel { width: 22px; height: 22px; margin: 4px; border-radius: 50%; background: #1d4ed8; border: 3px solid #fff; box-shadow: 0 0 0 2px #111827, 0 2px 6px rgba(0,0,0,.4); cursor: pointer; }
 .node-sel.center { background: #111827; }
-.node-sel.ring { background: transparent; border: 3px solid #1d4ed8; box-shadow: 0 0 0 2px #fff; width: 30px; height: 30px; margin: 0; }
+/* repeater that is also a station: a dashed ring around the station pin – clearly not the progress ring (#36) */
+.node-sel.ring { background: transparent; border: 2px dashed #111827; box-shadow: 0 0 0 2px rgba(255,255,255,.9); width: 30px; height: 30px; margin: 0; pointer-events: none; }
 .node-sel.loading { animation: pulse 1s ease-in-out infinite; }
 @keyframes pulse { 0%,100% { box-shadow: 0 0 0 2px #111827, 0 0 0 0 rgba(29,78,216,.6); } 50% { box-shadow: 0 0 0 2px #111827, 0 0 0 12px rgba(29,78,216,0); } }
 .busyicon { pointer-events: none; }
@@ -287,3 +292,6 @@ body:not(.role-admin):not(.role-user) .member-only { display: none !important; }
   .admin .setting { grid-template-columns: 1fr; }
   #soloChip { max-width: calc(100% - 120px); top: 54px; }
 }
+
+/* #32: projects of others are read-only for the user */
+body.project-readonly #btnSave, body.project-readonly #dirtyDot { display: none; }

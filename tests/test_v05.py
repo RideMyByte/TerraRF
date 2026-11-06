@@ -134,3 +134,6 @@ def test_suggestion_needs_enough_values():
     out = compare.suggest_settings([{"rows": [{"delta_db": -9 + (i % 3), "saturated": False} for i in range(20)]}])
     assert out["advice"] == "offset" and out["suggested_extra_loss_db"] >= 7
     assert compare.suggest_settings([{"rows": [{"delta_db": (-1) ** i * 15, "saturated": False} for i in range(20)]}])["advice"] in ("fits", "scatter")
+    # #40: model too pessimistic and no extra loss to remove -> no button, a hint instead
+    out = compare.suggest_settings([{"rows": [{"delta_db": 20 + (i % 3), "saturated": False} for i in range(20)]}])
+    assert out["advice"] == "pessimistic" and "suggested_extra_loss_db" not in out

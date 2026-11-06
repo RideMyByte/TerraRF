@@ -244,7 +244,7 @@ async function catalogPage(body) {
   body.innerHTML = `<p class="muted">${t("Catalog entries are offered in the station editor (antennas) and for measurement series (devices, placements). Values without a datasheet are marked as assumptions in “Source”.")}</p>
     <nav class="subtabs">${KINDS.map(([k, l]) => `<button data-kind="${k}" class="${k === catalogKind ? "active" : ""}">${t(l)} (${catalog[k].length})</button>`).join("")}</nav>
     <div class="tablewrap"><table class="mini"><tr><th>id</th>${cols.map(([, l]) => `<th>${t(l)}</th>`).join("")}<th></th></tr>
-      ${catalog[catalogKind].map((x) => `<tr><td><code>${escapeHtml(x.id)}</code></td>${cols.map(([k]) => `<td>${escapeHtml(x[k] ?? "")}</td>`).join("")}
+      ${catalog[catalogKind].map((x) => `<tr><td><code>${escapeHtml(x.id)}</code></td>${cols.map(([k]) => `<td class="${["name", "note", "source", "maker"].includes(k) ? "wrap" : ""}">${escapeHtml(x[k] ?? "")}</td>`).join("")}
         <td><button class="small" data-edit="${escapeHtml(x.id)}">✎</button><button class="small danger" data-del="${escapeHtml(x.id)}">🗑</button></td></tr>`).join("")}</table></div>
     <div class="actions"><button id="catNew">＋ ${t("New entry")}</button></div><div id="catForm"></div>`;
   body.querySelectorAll("[data-kind]").forEach((b) => b.onclick = () => { catalogKind = b.dataset.kind; catalogPage(body); });

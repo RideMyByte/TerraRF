@@ -132,8 +132,9 @@ def _skey(r):
     return str(r.get("src") or "manual")
 
 
-def _series_for(c, r, skey=None):
-    """Matching series (same source/device, at most 30 min apart) or a new one."""
+def _series_for(c, r, skey=None, values=None):
+    """Matching series (same source/device, at most 30 min apart) or a new one.
+    values: receiver details for a new series (manual entries, #38)."""
     skey = skey or _skey(r)
     ts = int(r.get("ts") or time.time())
     hit = c.execute("SELECT id, t0, t1 FROM series WHERE skey = ? AND t0 - ? <= ? AND t1 + ? >= ? ORDER BY t1 DESC LIMIT 1",
@@ -143,11 +144,14 @@ def _series_for(c, r, skey=None):
         return hit[0]
     ext = 1 if r.get("ext_ant") else None
     cur = c.execute("INSERT INTO series (src, skey, t0, t1, ext_ant) VALUES (?,?,?,?,?)", (r.get("src"), skey, ts, ts, ext))
+    for key, value in (values or {}).items():
+        if key in SERIES_EDIT and value not in (None, ""):
+            c.execute(f"UPDATE series SET {key} = ? WHERE id = ?", (value, cur.lastrowid))
     return cur.lastrowid
 
 
-def add(rows, skey=None):
-    """skey: put all rows into one series of their own (e.g. a CSV import)."""
+def add(rows, skey=None, series_values=None):
+    """skey: put all rows into one series of their own (e.g. a CSV import); series_values: its receiver."""
     if not rows:
         return 0
     n = 0
@@ -161,25 +165,53 @@ def add(rows, skey=None):
                 continue
             if c.execute("SELECT 1 FROM m WHERE uniq = ?", (r["uniq"],)).fetchone():
                 continue
-            sid = _series_for(c, r, skey)
+            sid = _series_for(c, r, skey, series_values)
             cur = c.execute(f"INSERT OR IGNORE INTO m ({','.join(COLS)},uniq,series_id) VALUES ({','.join('?' * (len(COLS) + 2))})",
                             [r.get(k) for k in COLS] + [r["uniq"], sid])
             n += cur.rowcount
     return n
 
 
-def manual(d):
-    """Manual entry: lat, lon, repeater (key/prefix) and snr_down are required; the rest is optional."""
+def manual(d, require_height=False):
+    """Manual entry: lat, lon, repeater (key/prefix) and snr_down are required; the rest is optional.
+    require_height: the entry form insists on the antenna height (#38) – CSV files may leave it out."""
     lat, lon, rep = _f(d.get("lat")), _f(d.get("lon")), str(d.get("rep") or d.get("rep_pk") or d.get("rep_prefix") or "").strip()
     if lat is None or lon is None or not HEX.match(rep):
         raise ValueError("Ort und Repeater (Hex-Schlüssel oder -Präfix) sind nötig")
+    if require_height and (_f(d.get("rx_h")) is None or not 0 <= _f(d.get("rx_h")) <= 300):
+        raise ValueError("Antennenhöhe über Grund fehlt (0–300 m)")
     snr = _f(d.get("snr_down") if d.get("snr_down") is not None else d.get("snr"))
     if snr is None and _f(d.get("snr_up")) is None:
         raise ValueError("SNR fehlt")
     return _row(ts=int(_f(d.get("ts")) or time.time()), src=d.get("src") or "manual", kind=d.get("kind") or "MANUAL", lat=lat,
                 lon=lon, alt=_f(d.get("alt")), rep_prefix=rep, rep_pk=rep.lower() if len(rep) == 64 else None, snr_down=snr,
-                snr_up=_f(d.get("snr_up")), rssi_down=_f(d.get("rssi")), power=d.get("power"), rx_h=_f(d.get("rx_h")),
+                snr_up=_f(d.get("snr_up")), rssi_down=_f(d.get("rssi")), power=_power_text(d.get("power")), rx_h=_f(d.get("rx_h")),
+                ext_ant=1 if d.get("ext_ant") in (True, 1, "1", "true") else None,
                 note=(str(d.get("note") or "")[:300] or None))
+
+
+def _power_text(value):
+    """Transmit power as text like MeshMapper stores it; a bare number means dBm."""
+    if value in (None, ""):
+        return None
+    number = _f(value)
+    return f"{number:g} dBm" if number is not None else str(value)[:20]
+
+
+def manual_series(d):
+    """Series key and receiver details for a manual entry: entries with the same receiver within 30 min
+    form one series, which carries device, placement, gain and cable (#38)."""
+    values = {k: d.get(k) for k in ("device_id", "placement_id") if d.get(k)}
+    for k, kind in (("device_id", "devices"), ("placement_id", "placements")):
+        if k in values and catalog.get(kind, values[k]) is None:
+            raise ValueError(f"{k}: not in the catalog")
+    for k in ("rx_gain_dbi", "rx_cable_db"):
+        if _f(d.get(k)) is not None:
+            values[k] = _f(d.get(k))
+    if d.get("ext_ant") in (True, 1, "1", "true"):
+        values["ext_ant"] = 1
+    key = "manual|" + "|".join(str(values.get(k, "")) for k in ("device_id", "placement_id", "rx_gain_dbi", "rx_cable_db", "ext_ant"))
+    return key + "|" + str(_power_text(d.get("power")) or ""), values
 
 
 def from_csv(text):
