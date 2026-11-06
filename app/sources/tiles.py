@@ -1,8 +1,8 @@
-"""Kachel-Proxy mit Festplatten-Cache: Der Browser lädt Kartenkacheln nur von TerraRF selbst.
+"""Tile proxy with disk cache: the browser loads map tiles only from TerraRF itself.
 
-Damit gehen keine IP-Adressen der Besucher an OpenStreetMap, OpenTopoMap oder Geobasis NRW.
-Die Kartendienste sehen nur den Server; gecachte Kacheln entlasten ihre (spendenfinanzierten) Server.
-Regeln der OSM Tile Usage Policy: eindeutiger User-Agent, Caching (mind. 7 Tage), keine Massenabrufe.
+So no visitor IP addresses reach OpenStreetMap, OpenTopoMap or Geobasis NRW; the map services only see the
+server, and cached tiles relieve their (donation-funded) servers.
+OSM Tile Usage Policy: unique User-Agent, caching (at least 7 days), no bulk downloads.
 """
 from __future__ import annotations
 
@@ -77,7 +77,7 @@ def _store(p, data):
 
 
 def _trim():
-    """Älteste Kacheln löschen, wenn der Cache größer als RFP_TILE_CACHE_MB wird."""
+    """Delete the oldest tiles once the cache grows beyond RFP_TILE_CACHE_MB."""
     files = []
     for root, _d, fs in os.walk(DIR):
         for f in fs:
@@ -112,7 +112,7 @@ def _fetch(src, key, url, params=None):
         r = client().get(url, params=params)
         r.raise_for_status()
     except httpx.HTTPError:
-        stale = p if os.path.exists(p) else None  # lieber alte Kachel als keine
+        stale = p if os.path.exists(p) else None  # an old tile is better than none
         if stale:
             with open(stale, "rb") as f:
                 return f.read()

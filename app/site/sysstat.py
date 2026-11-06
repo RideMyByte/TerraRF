@@ -1,4 +1,4 @@
-"""Was gerade gerechnet wird und wie ausgelastet der Container ist (cgroup v2, Rückfall v1/Host)."""
+"""What is being computed right now and how loaded the container is (cgroup v2, falling back to v1/host)."""
 from __future__ import annotations
 
 import os
@@ -14,7 +14,7 @@ _cpu_last = {"t": None, "usage": None}
 
 @contextmanager
 def activity(what, **extra):
-    """Laufende Arbeit melden. Das zurückgegebene dict kann aktualisiert werden (progress, stage)."""
+    """Announce running work. The returned dict may be updated (progress, stage)."""
     with _lock:
         _next[0] += 1
         i = _next[0]
@@ -59,7 +59,7 @@ def _cpu_usage_s():
     if v:
         return int(v) / 1e9
     t = os.times()
-    return t.user + t.system  # nur dieser Prozess
+    return t.user + t.system  # this process only
 
 
 def _cpu_limit():
@@ -84,7 +84,7 @@ def _mem():
                 total = int(line.split()[1]) * 1024
     used = int(used) if used and used.isdigit() else None
     lim = int(limit) if limit and limit.isdigit() else None
-    if lim is None or (total and lim > total):  # "max" bzw. absurd hoher Wert = keine Grenze
+    if lim is None or (total and lim > total):  # "max" or an absurdly high value = no limit
         lim = total
     if used is None:
         rss = _read("/proc/self/statm")

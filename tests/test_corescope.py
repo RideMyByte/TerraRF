@@ -139,7 +139,7 @@ def test_calibrate_uses_partner_station_and_override_and_filter(mocked, project,
         rows = {x["pk"]: x for x in r["rows"]}
         assert set(rows) == {meas[0]["pk"], meas[1]["pk"]}          # Filter greift
         assert rows[meas[0]["pk"]]["rx_src"] == "station" and rows[meas[0]["pk"]]["rx_gain_dbi"] > 10
-        assert rows[meas[1]["pk"]]["rx_src"] == "angabe" and rows[meas[1]["pk"]]["rx_height_m"] == 40
+        assert rows[meas[1]["pk"]]["rx_src"] == "entered" and rows[meas[1]["pk"]]["rx_height_m"] == 40
         c.put(f"/api/corescope/overrides/{meas[1]['pk']}", json={})
 
 

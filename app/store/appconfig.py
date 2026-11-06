@@ -1,6 +1,7 @@
-"""Einstellungen der Instanz, die der Admin in der Oberfläche ändert (data/appconfig.json).
+"""Instance settings the admin changes in the interface (data/appconfig.json): access, website, legal pages,
+measurement key.
 
-Umgebungsvariablen liefern nur die Startwerte; was im Dialog gespeichert wird, gilt danach.
+Environment variables only provide the initial values; once saved in Administration, the stored value wins.
 """
 from __future__ import annotations
 
@@ -19,7 +20,7 @@ DEFAULTS = {
     "user_enabled": False,
     "user_name": os.environ.get("RFP_USER_NAME", "user"),
     "user_password": os.environ.get("RFP_USER_PASSWORD", ""),
-    # Impressum: generated (aus den Angaben unten) | link (externe Seite) | off
+    # imprint: generated (from the fields below) | link (external page) | off
     "imprint_mode": os.environ.get("RFP_IMPRINT_MODE", "generated"),
     "imprint_url": os.environ.get("RFP_IMPRINT_URL", ""),
     "imprint_name": os.environ.get("RFP_IMPRINT_NAME", ""),
@@ -30,11 +31,11 @@ DEFAULTS = {
     "privacy_mode": os.environ.get("RFP_PRIVACY_MODE", "generated"),
     "privacy_url": os.environ.get("RFP_PRIVACY_URL", ""),
     "privacy_extra": os.environ.get("RFP_PRIVACY_EXTRA", ""),
-    # Zugehörigkeit: „Diese Seite gehört zu …“
+    # affiliation: “This site belongs to …”
     "parent_name": os.environ.get("RFP_PARENT_NAME", ""),
     "parent_url": os.environ.get("RFP_PARENT_URL", ""),
     "show_github": os.environ.get("RFP_SHOW_GITHUB", "true").strip().lower() not in ("0", "false", "no"),
-    # Messungen: Schlüssel für die MeshMapper-Weiterleitung, Sichtbarkeit für Besucher
+    # measurements: key for the MeshMapper forwarding, visibility for visitors
     "mm_api_key": os.environ.get("RFP_MEASURE_KEY", ""),
     "measurements_public": False,
 }
@@ -75,7 +76,7 @@ def update(data: dict):
         raise ValueError("Benutzer-Passwort: mindestens 6 Zeichen")
     with _lock:
         tmp = PATH + ".tmp"
-        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)  # enthält ein Klartext-Passwort
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)  # contains a plain-text password
         with os.fdopen(fd, "w") as f:
             json.dump(cur, f, indent=1, ensure_ascii=False)
         os.replace(tmp, PATH)
@@ -83,7 +84,7 @@ def update(data: dict):
 
 
 def public():
-    """Was jeder Besucher sehen darf (Fußzeile)."""
+    """What every visitor may see (footer)."""
     c = get()
     return {
         "imprint": None if c["imprint_mode"] == "off" else (c["imprint_url"] if c["imprint_mode"] == "link" and c["imprint_url"] else "/impressum"),

@@ -43,3 +43,13 @@ app = FastAPI(title="TerraRF", version=VERSION, lifespan=lifespan)
 for module in (session, projects, coverage, network, measurements, reports, admin, catalog, maps, site):
     app.include_router(module.router)
 app.mount("/static", StaticFiles(directory=site.STATIC), name="static")
+
+
+@app.middleware("http")
+async def revalidate_frontend(request, call_next):
+    """ES modules import each other without the ?v= version tag, so the browser must revalidate them
+    (ETag, cheap 304) instead of keeping an old module after an update."""
+    response = await call_next(request)
+    if request.url.path.startswith(("/static/js/", "/static/locales/", "/static/style.css")):
+        response.headers["Cache-Control"] = "no-cache"
+    return response

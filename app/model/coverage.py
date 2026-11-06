@@ -82,7 +82,7 @@ class StationResult:
 _station_cache: "OrderedDict[str, StationResult]" = OrderedDict()
 _station_cache_lock = threading.Lock()
 _STATION_CACHE_MAX = int(os.environ.get("RFP_STATION_CACHE", "16"))
-# Obergrenze in Bytes: große Radien erzeugen Ergebnisse von mehreren hundert MB pro Station
+# upper limit in bytes: large radii produce results of several hundred MB per station
 _STATION_CACHE_BYTES = float(os.environ.get("RFP_STATION_CACHE_MB", "1200")) * 1e6
 _compute_lock = threading.Lock()
 
@@ -99,8 +99,8 @@ def _station_key(st, s, cs):
 
 
 def terrain_pair(s, grid):
-    """Gelände und Oberfläche für das Rechengitter. Lücken der Hauptquelle (z. B. außerhalb NRW) werden mit der
-    Ersatzquelle (Standard Copernicus GLO-30, 30 m) gefüllt – im Grenzgebiet werden also beide kombiniert."""
+    """Ground and surface for the computation grid. Holes of the main source (e.g. outside NRW) are filled from the
+    fallback source (default Copernicus GLO-30, 30 m), so near the border both are combined."""
     G = load_terrain(s["ground_source"], grid, "ground")
     surf_id = s.get("surface_source") or "none"
     S = load_terrain(surf_id, grid, "surface") if surf_id != "none" else None
@@ -117,7 +117,7 @@ def terrain_pair(s, grid):
         frac = float(np.isnan(G).mean())
         try:
             C = load_terrain(fb_id, grid, "surface")
-        except Exception as e:  # noqa: BLE001 – Netz/Proxy/Datei: dann eben ohne Ersatz
+        except Exception as e:  # noqa: BLE001 – network/proxy/file: carry on without fallback
             C = None
             warn.append(f"Ersatzquelle nicht verfügbar ({e}) – Lücken mit Nachbarwerten gefüllt")
         if C is not None:
@@ -160,8 +160,8 @@ def drop_station_cache(st, s, cs):
 
 
 def near_grid(s, x, y, kscale, cs, r_true):
-    """Feines Höhenraster um die Station (#23). Rückgabe für den Kernel; rnear = 0 heißt aus
-    (Rechenraster ohnehin fein genug, Nahbereich 0 oder Daten nicht ladbar)."""
+    """Fine elevation grid around the station (#23), returned in the form the kernel expects. rnear = 0 means off
+    (computation grid already fine enough, near field 0, or the data could not be loaded)."""
     near_res = float(s.get("near_res_m") or 5.0)
     rnear = min(float(s.get("near_m") or 0.0), r_true)
     dummy = np.zeros((2, 2), dtype=np.float32)
@@ -172,7 +172,7 @@ def near_grid(s, x, y, kscale, cs, r_true):
     g2 = Grid.around(x, y, rnear / kscale + 3 * cs2, cs2)
     try:
         G2, S2, _w = terrain_pair(s, g2)
-    except Exception as e:  # noqa: BLE001 – ohne Nahfeld weiterrechnen
+    except Exception as e:  # noqa: BLE001 – carry on without near field
         log.warning("Nahfeld nicht geladen: %s", e)
         return dummy, dummy, 0.0, 0.0, cs, 0.0, no_mask
     if S2 is None:
@@ -185,7 +185,7 @@ def near_grid(s, x, y, kscale, cs, r_true):
 
 
 def compute_station(st, s, cs, progress=None):
-    """progress(frac, stage) wird während der Rechnung aufgerufen (0…1)."""
+    """progress(frac, stage) is called while computing (frac 0…1)."""
     progress = progress or (lambda f, stage: None)
     key = _station_key(st, s, cs)
     with _station_cache_lock:
@@ -238,7 +238,7 @@ def compute_station(st, s, cs, progress=None):
     parts = []
     nblk = 20 if n_rays >= 2000 else 5
     edges = np.linspace(0, n_rays, nblk + 1).astype(int)
-    for bi_ in range(nblk):  # in Blöcken, damit der Fortschritt sichtbar wird
+    for bi_ in range(nblk):  # in blocks so that the progress becomes visible
         parts.append(prop.coverage_rays(
             G, S, fx, fy, cs, kscale, ztx, ztx - g0, float(s["rx_height_m"]), lam, f_mhz, n_rays, n_bins, step, sub,
             re, _model(s), cm, excl, clR, clT, flR, flT, bool(s.get("two_ray", True)), vg, vam,
@@ -332,7 +332,7 @@ def run_coverage(project, station_ids=None, max_dim=None, force=None):
             drop_station_cache(st, s, cs)
     for st in stations:
         with sysstat.activity(f"Abdeckung {st.get('name') or st['id']}", station=st["id"], progress=0.0, stage="wartet") as h:
-            with _compute_lock:  # eine schwere Rechnung zur Zeit
+            with _compute_lock:  # one heavy computation at a time
                 def prog(f, stage, h=h):
                     h["progress"], h["stage"] = f, stage
                 r, cached = compute_station(st, s, cs, progress=prog)
@@ -380,11 +380,11 @@ def _down_grid(g, f):
 
 _png_cache: "OrderedDict[str, bytes]" = OrderedDict()
 _png_lock = threading.Lock()
-_png_gen_lock = threading.Lock()  # immer nur ein Bild gleichzeitig erzeugen (Speicher)
+_png_gen_lock = threading.Lock()  # render one image at a time (memory)
 
 
 def station_png(key, f):
-    """Data image of one station: R = Pegel (dBm + 200, 0 = außerhalb), G = Sichtklasse | Dachsicht << 2."""
+    """Data image of one station: R = level (dBm + 200, 0 = outside), G = sight class | roof visible << 2."""
     ck = f"{key}@{f}"
     with _png_lock:
         if ck in _png_cache:
@@ -395,7 +395,7 @@ def station_png(key, f):
         with open(disk, "rb") as fh:
             return fh.read()
     with _png_gen_lock:
-        if os.path.exists(disk):  # inzwischen von einer parallelen Anfrage erzeugt
+        if os.path.exists(disk):  # created meanwhile by a parallel request
             with open(disk, "rb") as fh:
                 return fh.read()
         data = _make_png(key, f)
@@ -456,9 +456,9 @@ def load_station(key):
 
 def profile(project, station_id, lat, lon, rx_height=None, rx_gain=None, rx_station_id=None, rx_cable=None,
             rx_extra_loss=None):
-    """Geländeprofil und Linkbudget Station -> Punkt.
-    rx_station_id: Gegenstelle ist eine Station des Projekts -> deren Höhe, Antenne (Richtdiagramm zur
-    Sendestation) und Kabelverlust statt der Client-Werte (Richtfunk/Repeater-Strecken)."""
+    """Terrain profile and link budget station -> point.
+    rx_station_id: the far end is a station of the project -> its height, antenna (pattern towards the
+    transmitter) and cable loss replace the client values (point-to-point and repeater links)."""
     s = merged_settings(project)
     if rx_gain not in (None, ""):
         s = {**s, "rx_gain_dbi": float(rx_gain)}
@@ -506,7 +506,7 @@ def profile(project, station_id, lat, lon, rx_height=None, rx_gain=None, rx_stat
     surf = np.array([prop.sample(S, a, b) for a, b in zip(fxs, fys)])
     bld = np.array([prop.mask_at(B, a, b) for a, b in zip(fxs, fys)], dtype=np.int8)
     d = t * D
-    # Nahbereich der Station fein abtasten (#23), wie in der Flächenrechnung
+    # sample the station's near field finely (#23), as in the area computation
     G2, S2, fx2, fy2, cs2, rnear, B2 = near_grid(s, x0, y0, math.cos(math.radians(lat0)), cs, D)
     if rnear > 0:
         k0 = math.cos(math.radians(lat0))
@@ -516,8 +516,8 @@ def profile(project, station_id, lat, lon, rx_height=None, rx_gain=None, rx_stat
             ground[i] = prop.sample(G2, fx2 + ux * dd, fy2 - uy * dd)
             surf[i] = prop.sample(S2, fx2 + ux * dd, fy2 - uy * dd)
             bld[i] = prop.mask_at(B2, fx2 + ux * dd, fy2 - uy * dd)
-    # eigene Zelle der Antenne gilt als frei (wie in der Flächenrechnung) – sonst entscheidet die Interpolation
-    # an der Hauswand über 20 dB mehr oder weniger
+    # the antenna's own cell counts as free (as in the area computation) – otherwise interpolation at the house
+    # wall decides about 20 dB more or less
     own = 0.6 * (float(s.get("near_res_m") or 5.0) if rnear > 0 else res_true)
     surf = np.where(d < own, ground, surf)
     surf = np.maximum(surf, ground)
@@ -527,7 +527,7 @@ def profile(project, station_id, lat, lon, rx_height=None, rx_gain=None, rx_stat
     ztx = base + float(st.get("height_m", 10))
     rxh = float(s["rx_height_m"] if rx_height is None else rx_height)
     if rx_st is not None and rx_st.get("height_ref") == "surface":
-        rxh += float(surf[-1] - ground[-1])  # Höhe über Dach -> über Grund umrechnen
+        rxh += float(surf[-1] - ground[-1])  # height above roof -> height above ground
     zrx = ground[-1] + rxh
     # for the loss computation: earth curvature relative to the tx tangent
     curv = d * d / (2 * re)
@@ -550,7 +550,7 @@ def profile(project, station_id, lat, lon, rx_height=None, rx_gain=None, rx_stat
     elev = math.degrees(math.atan2(dz, D))
     az = (math.degrees(math.atan2(x1 - x0, y1 - y0)) + 360) % 360
     gtx = float(prop.antenna_gain(np.array([az]), np.array([elev]), st.get("antenna") or {})[0])
-    if rx_st is not None:  # Gewinn der Gegenstelle in Richtung Sendestation (Rückrichtung, Elevation umgekehrt)
+    if rx_st is not None:  # gain of the far end towards the transmitter (reverse direction, elevation inverted)
         grx = float(prop.antenna_gain(np.array([(az + 180.0) % 360.0]), np.array([-elev]), rx_st.get("antenna") or {})[0])
         s = {**s, "rx_gain_dbi": grx}
     fspl = float(prop.fspl_db(np.array([d3]), f_mhz)[0])

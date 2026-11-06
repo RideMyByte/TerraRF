@@ -1,8 +1,8 @@
-"""Impressum und Datenschutzerklärung.
+"""Imprint (Impressum) and privacy policy (Datenschutzerklärung) – German pages, as German law requires them.
 
-Angaben kommen aus Umgebungsvariablen; wer eigene Texte will, legt data/legal/impressum.html bzw.
-data/legal/datenschutz.html ab (nur der Inhalt, ohne <html>-Gerüst) – die ersetzen die erzeugten Texte.
-Die erzeugte Datenschutzerklärung beschreibt, was diese Software tatsächlich tut; sie ersetzt keine Rechtsberatung.
+The details come from Administration → Access & website (initially from environment variables). For own texts,
+put data/legal/impressum.html or data/legal/datenschutz.html (content only, no <html> frame); they replace the
+generated pages. The generated privacy policy describes what this software actually does; it is no legal advice.
 """
 from __future__ import annotations
 
@@ -104,7 +104,8 @@ gezählt (Art. 6 Abs. 1 lit. f DSGVO).</p>
 <p>Besucher erhalten keine Cookies. Nur nach der Anmeldung des Administrators wird das Cookie
 <code>terrarf_session</code> gesetzt. Es ist für den angemeldeten Bereich unbedingt erforderlich (§ 25 Abs. 2 Nr. 2
 TDDDG) und wird beim Schließen des Browsers gelöscht, sofern nicht „angemeldet bleiben“ gewählt wurde (dann höchstens
-{days} Tage). Lokaler Browserspeicher (localStorage) wird nicht verwendet.</p>
+{days} Tage). Wählen Sie oben die Sprache der Oberfläche, speichert Ihr Browser nur diese Wahl im lokalen Speicher (localStorage,
+Schlüssel „terrarf.lang“); sie verlässt Ihr Gerät nicht. Darüber hinaus wird lokaler Browserspeicher nicht verwendet.</p>
 <h2>Kartendarstellung</h2>{maps}
 {cs}
 <h2>Messfahrten</h2><p>Messwerte von Messfahrten (z. B. aus der App MeshMapper) werden mit Ort, Zeit, Signalwerten,

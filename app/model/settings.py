@@ -5,8 +5,8 @@ Since 0.5 every project computes with the same settings: the admin tunes them un
 the settings, so nothing stale is served). Settings stored inside old project files are ignored.
 
 ``SPEC`` describes every setting for the admin page: type, unit, limits, choices and the source
-(ITU-R recommendation or reasoning) behind the default. Labels and help texts live in the
-frontend locale files under ``settings.<key>``.
+(ITU-R recommendation or reasoning) behind the default. Labels live in the
+frontend (``SETTING_LABELS`` in ``static/js/admin.js``) and are translated there.
 """
 from __future__ import annotations
 

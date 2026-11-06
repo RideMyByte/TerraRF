@@ -1,7 +1,7 @@
-"""Kartenebenen aus den Höhendaten, mit denen gerechnet wird: Gelände, Oberfläche, Hindernishöhe.
+"""Map layers from the elevation data the model computes with: ground, surface, obstacle height.
 
-Gerendert werden nur bereits lokal vorhandene Daten (vorgeladene NRW-Kacheln, eigene GeoTIFFs). Das Ansehen
-der Karte löst keine Downloads aus. Ergebnisse werden als PNG-Kacheln auf der Platte zwischengespeichert.
+Only data that is already local is rendered (preloaded NRW tiles, own GeoTIFFs); looking at the map never
+triggers downloads. Rendered tiles are cached on disk as PNG.
 """
 from __future__ import annotations
 
@@ -22,7 +22,7 @@ DIR = os.path.join(paths.CACHE_DIR, "overlay")
 MIN_Z, MAX_Z = 11, 18
 WORLD = 2 * math.pi * 6378137.0
 KINDS = ("relief", "surface", "ndom")
-_lock = threading.Semaphore(2)  # höchstens zwei Kacheln gleichzeitig rendern
+_lock = threading.Semaphore(2)  # render at most two tiles at a time
 EMPTY = None
 
 
@@ -43,7 +43,7 @@ def _grid(z, x, y, pad=1):
 
 
 def _read_local(sid, grid):
-    """Wie source.read(), aber ohne fehlende Kacheln nachzuladen."""
+    """Like source.read(), but without downloading missing tiles."""
     src = terrain.get_source(sid)
     if src is None:
         return None
@@ -60,7 +60,7 @@ def _read_local(sid, grid):
     if isinstance(src, terrain.LocalFolderSource):
         a = src.read(grid, Resampling.bilinear)
         return a if np.isfinite(a).any() else None
-    return None  # Copernicus o. ä.: würde nachladen
+    return None  # Copernicus and the like: would download
 
 
 def _hillshade(z, cs_true, az=315.0, alt=45.0):
@@ -72,7 +72,7 @@ def _hillshade(z, cs_true, az=315.0, alt=45.0):
     return np.clip(sh, 0, 1)
 
 
-# Farbverläufe
+# colour ramps
 _RELIEF = [(0, (38, 115, 77)), (60, (120, 170, 90)), (150, (215, 200, 120)), (300, (190, 140, 90)), (600, (150, 110, 90)), (900, (240, 240, 240))]
 _NDOM = [(2, (255, 237, 160)), (6, (254, 178, 76)), (15, (240, 59, 32)), (30, (128, 0, 38))]
 
@@ -121,7 +121,7 @@ def render(kind, z, x, y, ground_src, surface_src):
             b = io.BytesIO()
             Image.fromarray(rgba, "RGBA").save(b, "PNG", optimize=False, compress_level=6)
             data = b.getvalue()
-        if data is not _empty():  # leere Kacheln nicht merken: Daten können später vorgeladen werden
+        if data is not _empty():  # do not cache empty tiles: the data may be preloaded later
             os.makedirs(os.path.dirname(path), exist_ok=True)
             tmp = path + ".tmp"
             with open(tmp, "wb") as f:

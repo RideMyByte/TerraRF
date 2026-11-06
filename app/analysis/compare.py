@@ -90,7 +90,7 @@ def _calibrate_one(project, station_id, partner, stations_by_pk, overrides, rx_h
             height = entered.get("height_m", rx_height)
             gain = entered.get("gain_dbi", rx_gain)
             cable = entered.get("cable_db", rx_cable)
-            row.update(rx_src="angabe" if entered else "standard")
+            row.update(rx_src="entered" if entered else "standard")
             prof = cov.profile(project, station_id, float(partner["lat"]), float(partner["lon"]), rx_height=float(height),
                                rx_gain=float(gain), rx_cable=float(cable), rx_extra_loss=0.0)
     except (ValueError, KeyError, terrain.SourceError) as e:

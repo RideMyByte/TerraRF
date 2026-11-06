@@ -2,6 +2,41 @@
 
 ## [Unreleased]
 
+## 0.5.0
+TerraRF ist inzwischen mehr als ein Planungswerkzeug: ein Hub für alles rund um Empfang – planen, das echte Netz
+ansehen, messen, abgleichen. Diese Version stellt Oberfläche und Code darauf neu auf.
+
+### Neu
+- **Neue Oberfläche** mit fünf Bereichen (Planen, Netz, Messen, Abgleich, Bericht), einer gemeinsamen Karte und einem
+  Inspektor für alles, was angetippt wird (Station, Repeater, Strecke, Messung, Ort). Auf dem Handy als Leiste unten
+  mit aufziehbaren Blättern.
+- **Deutsch und Englisch** umschaltbar (oben rechts); die Wahl merkt sich der Browser.
+- **Administration** als eigenes Fenster: Zugang & Webseite, Datenquellen, Modell, Kataloge, System.
+- Nachbar-Linien und Nachbarliste anklickbar: Strecke mit SNR beider Seiten, zuletzt gehört, Anzahl Pakete je Richtung,
+  Mittel aus Paketpfaden und Profil der Strecke (#26).
+- Messpunkt = ein Ping: zeigt, wie viele Repeater ihn gehört haben, die stärksten zuerst; Repeater-Namen öffnen den
+  Repeater (#27).
+- **Antennen-Katalog** (#28): u. a. Interline HORIZON 868 (6 dBi/30°, 8 dBi/15°), ALFA AOA-868-5ACM und die Liste der
+  meshrheinland-Community; im Stationseditor auswählbar. Werte ohne Datenblatt sind als Annahme gekennzeichnet.
+- **Geräte und Trageorte** (#29): z. B. T1000-E (1 dBi), Autodach 1,7 m, Jackentasche 1,25 m (+4 dB Körperdämpfung,
+  Faustwert), Fahrrad 1,0 m – je Messreihe wählbar, der Abgleich rechnet damit.
+- **Modell-Feinabstimmung im Admin-Bereich** (#30): alle Einstellungen mit Grenzen und Quelle; der Abgleich mit
+  Messfahrten schlägt eine Zusatzdämpfung am Empfänger vor, die der Admin mit einem Klick übernimmt.
+- **Gebäudegrundrisse** (#25): Import als GeoJSON oder direkt aus OpenStreetMap (Kartenausschnitt); im Profil grau.
+  Einstellung „Gebäudemodus“: `vegetation` (Standard, Ergebnisse wie bisher) oder `diffraction` (in Gebäuden nur Beugung
+  über das Dach, keine P.833-Dämpfung). Der Standard bleibt bewusst unverändert, bis Messungen den neuen Modus stützen.
+### Geändert
+- **Modell-Einstellungen gelten global** für alle Projekte und werden nur vom Admin geändert; Einstellungen in alten
+  Projektdateien werden ignoriert. Wer Projekte mit eigenen Einstellungen hatte: Werte einmal unter Administration →
+  Modell eintragen.
+- Kataloge pflegt nur der Admin; der Benutzer wählt daraus.
+- Modell 10: Gebäudegrundrisse fließen in den Cache-Schlüssel ein – alle Stationen werden einmal neu gerechnet.
+- Code nach Funktionen sortiert (`api/`, `model/`, `analysis/`, `sources/`, `store/`, `site/`; Frontend als ES-Module),
+  toter Code entfernt, Kommentare englisch; README englisch neu, Aufbau in `docs/architecture.md`.
+- Datenschutzerklärung: erwähnt die im Browser gespeicherte Sprachwahl.
+### Bekannt
+- Der PDF-Bericht und Fehlermeldungen des Servers sind noch deutsch.
+
 ## 0.4.6
 ### Neu
 - Vergleich mit dem Modell in einer Karte: CoreScope (Repeater ↔ Repeater, nur direkt gemeldete Nachbar-SNR, 0 Hop)

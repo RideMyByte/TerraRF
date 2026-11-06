@@ -1,4 +1,4 @@
-"""Auswertung je Station (Ergebnis-Reiter) und PDF-Bericht zum Vergleich über die Zeit."""
+"""Key figures per station (workspace “Report”) and the PDF report, e.g. to compare a site over time."""
 from __future__ import annotations
 
 import io
@@ -21,7 +21,7 @@ FONT_DIRS = ("/usr/share/fonts/truetype/dejavu", "/usr/share/fonts/dejavu", "/us
 
 
 def _fonts():
-    """DejaVu Sans (Umlaute, Δ, Pfeile, ✓); Rückfall Helvetica."""
+    """DejaVu Sans (umlauts, Δ, arrows, ✓); falls back to Helvetica."""
     import os
     from reportlab.pdfbase import pdfmetrics
     from reportlab.pdfbase.ttfonts import TTFont
@@ -53,7 +53,7 @@ def _result(project, st):
 
 
 def summary(project, sid):
-    """Kennzahlen einer Station: Fläche je Reserveklasse, Sichtlinie, Versorgung nach Entfernung."""
+    """Key figures of one station: area per margin class, line of sight, coverage by distance."""
     st = _station(project, sid)
     s, r, cached = _result(project, st)
     g = r.grid
@@ -74,7 +74,7 @@ def summary(project, sid):
     total = float(inside.sum()) * cell_km2
     covered = float((mm >= req).sum()) * cell_km2
     los = float((np.nan_to_num(r.vmain, nan=1e9) <= 0).sum()) * cell_km2
-    # Versorgung nach Entfernung (Anteil der Fläche je Ring mit Reserve ≥ Mindestreserve)
+    # coverage by distance (share of each ring with margin ≥ required margin)
     x0, y0 = terrain.lonlat_to_merc(float(st["lon"]), float(st["lat"]))
     cols = (np.arange(g.nx) + 0.5) * g.cs + g.x0
     rows = g.y1 - (np.arange(g.ny) + 0.5) * g.cs
@@ -121,9 +121,9 @@ def _map_image(st, r, s, width=1500, neighbors=None, points=None):
                 tile = Image.open(io.BytesIO(tiles.xyz("osm", z, tx, ty))).convert("L").convert("RGB")
                 img.paste(tile, ((tx - tx0) * 256, (ty - ty0) * 256))
                 base_ok += 1
-            except Exception:  # noqa: BLE001 – ohne Grundkarte weiter
+            except Exception:  # noqa: BLE001 – carry on without base map
                 pass
-    px = 256 * n / W  # Pixel je Mercator-Meter
+    px = 256 * n / W  # pixels per Mercator metre
 
     def to_px(x, y):
         return (x + tiles_world()) * px - tx0 * 256, (tiles_world() - y) * px - ty0 * 256
@@ -151,7 +151,7 @@ def _map_image(st, r, s, width=1500, neighbors=None, points=None):
         col = (22, 163, 74) if sn is not None and sn >= 5 else (101, 163, 13) if sn is not None and sn >= -5 \
             else (217, 119, 6) if sn is not None and sn >= -10 else (220, 38, 38) if sn is not None else (156, 163, 175)
         d.ellipse([nx_ - 5, ny_ - 5, nx_ + 5, ny_ + 5], fill=col, outline=(17, 24, 39) if nb.get("snr") is not None else (255, 255, 255), width=2)
-    for pt in points or []:  # Messpunkte, Farbe nach gemessenem SNR
+    for pt in points or []:  # measurement points, coloured by measured SNR
         px_, py_ = to_px(*terrain.lonlat_to_merc(pt["lon"], pt["lat"]))
         sn = pt.get("snr_down")
         col = (22, 163, 74) if sn >= 5 else (101, 163, 13) if sn >= -5 else (217, 119, 6) if sn >= -10 else (220, 38, 38)
@@ -172,6 +172,11 @@ def tiles_world():
 
 # ---------------------------------------------------------------- PDF
 def pdf(project, sid, cal_defaults=None, site=None, lang="de"):
+    """PDF report of one station: map, key figures, model settings, comparison with drive tests.
+
+    ``lang`` is the interface language of the requester. The report texts are German so far; the parameter
+    is passed through so an English report can be added without changing the API.
+    """
     from reportlab.lib import colors
     from reportlab.lib.pagesizes import A4
     from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
@@ -316,7 +321,7 @@ def pdf(project, sid, cal_defaults=None, site=None, lang="de"):
             if cmp_.get("saturated"):
                 story.append(Paragraph(f"{cmp_['saturated']} Messungen nahe am Repeater nicht in der SNR-Statistik "
                                        f"(LoRa meldet höchstens etwa {f(cmp_['sat_db'], 0)} dB SNR).", SM))
-            # nach Entfernung
+            # by distance
             rows_ = [x for x in cmp_["rows"] if x["delta_db"] is not None and not x["saturated"]]
             if rows_:
                 tab = [["Entfernung", "n", "gemessen (Median)", "Modell (Median)", "Δ (Median)"]]
@@ -329,7 +334,7 @@ def pdf(project, sid, cal_defaults=None, site=None, lang="de"):
                     lo = hi
                 story.append(Spacer(1, 2 * mm))
                 story.append(table(tab, [34 * mm, 14 * mm, 38 * mm, 34 * mm, 28 * mm]))
-            # je Messreihe: Empfängerangaben, Δ SNR (ohne gesättigte) und Δ RSSI
+            # per series: receiver, Δ SNR (without saturated values) and Δ RSSI
             groups = {}
             for x in cmp_["rows"]:
                 groups.setdefault(x.get("series_id"), []).append(x)
@@ -427,7 +432,7 @@ _EMOJI = None
 
 
 def _e(s):
-    """Für Paragraph-Text: escapen und Zeichen entfernen, die keine PDF-Schrift hat (Emoji in Knotennamen)."""
+    """For paragraph text: escape, and drop characters no PDF font has (emoji in node names)."""
     global _EMOJI
     import re
     if _EMOJI is None:
