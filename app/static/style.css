@@ -84,6 +84,12 @@ table.mini tr.dim td { color: #9ca3af; }
 #topbar .spacer { flex: 1; }
 #topbar button, #topbar select { background: rgba(255,255,255,.08); border-color: rgba(255,255,255,.15); color: #fff; }
 #topbar button.primary { background: var(--acc); border-color: var(--acc); }
+/* the project menu sits inside the top bar: give its entries the menu colours back (ids beat classes) */
+#topbar .menu button, #topbar .menu a { background: none; border: 0; color: var(--txt); }
+#topbar .menu button:hover { background: #f3f4f6; }
+#topbar .menu button.sel { background: var(--acc-soft); }
+#topbar .menu button.danger { color: var(--bad); }
+#topbar .menu .muted { color: var(--mut); }
 #topbar select option { color: var(--txt); }
 #projectBar { position: relative; display: flex; align-items: center; gap: 6px; margin-left: 14px; min-width: 0; }
 #projectName { background: rgba(255,255,255,.08); border-color: rgba(255,255,255,.15); color: #fff; width: 230px; font-weight: 600; }
