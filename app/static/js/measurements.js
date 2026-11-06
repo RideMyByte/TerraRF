@@ -7,7 +7,7 @@
  */
 import { t } from "./core/i18n.js";
 import { escapeHtml, fmt, signed, snrColor, deltaColor, fmtDateTime } from "./core/util.js";
-import { state, on, emit, isMember } from "./core/state.js";
+import { state, on, emit, isAdmin } from "./core/state.js";
 import { api } from "./core/api.js";
 import { sourceBadge, sourceName } from "./core/ui.js";
 import { map, registerLayerSection, refreshLayersPanel } from "./map/map.js";
@@ -101,6 +101,14 @@ export function groupPings(rows) {
 export async function loadMeasurements() {
   const seq = ++loadSeq;
   const q = new URLSearchParams();
+  // #53: measurements belong to a project – those of the open project (the admin without a saved project: own ones)
+  const projectId = state.project?.id;
+  if (!projectId && !isAdmin()) {
+    Object.assign(meas, { allowed: false, rows: [], plan: [], series: [], stats: null });
+    drawMeasurements(); emit("measurements-loaded"); refreshLayersPanel();
+    return;
+  }
+  if (projectId) q.set("project", projectId);
   if (meas.days) q.set("days", meas.days);
   if (meas.focusPk) q.set("pk", meas.focusPk);
   if (meas.seriesId) q.set("series", meas.seriesId);
@@ -111,7 +119,7 @@ export async function loadMeasurements() {
     Object.assign(meas, { rows: r.rows, plan: r.plan, series: r.series || [], stats: r.stats });
   } catch (e) {
     if (seq !== loadSeq) return;
-    if ([401, 403].includes(e.status)) { meas.allowed = false; meas.rows = []; meas.plan = []; meas.series = []; }
+    if ([400, 401, 403, 404].includes(e.status)) { meas.allowed = false; meas.rows = []; meas.plan = []; meas.series = []; }
     else console.warn("measurements", e);
   }
   drawMeasurements(); emit("measurements-loaded"); refreshLayersPanel();
@@ -148,7 +156,7 @@ export function drawMeasurements() {
 export function focusRepeater(pk) {
   if ((pk || null) === meas.focusPk) return;
   meas.focusPk = pk || null; meas.seriesId = null; meas.comparison = null;
-  if (meas.allowed || isMember() || state.config?.site?.measurements_public) loadMeasurements();
+  loadMeasurements();
 }
 export function focusSeries(id) { meas.seriesId = id || null; meas.comparison = null; loadMeasurements(); }
 

@@ -35,12 +35,14 @@ app/
     report.py        key figures and the PDF report
   sources/         external data
     corescope.py     MeshCore network from a CoreScope instance (read-only, cached)
+    linkhistory.py   history of repeater↔repeater links (only changes are stored, SQLite)
     regions.py       offline downloads and the NRW preload
     tiles.py         map tile proxy with disk cache
     overlay.py       map layers rendered from local elevation data
   store/           what TerraRF keeps on disk
     projects.py      project files, owner and rights (#32), migration of old projects (settings dropped, antenna presets → catalog)
-    measurements.py  SQLite with drive-test rows and series
+    measurements.py  SQLite with drive-test rows and series; every row and series belongs to a project (Scope)
+    ingestkeys.py    one MeshMapper ingest key per project
     catalog.py       antennas / devices / placements, seeded on first start
     appconfig.py     instance settings edited in Administration
     accounts.py      collaborator logins that belong to one project
@@ -58,9 +60,10 @@ app/
 | `catalog.json` | antenna, device and placement catalog |
 | `appconfig.json` | access, website, legal, measurement key (mode 0600: contains the user password) |
 | `accounts.json` | collaborator logins per project (password hashes only, mode 0600) |
-| `measurements.db` | drive-test rows and series (SQLite) |
+| `measurements.db` | drive-test rows and series (SQLite), each with its project (empty = the admin's pool) |
+| `ingest_keys.json` | MeshMapper ingest key per project (mode 0600) |
 | `buildings/footprints.json` | building footprints |
-| `corescope/` | cached CoreScope nodes, links, repeater overrides |
+| `corescope/` | cached CoreScope nodes, links, repeater overrides; `history.db` = link history |
 | `dem/<source>_<res>m/`, `dem/<name>/` | NRW tile store, own GeoTIFFs |
 | `cache/` | coverage results, terrain grids, map tiles |
 
@@ -90,14 +93,16 @@ js/
   network.js       CoreScope nodes and neighbour lines (lines are clickable → link inspector)
   measurements.js  drive-test points grouped into pings, measurement plan
   profile.js       terrain profile and link budget panel
-  inspector.js     station · repeater · link · ping · location
+  inspector.js     station · repeater · link (incl. history) · ping · location
+  selection.js     what is selected on the map (solo station, repeater focus, neighbours) and restoring it
   workspaces/      plan · network · measure · compare · report
   admin.js         administration dialog
 ```
 
 **Events** (`core/state.js`): `project-loaded`, `project-changed`, `stations-changed`, `coverage-updated`,
 `busy-changed`, `network-loaded`, `network-focus`, `neighbours-loaded`, `measurements-loaded`, `catalog-loaded`,
-`config-reloaded`, `settings-changed`, `compare-station`, `workspace`. Modules render themselves when the events they
+`config-reloaded`, `settings-changed`, `compare-station`, `workspace`, `map-layout` (panel/inspector changed the map size; the
+map keeps what is on screen in place). Modules render themselves when the events they
 care about fire; nothing calls into a workspace directly except to open it.
 
 **Translations:** write UI strings in English inside `t("…")` (placeholders `{name}`) and add the German text to

@@ -321,3 +321,6 @@ body.has-notice #mapwrap .leaflet-top, body.has-notice #soloChip, body.has-notic
 /* #45 MeshCore picker */
 .picker .picklist { max-height: 40vh; overflow: auto; margin: 6px 0; display: flex; flex-direction: column; gap: 2px; }
 #btnFromMeshCore.on { background: var(--acc-soft); border-color: var(--acc); }
+
+/* #52 link history */
+svg.spark { width: 100%; height: auto; background: #f8fafc; border: 1px solid var(--line); border-radius: 6px; margin: 4px 0; }

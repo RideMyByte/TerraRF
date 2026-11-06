@@ -99,7 +99,7 @@ export function renderPlan() {
     li.onclick = (e) => {
       if (e.target.tagName === "INPUT") return;
       state.selectedStationId = st.id;
-      map.panTo([st.lat, st.lon]);
+      if (!map.getBounds().pad(-0.1).contains([st.lat, st.lon])) map.panTo([st.lat, st.lon]);   // only if out of view
       inspectStation(st);
       renderPlan();
     };

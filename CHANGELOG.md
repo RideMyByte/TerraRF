@@ -2,6 +2,24 @@
 
 ## [Unreleased]
 
+## 0.5.5
+### Neu
+- **Messungen gehören zu Projekten** (#53): Jedes Projekt hat seine eigenen Messungen und unter „Messen → MeshMapper“
+  einen eigenen Schlüssel. Was mit diesem Schlüssel aus MeshMapper kommt, landet genau in diesem Projekt. Wer das
+  Projekt bearbeiten darf (auch Mitarbeitende), sieht und pflegt seine Messungen; Besucher sehen die Messungen
+  öffentlicher Projekte ohne Uhrzeit und Seriennamen. Der bisherige Admin-Schlüssel und alle älteren Messungen bilden
+  den Bestand des Admins, den alle Admin-Projekte sehen. Die Einstellung „Besucher dürfen Messungen sehen“ entfällt.
+- **Verlauf von Strecken** (#52): Im Strecken-Inspektor zeigt der neue Reiter „Verlauf“, wie sich der SNR einer
+  Repeater↔Repeater-Strecke über die Zeit entwickelt und wie oft jede Seite pro Tag gehört wurde. Gespeichert wird nur,
+  wenn sich etwas ändert; der automatische Abgleich frischt die Strecken der Projekt-Repeater mit auf.
+- Strecken-Inspektor (#33, teilweise): Empfänge pro Tag in beide Richtungen und ein Hinweis, dass das Zählungen sind
+  und keine Verlustrate – CoreScope liefert nicht, wie viele Adverts gesendet wurden.
+### Geändert
+- **Auswahl auf der Karte** (#51): Wer von einer Station zu einem Repeater wechselt, bekommt dessen Ansicht; Schließen
+  des Inspektors oder ein Klick in die leere Karte stellt die vorherige Ansicht wieder her.
+- **Karte bleibt stehen** (#49): Öffnen und Schließen von Seitenleiste und Inspektor verschiebt die Karte nicht mehr.
+  „Planen“ springt nur noch zur Station, wenn sie außerhalb des sichtbaren Bereichs liegt.
+
 ## 0.5.4
 ### Neu
 - **Begrüßungsseite** für neue Besucher (#44): was TerraRF ist, die fünf Bereiche, wie man anfängt – auch wie man den

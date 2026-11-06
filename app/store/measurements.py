@@ -59,6 +59,11 @@ def init():
             if col not in have:
                 c.execute(f"ALTER TABLE series ADD COLUMN {col} TEXT")
         c.execute("CREATE INDEX IF NOT EXISTS m_series ON m(series_id)")
+        # 0.5.5 (#53): measurements belong to a project; NULL = the admin's own pool (everything from before)
+        for table in ("m", "series"):
+            if "project_id" not in [r[1] for r in c.execute(f"PRAGMA table_info({table})")]:
+                c.execute(f"ALTER TABLE {table} ADD COLUMN project_id TEXT")
+        c.execute("CREATE INDEX IF NOT EXISTS m_project ON m(project_id)")
         todo = c.execute("SELECT id, ts, src, contact, power, ext_ant FROM m WHERE series_id IS NULL ORDER BY ts").fetchall()
         for r in todo:  # put old data into series afterwards
             c.execute("UPDATE m SET series_id = ? WHERE id = ?", (_series_for(c, dict(r)), r["id"]))
@@ -132,10 +137,33 @@ def _skey(r):
     return str(r.get("src") or "manual")
 
 
+class Scope:
+    """Which measurements a request may see (#53): those of the given projects, and – with ``pool`` – the admin's
+    own measurements that belong to no project. ``None`` instead of a Scope means everything (admin overview)."""
+
+    def __init__(self, projects=(), pool=False):
+        self.projects, self.pool = tuple(p for p in projects if p), bool(pool)
+
+    def sql(self, column="project_id"):
+        parts, args = [], []
+        if self.projects:
+            parts.append(f"{column} IN ({','.join('?' * len(self.projects))})")
+            args += list(self.projects)
+        if self.pool:
+            parts.append(f"{column} IS NULL")
+        return ("(" + " OR ".join(parts) + ")") if parts else "0", args
+
+
+def _where(scope, column="project_id"):
+    if scope is None:
+        return "1=1", []
+    return scope.sql(column)
+
+
 def _series_for(c, r, skey=None, values=None):
-    """Matching series (same source/device, at most 30 min apart) or a new one.
+    """Matching series (same source/device and project, at most 30 min apart) or a new one.
     values: receiver details for a new series (manual entries, #38)."""
-    skey = skey or _skey(r)
+    skey = (skey or _skey(r)) + ("@" + r["project_id"] if r.get("project_id") else "")
     ts = int(r.get("ts") or time.time())
     hit = c.execute("SELECT id, t0, t1 FROM series WHERE skey = ? AND t0 - ? <= ? AND t1 + ? >= ? ORDER BY t1 DESC LIMIT 1",
                     (skey, SERIES_GAP_S, ts, SERIES_GAP_S, ts)).fetchone()
@@ -143,20 +171,23 @@ def _series_for(c, r, skey=None, values=None):
         c.execute("UPDATE series SET t0 = MIN(t0, ?), t1 = MAX(t1, ?) WHERE id = ?", (ts, ts, hit[0]))
         return hit[0]
     ext = 1 if r.get("ext_ant") else None
-    cur = c.execute("INSERT INTO series (src, skey, t0, t1, ext_ant) VALUES (?,?,?,?,?)", (r.get("src"), skey, ts, ts, ext))
+    cur = c.execute("INSERT INTO series (src, skey, t0, t1, ext_ant, project_id) VALUES (?,?,?,?,?,?)",
+                    (r.get("src"), skey, ts, ts, ext, r.get("project_id")))
     for key, value in (values or {}).items():
         if key in SERIES_EDIT and value not in (None, ""):
             c.execute(f"UPDATE series SET {key} = ? WHERE id = ?", (value, cur.lastrowid))
     return cur.lastrowid
 
 
-def add(rows, skey=None, series_values=None):
-    """skey: put all rows into one series of their own (e.g. a CSV import); series_values: its receiver."""
+def add(rows, skey=None, series_values=None, project_id=None):
+    """skey: put all rows into one series of their own (e.g. a CSV import); series_values: its receiver;
+    project_id: the project the measurements belong to (None = the admin's pool)."""
     if not rows:
         return 0
     n = 0
     with _lock, _db() as c:
         for r in rows:
+            r["project_id"] = project_id
             if r["kind"] in ("TX", "RX") and r.get("snr_down") is not None and c.execute(
                     # MeshMapper reports an echo in the TX entry and again as its own RX – count it once
                     "SELECT 1 FROM m WHERE kind IN ('TX','RX') AND rep_prefix = ? AND snr_down = ? AND ABS(ts - ?) <= 30 "
@@ -166,8 +197,8 @@ def add(rows, skey=None, series_values=None):
             if c.execute("SELECT 1 FROM m WHERE uniq = ?", (r["uniq"],)).fetchone():
                 continue
             sid = _series_for(c, r, skey, series_values)
-            cur = c.execute(f"INSERT OR IGNORE INTO m ({','.join(COLS)},uniq,series_id) VALUES ({','.join('?' * (len(COLS) + 2))})",
-                            [r.get(k) for k in COLS] + [r["uniq"], sid])
+            cur = c.execute(f"INSERT OR IGNORE INTO m ({','.join(COLS)},uniq,series_id,project_id) "
+                            f"VALUES ({','.join('?' * (len(COLS) + 3))})", [r.get(k) for k in COLS] + [r["uniq"], sid, project_id])
             n += cur.rowcount
     return n
 
@@ -228,8 +259,9 @@ def from_csv(text):
     return rows, errs
 
 
-def query(bbox=None, pk=None, days=None, public=False, series=None):
-    sql, args = "SELECT * FROM m WHERE 1=1", []
+def query(bbox=None, pk=None, days=None, public=False, series=None, scope=None):
+    where, args = _where(scope)
+    sql = f"SELECT * FROM m WHERE {where}"
     if series:
         sql += " AND series_id = ?"
         args.append(int(series))
@@ -253,27 +285,30 @@ def query(bbox=None, pk=None, days=None, public=False, series=None):
     return rows
 
 
-def delete(ids=None, src=None, series=None):
+def delete(ids=None, src=None, series=None, scope=None):
+    """Delete by ids, series or source – only within the scope."""
+    where, sargs = _where(scope)
     n = 0
     with _lock, _db() as c:
         if ids:
-            n = c.execute(f"DELETE FROM m WHERE id IN ({','.join('?' * len(ids))})", list(ids)).rowcount
+            n = c.execute(f"DELETE FROM m WHERE id IN ({','.join('?' * len(ids))}) AND {where}", list(ids) + sargs).rowcount
         elif series:
-            n = c.execute("DELETE FROM m WHERE series_id = ?", (int(series),)).rowcount
+            n = c.execute(f"DELETE FROM m WHERE series_id = ? AND {where}", [int(series)] + sargs).rowcount
         elif src:
-            n = c.execute("DELETE FROM m WHERE src = ?", (src,)).rowcount
+            n = c.execute(f"DELETE FROM m WHERE src = ? AND {where}", [src] + sargs).rowcount
         c.execute("DELETE FROM series WHERE id NOT IN (SELECT DISTINCT series_id FROM m WHERE series_id IS NOT NULL)")
     return n
 
 
-def series_list(public=False):
+def series_list(public=False, scope=None):
     """Series with counts, period and the receiving antenna."""
+    where, args = _where(scope, "m.project_id")
     with _db() as c:
         out = []
-        for r in c.execute("""SELECT s.*, COUNT(m.id) AS n, COUNT(DISTINCT COALESCE(m.rep_pk, m.rep_prefix)) AS repeaters,
+        for r in c.execute(f"""SELECT s.*, COUNT(m.id) AS n, COUNT(DISTINCT COALESCE(m.rep_pk, m.rep_prefix)) AS repeaters,
                 MAX(m.ext_ant) AS ext_seen, MAX(m.power) AS power_seen, MAX(m.radio) AS radio_seen, MIN(m.lat) AS s_, MAX(m.lat) AS n_,
                 MIN(m.lon) AS w_, MAX(m.lon) AS e_
-                FROM series s JOIN m ON m.series_id = s.id GROUP BY s.id ORDER BY s.t1 DESC"""):
+                FROM series s JOIN m ON m.series_id = s.id WHERE {where} GROUP BY s.id ORDER BY s.t1 DESC""", args):
             d = dict(r)
             d["bounds"] = [d.pop("s_"), d.pop("w_"), d.pop("n_"), d.pop("e_")]
             d.pop("skey", None)
@@ -287,6 +322,19 @@ def series_list(public=False):
 def series_map():
     with _db() as c:
         return {r["id"]: dict(r) for r in c.execute("SELECT * FROM series")}
+
+
+def series_in_scope(sid, scope):
+    where, args = _where(scope)
+    with _db() as c:
+        return c.execute(f"SELECT 1 FROM series WHERE id = ? AND {where}", [int(sid)] + args).fetchone() is not None
+
+
+def reassign_project(project_id, to=None):
+    """Measurements of a deleted project go to the admin's pool instead of being lost."""
+    with _lock, _db() as c:
+        c.execute("UPDATE m SET project_id = ? WHERE project_id = ?", (to, project_id))
+        c.execute("UPDATE series SET project_id = ? WHERE project_id = ?", (to, project_id))
 
 
 def update_series(sid, d):
@@ -316,10 +364,11 @@ def update_series(sid, d):
         return c.execute(f"UPDATE series SET {', '.join(k + ' = ?' for k in vals)} WHERE id = ?", [*vals.values(), int(sid)]).rowcount
 
 
-def stats():
+def stats(scope=None):
+    where, args = _where(scope)
     with _db() as c:
-        r = c.execute("SELECT COUNT(*), MIN(ts), MAX(ts), COUNT(DISTINCT rep_pk) FROM m").fetchone()
-        by = {s: n for s, n in c.execute("SELECT src, COUNT(*) FROM m GROUP BY src")}
+        r = c.execute(f"SELECT COUNT(*), MIN(ts), MAX(ts), COUNT(DISTINCT rep_pk) FROM m WHERE {where}", args).fetchone()
+        by = {s: n for s, n in c.execute(f"SELECT src, COUNT(*) FROM m WHERE {where} GROUP BY src", args)}
     return {"count": r[0], "first": r[1], "last": r[2], "repeaters": r[3], "by_source": by}
 
 

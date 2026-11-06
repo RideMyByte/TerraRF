@@ -56,7 +56,7 @@ let inspectorState = null;   // {kind, id, tabs, render, onClose}
 export function showInspector({ kind, key, title, tabs, tab, onClose }) {
   const sameObject = inspectorState && inspectorState.key === key;
   const activeTab = tab || (sameObject ? inspectorState.tab : null) || tabs[0].id;
-  if (inspectorState && !sameObject && inspectorState.onClose) inspectorState.onClose();
+  if (inspectorState && !sameObject && inspectorState.onClose) inspectorState.onClose({ switching: true });
   inspectorState = { kind, key, tabs, tab: activeTab, onClose };
   const head = $("inspectorHead");
   head.innerHTML = `<div style="flex:1;min-width:0"><div class="kind">${escapeHtml(kind)}</div><div class="title"></div></div>
@@ -67,10 +67,25 @@ export function showInspector({ kind, key, title, tabs, tab, onClose }) {
   const nav = $("inspectorTabs");
   nav.innerHTML = tabs.length > 1 ? tabs.map((x) => `<button data-tab="${x.id}" class="${x.id === activeTab ? "active" : ""}">${escapeHtml(x.label)}</button>`).join("") : "";
   nav.querySelectorAll("button").forEach((b) => b.onclick = () => showInspector({ kind, key, title, tabs, tab: b.dataset.tab, onClose }));
-  $("inspector").classList.remove("hidden");
-  if (isPhone()) document.body.classList.remove("sheet-open");
+  keepMapInPlace(() => {
+    $("inspector").classList.remove("hidden");
+    if (isPhone()) document.body.classList.remove("sheet-open");
+  });
   renderInspectorTab();
-  setTimeout(() => window.dispatchEvent(new Event("resize")), 30);   // map width changed
+}
+
+/**
+ * #49: when the inspector or a panel opens or closes, the map gets narrower or wider. Without care Leaflet keeps
+ * the centre, so everything on the map jumps sideways. Here the map content keeps its place on the screen: the
+ * map module resizes without panning and shifts by however far the map's left edge moved.
+ */
+export function keepMapInPlace(change) {
+  const before = $("map").getBoundingClientRect();
+  change();
+  requestAnimationFrame(() => {
+    const after = $("map").getBoundingClientRect();
+    if (after.width !== before.width || after.left !== before.left) emit("map-layout", { dx: after.left - before.left, dy: after.top - before.top });
+  });
 }
 
 /** Re-render the current tab (after data changed). */
@@ -88,9 +103,8 @@ export function closeInspector() {
   if (!inspectorState) return;
   const done = inspectorState.onClose;
   inspectorState = null;
-  $("inspector").classList.add("hidden");
-  if (done) done();
-  setTimeout(() => window.dispatchEvent(new Event("resize")), 30);
+  keepMapInPlace(() => $("inspector").classList.add("hidden"));
+  if (done) done({ switching: false });
 }
 
 // ---------------------------------------------------------------- wiring
