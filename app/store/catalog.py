@@ -84,6 +84,18 @@ SEED = {
          "source": "issue #29"},
         {"id": "handheld-raised", "name": "In the hand, raised", "height_m": 1.8, "extra_loss_db": 0.0, "gain_bonus_db": 0.0,
          "source": "typical"},
+        # 0.5.1 (#39)
+        {"id": "in-car", "name": "Inside the car", "height_m": 1.2, "extra_loss_db": 9.0, "gain_bonus_db": 0.0, "since": "0.5.1",
+         "note": "car penetration loss: mean 9 dB, standard deviation 5 dB; metallised windows about 20 dB",
+         "source": "3GPP TR 38.901 §7.4.3.2 (O2I car penetration loss)"},
+        {"id": "trouser-pocket", "name": "Trouser pocket", "height_m": 0.9, "extra_loss_db": 4.0, "gain_bonus_db": 0.0, "since": "0.5.1",
+         "note": "assumption like the jacket pocket; with the body between device and repeater the loss can be much higher "
+                 "(around 20 dB measured for a waist-worn 868 MHz LoRa node)",
+         "source": "assumption; body shadowing: waist-worn LoRa study, core.ac.uk/download/287021925.pdf"},
+        {"id": "backpack-top", "name": "Backpack, top / shoulder strap", "height_m": 1.5, "extra_loss_db": 1.0, "gain_bonus_db": 0.0,
+         "since": "0.5.1", "note": "antenna above the shoulder, little body shadowing", "source": "assumption"},
+        {"id": "backpack-inside", "name": "Backpack, inside", "height_m": 1.2, "extra_loss_db": 4.0, "gain_bonus_db": 0.0,
+         "since": "0.5.1", "note": "body on one side, contents of the backpack around it", "source": "assumption"},
     ],
 }
 
@@ -99,17 +111,36 @@ FIELDS = {
 _data = None
 
 
+def _seed_items():
+    return [(kind, item) for kind in KINDS for item in SEED[kind]]
+
+
 def _load():
+    """Read the catalog; on first start write the seed. Seed entries added in later versions (``since``) are
+    added once to existing catalogs – ``_seeded`` remembers which ids were offered, so entries the admin
+    deleted do not come back."""
     global _data
     if _data is None:
         try:
             with open(PATH) as f:
                 d = json.load(f)
         except (OSError, ValueError):
-            d = json.loads(json.dumps(SEED))
-            _write(d)
+            d = {}
         for k in KINDS:
             d.setdefault(k, [])
+        if "_seeded" not in d:
+            # files from 0.5.0 know only the original seed
+            d["_seeded"] = [item["id"] for _, item in _seed_items() if "since" not in item] if any(d[k] for k in KINDS) else []
+        changed = False
+        for kind, item in _seed_items():
+            if item["id"] in d["_seeded"]:
+                continue
+            if not any(x["id"] == item["id"] for x in d[kind]):
+                d[kind].append({k: v for k, v in item.items() if k != "since"})
+            d["_seeded"].append(item["id"])
+            changed = True
+        if changed:
+            _write(d)
         _data = d
     return _data
 
@@ -123,7 +154,7 @@ def _write(d):
 
 def all_items():
     with _lock:
-        return json.loads(json.dumps(_load()))
+        return {k: json.loads(json.dumps(_load()[k])) for k in KINDS}
 
 
 def get(kind, item_id):

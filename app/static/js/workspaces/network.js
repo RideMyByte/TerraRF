@@ -42,9 +42,9 @@ export async function renderNetwork() {
           <label>${t("min. SNR")} <b id="vSnr">${f.minSnr <= -21 ? t("off") : f.minSnr + " dB"}</b><input type="range" id="fSnr" min="-21" max="15" value="${f.minSnr}"></label>
         </div>
         <table class="mini clickable"><tr><th>${t("Repeater")}</th><th>km</th><th>SNR</th><th title="${escapeHtml(t("heard by the neighbour / from the neighbour"))}">→/←</th><th>${t("last")}</th></tr>
-        ${links.map((l) => `<tr data-pk="${escapeHtml(l.pk)}"><td>${escapeHtml(l.name || l.pk.slice(0, 8))}</td><td>${fmt(l.distance_km, 1)}</td>
+        ${links.map((l) => `<tr data-pk="${escapeHtml(l.pk)}"><td class="ellipsis" title="${escapeHtml(l.name || l.pk)}">${escapeHtml(l.name || l.pk.slice(0, 8))}</td><td>${fmt(l.distance_km, 1)}</td>
           <td style="color:${snrColor(l.snr ?? l.snr_any)}">${l.snr != null ? fmt(l.snr, 1) : l.snr_any != null ? `<i>${fmt(l.snr_any, 1)}</i>` : "–"}</td>
-          <td style="white-space:nowrap">${l.they_hear}/${l.we_hear}</td><td>${l.last_seen ? fmtAgo(l.last_seen) : "–"}</td></tr>`).join("") || `<tr><td colspan="5" class="muted">${t("No neighbour matches the filters.")}</td></tr>`}</table>
+          <td style="white-space:nowrap">${l.they_hear}/${l.we_hear}</td><td>${l.last_seen ? fmtAgo(l.last_seen) : "–"}</td></tr>`).join("") || `<tr><td colspan="5" class="muted wrap">${t("No neighbour matches the filters.")}</td></tr>`}</table>
         <p class="muted">${t("Upright: SNR directly reported (zero hop). Italic: from packet paths, uncertain. Tap a row for the link details and profile.")}</p>
         <button id="btnClearNb">${t("Hide neighbours")}</button>`}`;
   const sync = el.querySelector("#btnSync");

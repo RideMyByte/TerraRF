@@ -10,7 +10,7 @@ from fastapi import APIRouter, Body, HTTPException, Request
 from ..model import coverage
 from ..site import auth
 from ..store import projects
-from .deps import ADMIN, MEMBER, READ, visible_project
+from .deps import MEMBER, READ, visible_project
 
 router = APIRouter()
 log = logging.getLogger("terrarf.api.projects")
@@ -18,7 +18,7 @@ log = logging.getLogger("terrarf.api.projects")
 
 @router.get("/api/projects", dependencies=READ)
 def list_projects(request: Request):
-    return projects.list_all(include_private=auth.is_admin(request))
+    return projects.list_all(auth.role(request))
 
 
 @router.get("/api/projects/{project_id}")
@@ -31,15 +31,17 @@ def get_project(request: Request, project_id: str):
 
 @router.put("/api/projects/{project_id}", dependencies=MEMBER)
 def save_project(request: Request, project_id: str, project: dict = Body(...)):
+    """Create or replace a project. The owner is set by the server: whoever creates a project owns it (#32)."""
     if not projects.valid_id(project_id):
         raise HTTPException(400, "ungültige Projekt-ID")
-    if not auth.is_admin(request):
-        if not projects.exists(project_id):
-            raise HTTPException(403, "Neue Projekte darf nur der Admin anlegen")
+    role = auth.role(request)
+    if projects.exists(project_id):
         stored = projects.load(project_id)
-        if not stored.get("public"):
-            raise HTTPException(404, "Projekt nicht gefunden")
-        project = projects.merge_user_changes(stored, project)
+        if not projects.can_edit(role, stored):
+            raise HTTPException(403, "Dieses Projekt darf nur sein Ersteller oder der Admin ändern")
+        project["owner"] = projects.owner(stored)
+    else:
+        project["owner"] = role
     saved = projects.save(project_id, project)
     if saved.get("public"):
         threading.Thread(target=_precompute, args=(saved,), daemon=True).start()
@@ -56,15 +58,19 @@ def _precompute(project):
         log.warning("precomputing %s failed: %s", project.get("id"), e)
 
 
-@router.delete("/api/projects/{project_id}", dependencies=ADMIN)
-def delete_project(project_id: str):
+@router.delete("/api/projects/{project_id}", dependencies=MEMBER)
+def delete_project(request: Request, project_id: str):
     try:
+        if not projects.can_edit(auth.role(request), projects.load(project_id)):
+            raise HTTPException(403, "Dieses Projekt darf nur sein Ersteller oder der Admin löschen")
         projects.delete(project_id)
+    except projects.NotFound:
+        raise HTTPException(404, "Projekt nicht gefunden")
     except ValueError as e:
         raise HTTPException(400, str(e))
     return {"ok": True}
 
 
-@router.get("/api/newid", dependencies=ADMIN)
+@router.get("/api/newid", dependencies=MEMBER)
 def new_id():
     return {"id": uuid.uuid4().hex[:12]}

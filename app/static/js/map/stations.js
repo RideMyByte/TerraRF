@@ -4,7 +4,7 @@
  */
 import { t } from "../core/i18n.js";
 import { $, bearing, destinationPoint, randomId } from "../core/util.js";
-import { state, emit, canEditStation, isUser, stationById } from "../core/state.js";
+import { state, emit, canEditStation, stationById } from "../core/state.js";
 import { map, metresPerPixel } from "./map.js";
 
 export const RADIO_PRESETS = {
@@ -26,7 +26,13 @@ const STATION_COLOURS = ["#e6194b", "#3cb44b", "#4363d8", "#f58231", "#911eb4", 
 export function sensitivityDbm(st) {
   if (st.sens_override_dbm !== null && st.sens_override_dbm !== "" && st.sens_override_dbm !== undefined) return +st.sens_override_dbm;
   const snr = st.mode === "lora" ? (LORA_REQUIRED_SNR[st.sf] ?? -17.5) : +(st.req_snr_db ?? 10);
-  return -174 + 10 * Math.log10(st.bw_khz * 1000) + (+st.nf_db || 6) + snr;
+  return noiseFloorDbm(st) + snr;
+}
+
+/** Noise at the station's receiver: a measured average if entered (#37), else thermal noise + noise figure. */
+export function noiseFloorDbm(st) {
+  if (st.noise_floor_dbm !== null && st.noise_floor_dbm !== "" && st.noise_floor_dbm !== undefined) return +st.noise_floor_dbm;
+  return -174 + 10 * Math.log10(st.bw_khz * 1000) + (+st.nf_db || 6);
 }
 
 /** Vertical beam width estimated from the gain when the data sheet gives none. */
@@ -55,7 +61,7 @@ export function newStation(lat, lon) {
   };
   if (!previous) { const st = { antenna: {} }; applyCatalogAntenna(st, "collinear-5.8"); template.antenna = st.antenna.type ? st.antenna : { type: "omni", gain_dbi: 5.8 }; }
   delete template.corescope_pk;
-  if (isUser()) template.owner = "user"; else delete template.owner;
+  delete template.owner;   // stations follow their project (#32); old files may still carry it
   const n = stations.length;
   return { ...template, id: randomId(), name: t("Station {n}", { n: n + 1 }), color: STATION_COLOURS[n % STATION_COLOURS.length],
     enabled: true, lat: +lat.toFixed(6), lon: +lon.toFixed(6), notes: "" };

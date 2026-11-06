@@ -46,3 +46,22 @@ def test_named_imports_exist():
 def test_index_loads_the_entry_module():
     html = (STATIC / "index.html").read_text(encoding="utf-8")
     assert 'type="module" src="/static/js/main.js' in html
+
+
+def test_used_functions_are_imported():
+    """A function exported by another module and called here must be imported or defined here."""
+    exports = {p.resolve(): _exports(p) for p in MODULES}
+    problems = []
+    for path in MODULES:
+        text = path.read_text(encoding="utf-8")
+        local = set(re.findall(r"(?:function|const|let|var|class)\s+([\w$]+)", text))
+        local |= {x.strip().split(" as ")[-1] for names, _ in IMPORT.findall(text) for x in names.split(",")}
+        local |= set(re.findall(r"\(([\w$]+)\)\s*=>", text)) | set(re.findall(r"([\w$]+)\s*=>", text))
+        code = re.sub(r"//[^\n]*|/\*.*?\*/", "", text, flags=re.S)
+        for other, names in exports.items():
+            if other == path.resolve():
+                continue
+            for name in names:
+                if name not in local and re.search(r"(?<![\w$.])" + re.escape(name) + r"\(", code):
+                    problems.append(f"{path.name}: calls {name}() from {other.name} without importing it")
+    assert not problems, sorted(set(problems))

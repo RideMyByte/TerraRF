@@ -4,15 +4,15 @@
  */
 import { t } from "./core/i18n.js";
 import { $, escapeHtml, fmt, signed, fmtAgo, fmtDateTime, distanceKm, snrColor, html } from "./core/util.js";
-import { state, emit, on, canEditAny, canEditStation, isAdmin, stationById, stationOfRepeater, settings } from "./core/state.js";
+import { state, emit, on, isMember, canEditProject, canEditStation, isAdmin, stationById, stationOfRepeater, settings } from "./core/state.js";
 import { api } from "./core/api.js";
 import { showInspector, closeInspector, renderInspectorTab, inspectorKey, section, rememberSections, status, sourceBadge, sourceName, openWorkspace } from "./core/ui.js";
 import { map } from "./map/map.js";
-import { RADIO_PRESETS, LORA_REQUIRED_SNR, sensitivityDbm, estimatedVerticalBeamwidth, applyCatalogAntenna, drawStation, removeStationMarker, startPlacing, newStation, withoutLabel } from "./map/stations.js";
+import { RADIO_PRESETS, LORA_REQUIRED_SNR, sensitivityDbm, noiseFloorDbm, estimatedVerticalBeamwidth, applyCatalogAntenna, drawStation, removeStationMarker, startPlacing, newStation, withoutLabel } from "./map/stations.js";
 import { compute, resultsByStation, sampleStation, setSolo, view, requiredMargin } from "./map/coverage.js";
 import { showProfile } from "./profile.js";
 import { net, nodeByPk, linkTo, snrText, showNeighbours, clearNetworkSelection, setFocus, loadMeta, saveOverride, nearbyNodes, repeaterName, enabled as networkEnabled, nodePosition } from "./network.js";
-import { meas, seriesById, seriesName, receiverText, loadMeasurements, focusSeries } from "./measurements.js";
+import { meas, seriesById, seriesName, receiverText, receiverFor, loadMeasurements, focusSeries } from "./measurements.js";
 import { exportPdf } from "./workspaces/report.js";
 
 // ================================================================ station
@@ -51,7 +51,7 @@ function stationOverview(body, st) {
       ${(result.warnings || []).map((w) => `<div class="warn">⚠ ${escapeHtml(w)}</div>`).join("")}`
       : `<div class="muted">${t("Not computed yet.")}</div>`}
     <div class="actions">
-      ${st.enabled !== false && canEditAny() ? `<button data-a="run" class="primary">▶ ${t("Compute")}</button>` : ""}
+      ${st.enabled !== false && isMember() ? `<button data-a="run" class="primary">▶ ${t("Compute")}</button>` : ""}
       <button data-a="solo">${view.soloStationId === st.id ? t("Show all stations") : t("Only this station")}</button>
       <button data-a="pdf">PDF</button>
       ${st.corescope_pk ? `<button data-a="compare">${t("Compare with measurements")}</button>` : ""}
@@ -110,7 +110,9 @@ function stationSettings(body, st) {
           : `<label>${t("Required SNR (dB)")}<input type="number" step="0.5" data-k="req_snr_db" value="${st.req_snr_db ?? 10}"></label>`}
         <label>${t("Noise figure Rx (dB)")}<input type="number" step="0.5" data-k="nf_db" value="${st.nf_db ?? 6}"></label>
         <label>${t("Fixed sensitivity (dBm)")}<input type="number" step="0.5" data-k="sens_override_dbm" value="${st.sens_override_dbm ?? ""}" placeholder="auto"></label>
-      </div>`, `${fmt(st.freq_mhz, 3)} MHz · ${fmt(st.tx_power_dbm, 0)} dBm`)}
+        <label title="${escapeHtml(t("Average noise the station's receiver sees, e.g. from the repeater's statistics. Replaces the thermal noise and the global noise rise for this station."))}">${t("Measured noise floor (dBm)")}<input type="number" step="1" data-k="noise_floor_dbm" value="${st.noise_floor_dbm ?? ""}" placeholder="${escapeHtml(t("thermal {v}", { v: fmt(noiseFloorDbm({ ...st, noise_floor_dbm: null }), 0) }))}"></label>
+      </div>
+      <p class="muted">${t("The noise floor counts where this station receives: its sensitivity on the map, and in the comparison the SNR it reports itself about other repeaters.")}</p>`, `${fmt(st.freq_mhz, 3)} MHz · ${fmt(st.tx_power_dbm, 0)} dBm`)}
     ${section("ant", t("Antenna"), `
       <label>${t("From the catalog")}<select id="antennaCatalog"><option value="">${t("– custom values –")}</option>${antennas.map((x) => option(x.id, `${x.name} (${fmt(x.gain_dbi, 1)} dBi)`, a.catalog_id)).join("")}</select></label>
       <div class="grid2">
@@ -316,19 +318,21 @@ export function inspectLink(centrePk, partnerPk) {
 function openLinkProfile(centreStation, partnerStation, link) {
   if (partnerStation) { showProfile(centreStation.id, null, { rxStationId: partnerStation.id }); return; }
   const own = net.overrides[link.pk] || {};
-  showProfile(centreStation.id, L.latLng(link.lat, link.lon), { rx: { h: own.height_m ?? 10, g: own.gain_dbi ?? 3, c: 1, label: link.name || link.pk.slice(0, 8) } });
+  showProfile(centreStation.id, L.latLng(link.lat, link.lon), { rx: { h: own.height_m ?? 10, g: own.gain_dbi ?? 3, c: 1, label: link.name || link.pk.slice(0, 8) }, repeaterPk: link.pk });
 }
 
 // ================================================================ measurement ping (#27)
 export function inspectPing(ping) {
   const best = ping.rows[0], series = seriesById(best.series_id);
+  openPingProfile(ping, best);   // like a link: the profile opens right away
   showInspector({ kind: t("Measurement"), key: "ping:" + ping.key, title: `${sourceName(best.src)} · ${best.ts ? fmtDateTime(best.ts) : ""}`,
     tabs: [{ id: "overview", label: t("Overview"), render: (body) => {
       const kinds = { DISC: t("discovery (DISC, direct answer)"), TRACE: "Trace", TX: t("echo of own ping (TX)"), RX: t("received packet (RX)"), MANUAL: t("manual entry"), CSV: "CSV" };
       const cmp = (r) => meas.comparison?.[r.id];
       body.innerHTML = `
         <h4>${t("Heard by {n} repeater(s)", { n: ping.rows.length })}</h4>
-        <div class="ping-reps">${ping.rows.map((r) => `<div class="rep"><a data-pk="${escapeHtml(r.rep_pk || "")}">${escapeHtml(repeaterName(r.rep_pk, r.rep_prefix))}</a>
+        <div class="ping-reps">${ping.rows.map((r, i) => `<div class="rep"><span><a data-pk="${escapeHtml(r.rep_pk || "")}">${escapeHtml(repeaterName(r.rep_pk, r.rep_prefix))}</a>
+          ${r.rep_pk ? `<button class="small" data-prof="${i}" title="${escapeHtml(t("Profile"))}">⛰</button>` : ""}</span>
           <span><b style="color:${snrColor(r.snr_down)}">${r.snr_down != null ? fmt(r.snr_down, 1) + " dB" : "–"}</b>${r.rssi_down != null ? ` · ${fmt(r.rssi_down, 0)} dBm` : ""}${cmp(r)?.delta_db != null && !cmp(r).saturated ? ` · Δ ${signed(cmp(r).delta_db)}` : ""}</span></div>`).join("")}</div>
         <table class="kv" style="margin-top:8px">
           <tr><td>${t("Source")}</td><td>${sourceBadge(best.src)} ${escapeHtml(sourceName(best.src))}</td></tr>
@@ -342,9 +346,17 @@ export function inspectPing(ping) {
           ${series ? `<tr><td>${t("Series")}</td><td>${escapeHtml(seriesName(series))}<br><span class="muted">${escapeHtml(receiverText(series))}</span></td></tr>` : ""}
           ${best.note ? `<tr><td>${t("Note")}</td><td>${escapeHtml(best.note)}</td></tr>` : ""}
           ${cmp(best)?.predicted_snr != null ? `<tr><td>${t("Model")}</td><td>SNR ${fmt(cmp(best).predicted_snr, 1)} dB · RSSI ${fmt(cmp(best).predicted_rssi, 0)} dBm</td></tr>` : ""}
+          <tr><td>${t("Receiver")}</td><td>${escapeHtml(receiverSummary(receiverFor(best, series)))}</td></tr>
+          ${isMember() ? `<tr><td>${t("Terrain / surface")}</td><td data-elev><span class="muted">${t("loading")}</span></td></tr>` : ""}
         </table>
+        <p class="muted">${t("Tap a repeater name for its details; the profile shows the path from the strongest repeater (tap ⛰ for another one).")}</p>
         <div class="actions">${series ? `<button data-a="series">${t("Show series")}</button>` : ""}${isAdmin() ? `<button data-a="delete" class="danger">${t("Delete measurement")}</button>` : ""}</div>`;
       body.querySelectorAll("[data-pk]").forEach((a) => a.onclick = () => { if (a.dataset.pk) inspectRepeater(a.dataset.pk); });
+      body.querySelectorAll("[data-prof]").forEach((b) => b.onclick = () => openPingProfile(ping, ping.rows[+b.dataset.prof]));
+      const elev = body.querySelector("[data-elev]");
+      if (elev) api("/api/elevation", { method: "POST", body: { project: state.project, lat: ping.lat, lon: ping.lon } })
+        .then((r) => { elev.textContent = t("{g} m above sea level · objects {o} m high", { g: fmt(r.ground_m, 1), o: fmt(Math.max(0, r.surface_m - r.ground_m), 1) }); })
+        .catch(() => { elev.textContent = "–"; });
       const s = body.querySelector('[data-a="series"]');
       if (s) s.onclick = () => { focusSeries(series.id); openWorkspace("measure"); };
       const del = body.querySelector('[data-a="delete"]');
@@ -356,13 +368,35 @@ export function inspectPing(ping) {
     } }] });
 }
 
+const receiverSummary = (r) => `${fmt(r.h, 1)} m · ${fmt(r.g, 1)} dBi${r.c ? ` · −${fmt(r.c, 1)} dB` : ""}`;
+
+/**
+ * Profile from the repeater that heard a ping to the place of the ping, with the receiver of its series.
+ * A repeater that is not a station of the project is computed as a temporary station (members only):
+ * radio values like the last station, height and gain from the values entered for the repeater, else assumptions.
+ */
+function openPingProfile(ping, row) {
+  if (!row?.rep_pk) return;
+  const rx = { ...receiverFor(row, seriesById(row.series_id)), label: t("measurement point") };
+  const station = stationOfRepeater(row.rep_pk);
+  if (station) { showProfile(station.id, L.latLng(ping.lat, ping.lon), { rx }); return; }
+  const node = nodeByPk(row.rep_pk) || linkTo(row.rep_pk);
+  if (!node || !isMember()) { status(t("A profile needs the repeater as a station of the project.")); return; }
+  const own = net.overrides[row.rep_pk] || {};
+  const temporary = newStation(node.lat, node.lon);
+  Object.assign(temporary, { id: "tmp-" + row.rep_pk.slice(0, 12), name: node.name || row.rep_pk.slice(0, 8), corescope_pk: row.rep_pk,
+    height_m: own.height_m ?? 10, height_ref: "ground" });
+  if (own.gain_dbi != null) temporary.antenna = { ...temporary.antenna, gain_dbi: own.gain_dbi, catalog_id: undefined };
+  showProfile(temporary.id, L.latLng(ping.lat, ping.lon), { rx, txStation: temporary });
+}
+
 // ================================================================ map location (right click / long press)
 let locationMarker = null;
 export function inspectLocation(latlng) {
   if (locationMarker) map.removeLayer(locationMarker);
   locationMarker = L.circleMarker(latlng, { radius: 6, color: "#111827", weight: 2, fillColor: "#fff", fillOpacity: 1, interactive: false }).addTo(map);
   const tabs = [{ id: "levels", label: t("Levels"), render: (b) => locationLevels(b, latlng) }];
-  if (canEditAny()) tabs.push({ id: "measure", label: t("Enter measurement"), render: (b) => locationMeasurement(b, latlng) });
+  if (isMember()) tabs.push({ id: "measure", label: t("Enter measurement"), render: (b) => locationMeasurement(b, latlng) });
   showInspector({ kind: t("Location"), key: `loc:${latlng.lat.toFixed(5)},${latlng.lng.toFixed(5)}`, title: `${latlng.lat.toFixed(5)}, ${latlng.lng.toFixed(5)}`, tabs,
     onClose: () => { if (locationMarker) { map.removeLayer(locationMarker); locationMarker = null; } } });
 }
@@ -373,12 +407,12 @@ function locationLevels(body, latlng) {
   body.innerHTML = `<table class="mini"><tr><th>${t("Station")}</th><th>km</th><th>dBm</th><th>${t("Margin")}</th><th></th></tr>
     ${stations.map((s) => {
       const v = sampleStation(s.id, latlng.lat, latlng.lng);
-      return `<tr><td><span style="color:${escapeHtml(s.color)}">●</span> ${escapeHtml(s.name)}</td><td>${fmt(distanceKm(s.lat, s.lon, latlng.lat, latlng.lng), 2)}</td>
+      return `<tr><td class="ellipsis" title="${escapeHtml(s.name)}"><span style="color:${escapeHtml(s.color)}">●</span> ${escapeHtml(s.name)}</td><td>${fmt(distanceKm(s.lat, s.lon, latlng.lat, latlng.lng), 2)}</td>
         <td>${v ? fmt(v.prx, 0) : v === null ? t("outside") : "–"}</td><td class="${v && v.margin >= req ? "ok" : "no"}">${v ? signed(v.margin, 0) : ""}</td>
         <td><button class="small" data-prof="${s.id}">${t("Profile")}</button></td></tr>`;
     }).join("") || `<tr><td colspan="5">${t("No active station.")}</td></tr>`}</table>
     <p class="muted">${t("Line of sight per station in the profile.")}</p>
-    ${canEditAny() ? `<div class="actions"><button data-a="place">＋ ${t("Place station here")}</button></div>` : ""}`;
+    ${canEditProject() ? `<div class="actions"><button data-a="place">＋ ${t("Place station here")}</button></div>` : ""}`;
   body.querySelectorAll("[data-prof]").forEach((b) => b.onclick = () => showProfile(b.dataset.prof, latlng));
   const place = body.querySelector('[data-a="place"]');
   if (place) place.onclick = () => {
@@ -391,26 +425,49 @@ function locationLevels(body, latlng) {
 
 function locationMeasurement(body, latlng) {
   const near = nearbyNodes(latlng.lat, latlng.lng, 30, 40);
+  const d = settings();
+  const options = (list) => `<option value="">${t("– not set –")}</option>` + list.map((x) => `<option value="${escapeHtml(x.id)}">${escapeHtml(x.name)}</option>`).join("");
   body.innerHTML = `<p class="muted">${t("Enter a measurement taken here, e.g. from a handheld's neighbour list.")}</p>
     <label>${t("Repeater")}<select data-k="rep">${near.map(({ node, km }) => `<option value="${escapeHtml(node.pk)}">${escapeHtml(node.name)} (${fmt(km, 1)} km)</option>`).join("")}<option value="">${t("other (enter prefix) …")}</option></select></label>
     <label class="${near.length ? "hidden" : ""}" data-other>${t("Hex prefix or key")}<input data-k="rep2" placeholder="a3f1"></label>
     <div class="grid2"><label>${t("SNR at the handheld (dB)")}<input data-k="snr_down" type="number" step="0.25"></label>
       <label>${t("SNR at the repeater (dB, optional)")}<input data-k="snr_up" type="number" step="0.25"></label>
-      <label>${t("RSSI (dBm, optional)")}<input data-k="rssi" type="number" step="1"></label>
-      <label>${t("Antenna height (m, optional)")}<input data-k="rx_h" type="number" step="0.5"></label></div>
-    <label>${t("Note")}<input data-k="note" maxlength="300"></label>
+      <label>${t("RSSI (dBm, optional)")}<input data-k="rssi" type="number" step="1"></label></div>
+    <h4>${t("Receiver")}</h4>
+    <div class="grid2">
+      <label>${t("Device")}<select data-k="device_id">${options(state.catalog.devices)}</select></label>
+      <label>${t("Placement")}<select data-k="placement_id">${options(state.catalog.placements)}</select></label>
+      <label>${t("Antenna height above ground (m)")} *<input data-k="rx_h" type="number" step="0.1" min="0" max="300" required></label>
+      <label>${t("Antenna gain (dBi)")}<input data-k="rx_gain_dbi" type="number" step="0.1" placeholder="${fmt(d.rx_gain_dbi, 1)}"></label>
+      <label>${t("Cable / body loss (dB)")}<input data-k="rx_cable_db" type="number" step="0.5" min="0" placeholder="${fmt(d.rx_cable_db, 1)}"></label>
+      <label>${t("Transmit power (dBm)")}<input data-k="power" type="number" step="1" min="-10" max="40"></label>
+    </div>
+    <label class="chk"><input data-k="ext_ant" type="checkbox"> ${t("external antenna (e.g. on the car roof)")}</label>
+    <label>${t("Note")}<input data-k="note" maxlength="300" placeholder="${escapeHtml(t("e.g. indoors, behind a window, line of sight"))}"></label>
+    <p class="muted">${t("Device and placement fill in height, gain and loss; change them if you know better. Entries with the same receiver within 30 minutes form one series.")}</p>
     <div class="actions"><button class="primary" data-a="save">${t("Save")}</button></div><div class="muted" data-out></div>`;
   const field = (k) => body.querySelector(`[data-k="${k}"]`);
   field("rep").onchange = () => body.querySelector("[data-other]").classList.toggle("hidden", !!field("rep").value);
+  const fillFromCatalog = () => {
+    const r = receiverFor(null, { device_id: field("device_id").value, placement_id: field("placement_id").value });
+    const plc = state.catalog.placements.find((x) => x.id === field("placement_id").value);
+    const dev = state.catalog.devices.find((x) => x.id === field("device_id").value);
+    if (plc?.height_m != null) field("rx_h").value = plc.height_m;
+    if (dev || plc?.gain_bonus_db) field("rx_gain_dbi").value = r.g;
+    if (dev?.cable_db != null || plc?.extra_loss_db != null) field("rx_cable_db").value = r.c;
+  };
+  field("device_id").onchange = fillFromCatalog; field("placement_id").onchange = fillFromCatalog;
   body.querySelector('[data-a="save"]').onclick = async () => {
-    const payload = { lat: latlng.lat, lon: latlng.lng, rep: field("rep").value || field("rep2").value.trim() };
-    for (const k of ["snr_down", "snr_up", "rssi", "rx_h"]) if (field(k).value !== "") payload[k] = +field(k).value;
-    if (field("note").value) payload.note = field("note").value;
+    const out = body.querySelector("[data-out]");
+    if (field("rx_h").value === "") { out.textContent = t("Please enter the antenna height above ground."); field("rx_h").focus(); return; }
+    const payload = { lat: latlng.lat, lon: latlng.lng, rep: field("rep").value || field("rep2").value.trim(), ext_ant: field("ext_ant").checked };
+    for (const k of ["snr_down", "snr_up", "rssi", "rx_h", "rx_gain_dbi", "rx_cable_db", "power"]) if (field(k).value !== "") payload[k] = +field(k).value;
+    for (const k of ["device_id", "placement_id", "note"]) if (field(k).value) payload[k] = field(k).value;
     try {
       await api("/api/measurements", { method: "POST", body: payload });
-      body.querySelector("[data-out]").textContent = t("Saved.");
+      out.textContent = t("Saved.");
       meas.show.points = true; loadMeasurements();
-    } catch (e) { body.querySelector("[data-out]").textContent = t("Error: {msg}", { msg: e.message }); }
+    } catch (e) { out.textContent = t("Error: {msg}", { msg: e.message }); }
   };
 }
 

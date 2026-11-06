@@ -7,7 +7,7 @@
  */
 import { t } from "./core/i18n.js";
 import { escapeHtml, fmt, signed, snrColor, deltaColor, fmtDateTime } from "./core/util.js";
-import { state, on, emit, canEditAny } from "./core/state.js";
+import { state, on, emit, isMember } from "./core/state.js";
 import { api } from "./core/api.js";
 import { sourceBadge, sourceName } from "./core/ui.js";
 import { map, registerLayerSection, refreshLayersPanel } from "./map/map.js";
@@ -36,15 +36,32 @@ export function seriesName(s) {
   return `${sourceName(s.src)}${s.t0 ? " " + fmtDateTime(s.t0) : ""}`;
 }
 
-/** Receiver of a series in words: height, gain, device and placement. */
-export function receiverText(s) {
+/**
+ * Receiver of one measurement row – same precedence as the server's comparison:
+ * height in the row > values of its series > device/placement from the catalog > global receiver.
+ */
+export function receiverFor(row, s) {
   const d = state.config?.defaults || {};
+  const dev = s && state.catalog.devices.find((x) => x.id === s.device_id);
+  const plc = s && state.catalog.placements.find((x) => x.id === s.placement_id);
+  let deviceGain = dev?.antenna_gain_dbi ?? (dev?.antenna_id ? state.catalog.antennas.find((a) => a.id === dev.antenna_id)?.gain_dbi : null);
+  if (deviceGain != null && plc?.gain_bonus_db) deviceGain += plc.gain_bonus_db;
+  const profileLoss = dev?.cable_db != null || plc?.extra_loss_db != null ? (dev?.cable_db || 0) + (plc?.extra_loss_db || 0) : null;
+  return {
+    h: row?.rx_h ?? s?.rx_h ?? plc?.height_m ?? d.rx_height_m,
+    g: s?.rx_gain_dbi ?? deviceGain ?? d.rx_gain_dbi,
+    c: s?.rx_cable_db ?? profileLoss ?? d.rx_cable_db,
+  };
+}
+
+/** Receiver of a series in words: height, gain, loss, device and placement. */
+export function receiverText(s) {
   if (!s) return t("global receiver");
   const dev = state.catalog.devices.find((x) => x.id === s.device_id);
   const plc = state.catalog.placements.find((x) => x.id === s.placement_id);
-  const h = s.rx_h ?? plc?.height_m ?? d.rx_height_m;
-  const parts = [`${fmt(h, 1)} m`];
-  if (s.rx_gain_dbi != null) parts.push(`${fmt(s.rx_gain_dbi, 1)} dBi`);
+  const r = receiverFor(null, s);
+  const parts = [`${fmt(r.h, 1)} m`, `${fmt(r.g, 1)} dBi`];
+  if (r.c) parts.push(`−${fmt(r.c, 1)} dB`);
   if (dev) parts.push(dev.name);
   if (plc) parts.push(plc.name);
   if (s.ext_ant) parts.push(t("external antenna"));
@@ -131,7 +148,7 @@ export function drawMeasurements() {
 export function focusRepeater(pk) {
   if ((pk || null) === meas.focusPk) return;
   meas.focusPk = pk || null; meas.seriesId = null; meas.comparison = null;
-  if (meas.allowed || canEditAny() || state.config?.site?.measurements_public) loadMeasurements();
+  if (meas.allowed || isMember() || state.config?.site?.measurements_public) loadMeasurements();
 }
 export function focusSeries(id) { meas.seriesId = id || null; meas.comparison = null; loadMeasurements(); }
 

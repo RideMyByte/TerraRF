@@ -22,17 +22,16 @@ def fail(error: Exception, status: int = 400):
 
 
 def visible_project(request: Request, project_id: str):
-    """Admin sees every project; everybody else only public ones."""
+    """Admin sees every project, the user their own and public ones, visitors only public ones (#32)."""
     try:
         p = projects.load(project_id)
     except ValueError as e:
         raise HTTPException(400, str(e))
     except projects.NotFound:
         raise HTTPException(404, "Projekt nicht gefunden")
-    if not auth.is_admin(request):
+    if not projects.can_view(auth.role(request), p):
         auth.require_read(request)
-        if not p.get("public"):
-            raise HTTPException(404, "Projekt nicht gefunden")
+        raise HTTPException(404, "Projekt nicht gefunden")
     return p
 
 

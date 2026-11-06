@@ -17,7 +17,7 @@ import { map, registerLayerSection, refreshLayersPanel } from "./map/map.js";
 
 export const net = {
   nodes: [], overrides: {}, meta: {},
-  centrePk: null, focusPk: null, links: null, linksError: null, loadingPk: null,
+  centrePk: null, focusPk: null, links: null, linksError: null, loadingPk: null, muted: false,
   filter: { bothWays: false, keepDirect: true, minTx: 0, minRx: 0, minSnr: -21, maxAgeDays: 7, role: "" },
   show: { nodes: true, lines: true, lineOpacity: 0.55 },
 };
@@ -80,7 +80,7 @@ export function drawNetwork() {
     const st = stationOfRepeater(pk);
     const m = L.marker(pos, { zIndexOffset: st ? -100 : 1000, interactive: !st,
       icon: L.divIcon({ className: "", iconSize: [30, 30], iconAnchor: [15, 15],
-        html: `<div class="node-sel${st ? " ring" : ""}${pk === net.centrePk ? " center" : ""}${net.loadingPk === pk ? " loading" : ""}"></div>` }) });
+        html: `<div class="node-sel${st ? " ring" : ""}${pk === net.centrePk ? " center" : ""}${net.loadingPk === pk ? " loading" : ""}" title="${escapeHtml(pk === net.centrePk ? t("Neighbours of this repeater are shown") : t("Selected repeater"))}"></div>` }) });
     if (!st) m.on("click", (e) => { L.DomEvent.stopPropagation(e); handlers.node(pk); });
     bigMarkers.addLayer(m);
   }
@@ -92,7 +92,7 @@ export function drawNetwork() {
         const s = l.snr ?? l.snr_any;
         // a wide invisible line on top makes the thin line easy to tap (#26)
         const visible = L.polyline([centre, [l.lat, l.lon]], { renderer, interactive: false, weight: l.snr != null ? 2 : 1.2,
-          color: s != null ? snrColor(s) : "#9ca3af", opacity: net.show.lineOpacity });
+          color: s != null ? snrColor(s) : "#9ca3af", opacity: net.muted ? Math.min(0.12, net.show.lineOpacity) : net.show.lineOpacity });
         const hit = L.polyline([centre, [l.lat, l.lon]], { renderer, weight: 12, opacity: 0, interactive: true });
         hit.bindTooltip(`${escapeHtml(l.name || l.pk.slice(0, 8))} · ${fmt(l.distance_km, 1)} km`, { sticky: true });
         hit.on("click", (e) => { L.DomEvent.stopPropagation(e); handlers.link(net.centrePk, l.pk); });
@@ -143,6 +143,7 @@ export function setFocus(pk) {
 
 /** Load and show the neighbours of a repeater (other nodes are hidden meanwhile). */
 export async function showNeighbours(pk) {
+  net.muted = false;
   if (!enabled()) return;
   net.centrePk = pk; net.links = null; net.loadingPk = pk; net.linksError = null;
   if (net.focusPk === pk) net.focusPk = null;
@@ -165,6 +166,9 @@ export function clearNetworkSelection() {
   net.centrePk = null; net.focusPk = null; net.links = null; net.loadingPk = null;
   drawNetwork(); emit("network-focus", { pk: null }); emit("neighbours-loaded", { pk: null });
 }
+
+/** Fade the neighbour lines (e.g. while drive-test points are compared, #40); showing neighbours again ends it. */
+export function muteLines(on) { net.muted = !!on; drawNetwork(); }
 
 export async function saveOverride(pk, values) {
   const r = await api(`/api/corescope/overrides/${pk}`, { method: "PUT", body: values });

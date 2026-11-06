@@ -14,7 +14,7 @@ import { api, projectRef } from "../core/api.js";
 import { status, sourceBadge } from "../core/ui.js";
 import { map } from "../map/map.js";
 import { showProfile } from "../profile.js";
-import { enabled as networkEnabled, visibleLinks, showNeighbours, net } from "../network.js";
+import { enabled as networkEnabled, visibleLinks, showNeighbours, muteLines, net } from "../network.js";
 import { meas, seriesById, seriesName, receiverText, focusRepeater, drawMeasurements, groupPings } from "../measurements.js";
 import { inspectPing } from "../inspector.js";
 
@@ -77,6 +77,7 @@ async function run() {
   if (!jobs.length) { result.running = false; status(t("Choose at least one source."), "err"); renderCompare(); return; }
   status(t("Comparing “{name}” …", { name: st.name }), "busy");
   await Promise.allSettled(jobs);
+  if (result.mm) muteLines(true);   // the measurement points matter now, not the ~300 lines (#40)
   result.running = false;
   status(t("Comparison done."));
   renderCompare();
@@ -124,10 +125,12 @@ function suggestionHtml() {
     fits: t("Model and drive tests agree (median {m} dB). No change needed.", { m: signed(s.median_db) }),
     scatter: t("The values scatter a lot (± {s} dB) around a median of {m} dB. The cause is local (terrain, buildings, placement) – no global value fixes it.", { s: fmt(s.std_db), m: signed(s.median_db) }),
     offset: t("Systematic offset: median {m} dB with scatter {s} dB. Suggestion: receiver extra loss {v} dB instead of {c} dB.", { m: signed(s.median_db), s: fmt(s.std_db), v: fmt(s.suggested_extra_loss_db), c: fmt(s.current_extra_loss_db) }),
+    pessimistic: t("The model is too pessimistic (median {m} dB, scatter {s} dB). A receiver value cannot fix that – the extra loss comes from diffraction, obstacles or clutter. Compare the link budget in the profile, and try the model settings (e.g. receiver clutter, building mode) before measuring again.", { m: signed(s.median_db), s: fmt(s.std_db) })
+      + (s.suggested_extra_loss_db != null ? " " + t("Setting the receiver extra loss from {c} dB to 0 dB helps part of the way.", { c: fmt(s.current_extra_loss_db) }) : ""),
   }[s.advice];
   return `<h4>${t("Suggestion for the model")}</h4><div class="calc">${text}</div>
-    ${s.advice === "offset" && isAdmin() ? `<button id="cApply">${t("Apply globally (all projects)")}</button>` : ""}
-    ${s.advice === "offset" && !isAdmin() ? `<p class="muted">${t("Only the admin can change the global model.")}</p>` : ""}`;
+    ${s.suggested_extra_loss_db != null && isAdmin() ? `<button id="cApply">${t("Apply globally (all projects)")}</button>` : ""}
+    ${s.suggested_extra_loss_db != null && !isAdmin() ? `<p class="muted">${t("Only the admin can change the global model.")}</p>` : ""}`;
 }
 
 async function applySuggestion() {
@@ -148,8 +151,8 @@ function csHtml() {
   const origin = { station: ["📍", t("values of the station in the project")], entered: ["✎", t("own values for the repeater")], standard: ["", t("default values above")] };
   return head + `<p class="muted">${t("Noise floor {n} dBm · {k} partners with directly reported SNR · window {d} days. Tap a row for the profile.", { n: fmt(r.noise_dbm), k: r.rows.length, d: r.window_days ?? "?" })}</p>
     <table class="mini clickable"><tr><th>${t("Partner")}</th><th>${t("Height")}</th><th>km</th><th>LOS</th><th>${t("meas.")}</th><th>${t("model")}</th><th>Δ</th></tr>
-    ${r.rows.map((x, i) => x.error ? `<tr><td>${escapeHtml(x.name || "")}</td><td colspan="6" class="warn">${escapeHtml(x.error)}</td></tr>`
-      : `<tr data-i="${i}" class="${x.saturated ? "dim" : ""}"><td>${escapeHtml(x.name || "")} <span title="${escapeHtml((origin[x.rx_src] || origin.standard)[1])}">${(origin[x.rx_src] || origin.standard)[0]}</span></td>
+    ${r.rows.map((x, i) => x.error ? `<tr><td>${escapeHtml(x.name || "")}</td><td colspan="6" class="warn wrap">${escapeHtml(x.error)}</td></tr>`
+      : `<tr data-i="${i}" class="${x.saturated ? "dim" : ""}"><td class="ellipsis" title="${escapeHtml(x.name || "")}">${escapeHtml(x.name || "")} <span title="${escapeHtml((origin[x.rx_src] || origin.standard)[1])}">${(origin[x.rx_src] || origin.standard)[0]}</span></td>
         <td>${fmt(x.rx_height_m, 0)} m</td><td>${fmt(x.distance_km, 1)}</td><td>${["–", "~", "✓"][x.los_class] ?? "?"}</td>
         <td>${fmt(x.measured_snr, 1)}</td><td>${fmt(x.predicted_snr, 1)}</td><td style="color:${deltaColor(x.delta_db)}">${signed(x.delta_db)}</td></tr>`).join("")}</table>
     <p class="muted">${t("Grey: SNR ≥ {s} dB – LoRa reports are capped at the top, not counted.", { s: r.sat_db })}</p>`;
@@ -165,7 +168,7 @@ function mmHtml() {
       ${r.saturated ? " · " + t("{n} at the upper SNR limit (RSSI only)", { n: r.saturated }) : ""}${r.outside ? " · " + t("{n} outside the computed radius", { n: r.outside }) : ""}</p>
     ${rows.length ? `<table class="mini clickable"><tr><th></th><th>${t("Series")}</th><th>km</th><th>${t("meas.")}</th><th>${t("model")}</th><th>Δ SNR</th><th>Δ RSSI</th></tr>
       ${rows.map((x) => `<tr data-id="${x.id}" class="${x.saturated ? "dim" : ""}"><td>${sourceBadge(x.src)}</td>
-        <td title="${escapeHtml(receiverText(seriesById(x.series_id)))}">${escapeHtml(seriesName(seriesById(x.series_id)).slice(0, 18))}</td>
+        <td class="ellipsis" title="${escapeHtml(seriesName(seriesById(x.series_id)) + " · " + receiverText(seriesById(x.series_id)))}">${escapeHtml(seriesName(seriesById(x.series_id)))}</td>
         <td>${fmt(x.distance_km, 2)}</td><td>${fmt(x.measured_snr, 1)}</td><td>${fmt(x.predicted_snr, 1)}</td>
         <td style="color:${x.saturated ? "inherit" : deltaColor(x.delta_db)}">${x.saturated ? "–" : signed(x.delta_db)}</td>
         <td>${x.delta_rssi_db != null ? signed(x.delta_rssi_db) : "–"}</td></tr>`).join("")}</table>

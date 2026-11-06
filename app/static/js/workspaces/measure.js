@@ -4,7 +4,7 @@
  */
 import { t } from "../core/i18n.js";
 import { $, escapeHtml, fmt, fmtDateTime, fmtTime } from "../core/util.js";
-import { state, on, canEditAny, isAdmin } from "../core/state.js";
+import { state, on, isMember, isAdmin } from "../core/state.js";
 import { api } from "../core/api.js";
 import { status, sourceBadge } from "../core/ui.js";
 import { map } from "../map/map.js";
@@ -33,7 +33,7 @@ export function renderMeasure() {
     <h4>${t("Measurement series")}</h4>
     <div class="serieslist">${meas.series.slice(0, 50).map(seriesCard).join("") || `<p class="muted">${t("No measurements yet.")}</p>`}</div>
     ${meas.series.length > 50 ? `<p class="muted">${t("… {n} older", { n: meas.series.length - 50 })}</p>` : ""}
-    ${canEditAny() ? `<h4>${t("Add measurements")}</h4>
+    ${isMember() ? `<h4>${t("Add measurements")}</h4>
       <p class="muted">${t("Single values: right-click (long press on phones) on the map → “Enter measurement”.")}</p>
       <label>${t("Import a CSV file")}<input type="file" id="mCsv" accept=".csv,text/csv"></label>
       <p class="muted">${t("Columns: lat, lon, rep (key or prefix), snr_down; optional snr_up, rssi, rx_h, ts, note.")}</p>
@@ -71,7 +71,7 @@ function seriesCard(s) {
   return `<div class="series ${selected ? "on" : ""}" data-sid="${s.id}">
     <div class="series-head"><span>${sourceBadge(s.src)} <b>${escapeHtml(seriesName(s))}</b></span><span class="muted">${t("{n} meas.", { n: s.n })} · ${t("{n} rep.", { n: s.repeaters })}</span></div>
     <div class="muted">${s.t0 ? `${fmtDateTime(s.t0)} – ${fmtTime(s.t1)} · ` : ""}${t("Receiver")}: ${escapeHtml(receiverText(s))}${s.power_seen ? ` · ${escapeHtml(s.power_seen)}` : ""}</div>
-    <div class="actions"><button data-a="show">${selected ? t("show all") : t("show")}</button>${canEditAny() ? `<button data-a="edit">✎ ${t("Receiver")}</button>` : ""}${isAdmin() ? `<button data-a="del" class="danger" title="${escapeHtml(t("Delete series"))}">🗑</button>` : ""}</div>
+    <div class="actions"><button data-a="show">${selected ? t("show all") : t("show")}</button>${isMember() ? `<button data-a="edit">✎ ${t("Receiver")}</button>` : ""}${isAdmin() ? `<button data-a="del" class="danger" title="${escapeHtml(t("Delete series"))}">🗑</button>` : ""}</div>
     ${editingSeries === s.id ? seriesForm(s) : ""}</div>`;
 }
 

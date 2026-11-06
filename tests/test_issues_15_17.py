@@ -154,16 +154,24 @@ def test_user_role_and_site_settings(admin, project, station):
         me = u.get("/api/me").json()
         assert me["role"] == "user" and me["admin"] is False
         assert u.get("/api/admin/appconfig").status_code == 401
-        # eigene Station anlegen, fremde Station verändern -> nur die eigene wird gespeichert
-        sent = {**project, "name": "umbenannt", "public": False,
-                "stations": [{**project["stations"][0], "height_m": 99}, {**station, "id": "u1", "name": "Meine", "owner": "user"}]}
-        r = u.put("/api/projects/geteilt", json=sent)
+        # #32: fremde (auch öffentliche) Projekte darf der Benutzer nicht ändern ...
+        sent = {**project, "name": "umbenannt", "stations": [{**station, "id": "u1", "name": "Meine"}]}
+        assert u.put("/api/projects/geteilt", json=sent).status_code == 403
+        assert u.delete("/api/projects/geteilt").status_code == 403
+        # ... aber eigene anlegen, sehen, ändern und löschen
+        own = {**sent, "public": False, "owner": "admin"}
+        assert u.get("/api/newid").status_code == 200
+        r = u.put("/api/projects/vom-user", json=own)
         assert r.status_code == 200, r.text
-        saved = admin.get("/api/projects/geteilt").json()
-        assert saved["name"] == project["name"] and saved["public"] is True
-        assert [s["height_m"] for s in saved["stations"] if s["id"] == "a"] == [33.3]
-        assert any(s["id"] == "u1" for s in saved["stations"])
-        assert u.put("/api/projects/neu-vom-user", json=project).status_code == 403
+        assert r.json()["project"]["owner"] == "user"          # the server sets the owner
+        listed = {p["id"]: p for p in u.get("/api/projects").json()}
+        assert listed["vom-user"]["editable"] and not listed["geteilt"]["editable"]
+        assert u.get("/api/projects/vom-user").status_code == 200
+        with TestClient(app) as anon2:
+            assert anon2.get("/api/projects/vom-user").status_code in (401, 404)
+        assert admin.get("/api/projects/vom-user").json()["owner"] == "user"
+        assert admin.put("/api/projects/vom-user", json={**own, "name": "vom Admin geändert"}).json()["project"]["owner"] == "user"
+        assert u.delete("/api/projects/vom-user").status_code == 200
         # rechnen mit ungespeichertem Stand ist erlaubt
         assert u.post("/api/coverage", json={"project": sent, "station_ids": ["u1"]}).status_code == 200
     # Passwort geändert -> alte Benutzer-Sitzung ungültig

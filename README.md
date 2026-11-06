@@ -44,9 +44,12 @@ Further:
 
 | Role | Can |
 |---|---|
-| **Admin** (`RFP_ADMIN_USER`) | everything: projects, all stations, **global model settings**, **catalogs**, data sources, website & legal pages |
-| **User** (optional, set up in Administration) | see everything, add and change **own** stations, enter measurements and edit series |
+| **Admin** (`RFP_ADMIN_USER`) | everything: all projects, **global model settings**, **catalogs**, data sources, website & legal pages |
+| **User** (optional, set up in Administration) | create **own projects** (private or public) and change only those; see public projects and save a copy of them; enter measurements and edit series |
 | **Visitor** | view projects marked *public* (if `RFP_PUBLIC_READ`), measurements only if the admin allows it |
+
+A project – public or not – is changed only by whoever created it and by the admin. Projects from before 0.5.1
+belong to the admin.
 
 ## Installation
 
@@ -149,9 +152,11 @@ Admin-maintained lists in `data/catalog.json`, seeded on first start:
   ALFA AOA-868-5ACM and the list of the meshrheinland community). Every entry has a *source*; values without a datasheet
   are marked as assumptions.
 - **Devices** – e.g. SenseCAP T1000-E (1 dBi, an assumption: the maker gives no gain figure).
-- **Placements** – car roof 1.7 m, jacket pocket 1.25 m with 4 dB extra loss, bicycle 1.0 m, handheld raised 1.8 m.
-  The heights are typical values, the jacket-pocket loss is a rule of thumb for body loss at 868 MHz – please replace
-  them with measured values when you have them.
+- **Placements** – car roof 1.7 m, jacket pocket 1.25 m with 4 dB extra loss, bicycle 1.0 m, handheld raised 1.8 m,
+  inside the car 1.2 m with 9 dB (car penetration loss, 3GPP TR 38.901 §7.4.3.2: mean 9 dB, σ 5 dB), trouser pocket
+  0.9 m / 4 dB, backpack top 1.5 m / 1 dB, backpack inside 1.2 m / 4 dB. Apart from the car value these are typical
+  heights and rules of thumb, marked as assumptions – please replace them with measured values when you have them.
+  New seed entries of later versions are added to existing catalogs once; entries the admin deleted stay deleted.
 
 Receiver of a drive-test row, in this order: a height entered in the single measurement → values of its series →
 device and placement of the series → global receiver settings.
@@ -174,7 +179,8 @@ Please use public instances gently and ask the operators if in doubt.
    to `https://<host>/api/ingest/meshmapper` (header `X-API-Key`). MeshMapper requires HTTPS. DISC/TRACE (SNR at phone
    and repeater, RSSI) and TX/RX echoes (SNR per repeater) are stored; duplicate echoes count once. Repeater prefixes
    are resolved to keys through the CoreScope list when unique in the area.
-2. **Manual:** right click → *Enter measurement*.
+2. **Manual:** right click → *Enter measurement*. The antenna height above ground is required; device and placement
+   fill in height, gain and loss. Entries with the same receiver within 30 minutes form one series.
 3. **CSV:** header `lat;lon;rep;snr_down`, optionally `snr_up;rssi;ts;rx_h;note` (separator `;` or `,`, decimal comma ok).
 
 A series is one drive (a break of more than 30 min starts a new one; one CSV import is one series). The **measurement
@@ -207,6 +213,9 @@ stale maps – cached results are keyed by the settings and the model version.
 * **Earth curvature:** effective earth radius k · 6371 km, k = 4/3 (ITU-R P.453).
 * **Receiver:** gain (default 0 dBi), extra loss for body/building (default 0 dB), noise rise, **fade/location margin**
   (default 10 dB, slider on the map).
+* **Noise:** thermal noise kTB (−174 dBm/Hz + 10·log10(bandwidth)) plus the receiver noise figure and the global noise
+  rise. A station can carry a **measured noise floor** instead (e.g. from the repeater's statistics); it is used where
+  that station receives – its sensitivity on the map and the SNR it reports in the comparison.
 
 **Limits:** no multipath or indoor models, no interferers. The defaults were checked for plausibility against a few
 measurements in the Ruhr area, not calibrated. The *Compare* workspace exists to change that – measurements (place,

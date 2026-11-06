@@ -468,16 +468,30 @@ def hata_db(d_m, f_mhz, hb, hm, env="urban"):
 LORA_SNR = {5: -2.5, 6: -5.0, 7: -7.5, 8: -10.0, 9: -12.5, 10: -15.0, 11: -17.5, 12: -20.0}
 
 
+def required_snr_db(st):
+    """SNR the station's modulation needs (LoRa per spreading factor, otherwise the entered value)."""
+    if st.get("mode") == "lora":
+        return LORA_SNR.get(int(st.get("sf", 11)), -17.5)
+    return float(st.get("req_snr_db", 10.0))
+
+
+def noise_floor_dbm(st, noise_rise_db=0.0):
+    """Noise at the station's receiver.
+
+    A measured average noise floor entered for the station (#37, e.g. from the repeater's own statistics) wins –
+    it already contains the local noise, so the global noise rise is not added. Otherwise thermal noise
+    kTB = −174 dBm/Hz + 10·log10(B) plus the receiver noise figure and the global noise rise.
+    """
+    if st.get("noise_floor_dbm") not in (None, ""):
+        return float(st["noise_floor_dbm"])
+    bw_hz = float(st.get("bw_khz", 125.0)) * 1000.0
+    return -174.0 + 10.0 * math.log10(bw_hz) + float(st.get("nf_db", 6.0)) + float(noise_rise_db)
+
+
 def sensitivity_dbm(st, noise_rise_db=0.0):
     if st.get("sens_override_dbm") not in (None, ""):
         return float(st["sens_override_dbm"]) + float(noise_rise_db)
-    bw_hz = float(st.get("bw_khz", 125.0)) * 1000.0
-    nf = float(st.get("nf_db", 6.0))
-    if st.get("mode") == "lora":
-        snr = LORA_SNR.get(int(st.get("sf", 11)), -17.5)
-    else:
-        snr = float(st.get("req_snr_db", 10.0))
-    return -174.0 + 10.0 * math.log10(bw_hz) + nf + snr + float(noise_rise_db)
+    return noise_floor_dbm(st, noise_rise_db) + required_snr_db(st)
 
 
 def los_class(v):

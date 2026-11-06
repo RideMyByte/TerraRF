@@ -11,7 +11,7 @@
  */
 import { t, setLanguage, detectLanguage, lang } from "./core/i18n.js";
 import { $, escapeHtml, fmt, fmtBytes, download } from "./core/util.js";
-import { state, on, emit, isAdmin, canEditAny } from "./core/state.js";
+import { state, on, emit, isAdmin, isMember, canEditProject } from "./core/state.js";
 import { api } from "./core/api.js";
 import { initShell, status, openWorkspace, closeInspector } from "./core/ui.js";
 import { map, initMap, refreshLayersPanel } from "./map/map.js";
@@ -29,20 +29,21 @@ import { renderReport } from "./workspaces/report.js";
 import { openAdmin } from "./admin.js";
 
 // ---------------------------------------------------------------- projects
-function emptyProject() { return { id: null, name: t("New project"), public: false, stations: [] }; }
+function emptyProject() { return { id: null, name: t("New project"), public: false, owner: state.role || "admin", stations: [] }; }
 
 function setDirty(value) {
   state.dirty = value;
-  $("dirtyDot").classList.toggle("on", value && canEditAny());
+  $("dirtyDot").classList.toggle("on", value && canEditProject());
 }
 
-function loadProject(project) {
+function loadProject(project, { keepUrl = false } = {}) {
   closeInspector(); closeProfile();
   state.project = { stations: [], ...project };
   state.selectedStationId = null;
   $("projectName").value = state.project.name || "";
-  $("projectName").disabled = !canEditAny();
-  if (project.id) history.replaceState(null, "", `?p=${encodeURIComponent(project.id)}${location.hash}`);
+  $("projectName").disabled = !canEditProject();
+  document.body.classList.toggle("project-readonly", !canEditProject());
+  if (project.id && !keepUrl) history.replaceState(null, "", `?p=${encodeURIComponent(project.id)}${location.hash}`);
   resetCoverage(); redrawAllStations();
   if (project.view) map.setView(project.view.center, project.view.zoom);
   else if (state.project.stations.length) map.fitBounds(L.latLngBounds(state.project.stations.map((s) => [s.lat, s.lon])).pad(0.5));
@@ -59,10 +60,7 @@ async function saveProject() {
   p.view = { center: [map.getCenter().lat, map.getCenter().lng], zoom: map.getZoom() };
   const r = await api(`/api/projects/${p.id}`, { method: "PUT", body: p });
   p.updated = r.updated;
-  if (!isAdmin() && r.project) {   // the server only takes over the user's own stations – show its result
-    Object.assign(p, { stations: r.project.stations, name: r.project.name, public: r.project.public });
-    redrawAllStations(); emit("stations-changed");
-  }
+  p.owner = r.project?.owner || p.owner;
   setDirty(false);
   history.replaceState(null, "", `?p=${encodeURIComponent(p.id)}${location.hash}`);
   status(p.public ? t("Saved – publicly visible.") : t("Saved (private)."));
@@ -77,12 +75,14 @@ async function openProjectMenu() {
   try { list = await api("/api/projects"); } catch { /* not allowed */ }
   const p = state.project;
   menu.innerHTML = `
-    ${list.length ? `<div class="menu-h">${t("Open")}</div>${list.map((x) => `<button data-open="${escapeHtml(x.id)}" class="${x.id === p.id ? "sel" : ""}">${escapeHtml(x.name)} <span class="muted">${t("{n} st.", { n: x.stations })}${isAdmin() ? " · " + (x.public ? t("public") : t("private")) : ""}</span></button>`).join("")}<hr>` : ""}
-    ${isAdmin() ? `<button data-a="new">＋ ${t("New project")}</button>
-      <label class="chk menu-chk"><input type="checkbox" data-a="public" ${p.public ? "checked" : ""}> ${t("public (visitors can see it)")}</label>` : ""}
+    ${list.length ? `<div class="menu-h">${t("Open")}</div>${list.map((x) => `<button data-open="${escapeHtml(x.id)}" class="${x.id === p.id ? "sel" : ""}">${escapeHtml(x.name)} <span class="muted">${t("{n} st.", { n: x.stations })}${isMember() ? " · " + (x.public ? t("public") : t("private")) : ""}${isAdmin() && x.owner === "user" ? " · " + t("by the user") : ""}${isMember() && !x.editable ? " · 🔒" : ""}</span></button>`).join("")}<hr>` : ""}
+    ${isMember() ? `<button data-a="new">＋ ${t("New project")}</button>` : ""}
+    ${canEditProject() ? `<label class="chk menu-chk"><input type="checkbox" data-a="public" ${p.public ? "checked" : ""}> ${t("public (visitors can see it)")}</label>` : ""}
+    ${isMember() && !canEditProject() ? `<button data-a="copy">⧉ ${t("Save as my own copy")}</button>` : ""}
     ${p.id ? `<button data-a="share">🔗 ${t("Copy link")}</button>` : ""}
     <button data-a="export">⇩ ${t("Export (JSON)")}</button>
-    ${isAdmin() ? `<button data-a="import">⇧ ${t("Import (JSON)")}</button>${p.id ? `<button data-a="delete" class="danger">🗑 ${t("Delete project")}</button>` : ""}` : ""}`;
+    ${isMember() ? `<button data-a="import">⇧ ${t("Import (JSON)")}</button>` : ""}
+    ${canEditProject() && p.id ? `<button data-a="delete" class="danger">🗑 ${t("Delete project")}</button>` : ""}`;
   menu.classList.remove("hidden");
   menu.querySelectorAll("[data-open]").forEach((b) => b.onclick = async () => {
     menu.classList.add("hidden");
@@ -92,6 +92,11 @@ async function openProjectMenu() {
   const act = (a, fn) => { const el = menu.querySelector(`[data-a="${a}"]`); if (el) el[el.type === "checkbox" ? "onchange" : "onclick"] = (e) => { if (el.type !== "checkbox") menu.classList.add("hidden"); fn(e); }; };
   act("new", () => { if (discardOk()) loadProject(emptyProject()); });
   act("public", (e) => { p.public = e.target.checked; setDirty(true); });
+  act("copy", () => {
+    const copy = JSON.parse(JSON.stringify({ ...p, id: null, public: false, owner: state.role, name: t("Copy of {name}", { name: p.name }) }));
+    loadProject(copy); setDirty(true);
+    saveProject().catch((e) => status(t("Error: {msg}", { msg: e.message }), "err"));
+  });
   act("share", async () => {
     const url = `${location.origin}${location.pathname}?p=${encodeURIComponent(p.id)}`;
     try { await navigator.clipboard.writeText(url); status(p.public ? t("Link copied.") : t("Link copied – note: the project is private, visitors cannot see it.")); }
@@ -103,7 +108,7 @@ async function openProjectMenu() {
     const input = document.createElement("input"); input.type = "file"; input.accept = ".json,application/json";
     input.onchange = async () => {
       const file = input.files[0]; if (!file || !discardOk()) return;
-      try { const imported = JSON.parse(await file.text()); imported.id = null; loadProject(imported); setDirty(true); }
+      try { const imported = JSON.parse(await file.text()); imported.id = null; imported.owner = state.role; loadProject(imported); setDirty(true); }
       catch (e) { status(t("Import failed: {msg}", { msg: e.message }), "err"); }
     };
     input.click();
@@ -121,13 +126,13 @@ function applyRole() {
   const role = state.role;
   document.body.classList.toggle("role-admin", role === "admin");
   document.body.classList.toggle("role-user", role === "user");
-  document.body.classList.toggle("readonly", !canEditAny());
-  $("btnLogin").textContent = canEditAny() ? t("Log out ({user})", { user: state.config.auth.user }) : t("Log in");
+  document.body.classList.toggle("readonly", !isMember());
+  $("btnLogin").textContent = isMember() ? t("Log out ({user})", { user: state.config.auth.user }) : t("Log in");
 }
 
 function wireLogin() {
   $("btnLogin").onclick = async () => {
-    if (!canEditAny()) { $("loginError").textContent = ""; $("loginDlg").showModal(); return; }
+    if (!isMember()) { $("loginError").textContent = ""; $("loginDlg").showModal(); return; }
     if (!discardOk()) return;
     state.dirty = false;
     await api("/api/logout", { method: "POST" });
@@ -218,13 +223,13 @@ function wire() {
     closeInspector();
   };
 
-  window.addEventListener("beforeunload", (e) => { if (state.dirty && canEditAny()) { e.preventDefault(); e.returnValue = ""; } });
+  window.addEventListener("beforeunload", (e) => { if (state.dirty && canEditProject()) { e.preventDefault(); e.returnValue = ""; } });
   document.addEventListener("visibilitychange", () => { if (!document.hidden) pollStatus(); });
 }
 
 // a change in the project: mark it dirty, the changed station stale
 on("project-changed", (payload = {}) => {
-  if (!canEditAny()) return;
+  if (!canEditProject()) return;
   setDirty(true);
   if (payload.station && !payload.keepCoverage) stale.add(payload.station.id);
 });
@@ -245,24 +250,25 @@ async function init() {
   try { state.catalog = await api("/api/catalog"); emit("catalog-loaded"); } catch (e) { console.warn("catalog", e); }
   pollStatus();
   initNetworkWorkspace().catch((e) => console.warn("CoreScope", e));
-  if (canEditAny() || state.config.site?.measurements_public) loadMeasurements(); else renderMeasure();
+  if (isMember() || state.config.site?.measurements_public) loadMeasurements(); else renderMeasure();
 
-  if (!canEditAny() && !state.config.auth?.public_read) { loadProject(emptyProject()); status(t("Please log in.")); $("loginDlg").showModal(); return; }
+  if (!isMember() && !state.config.auth?.public_read) { loadProject(emptyProject()); status(t("Please log in.")); $("loginDlg").showModal(); return; }
   const list = await api("/api/projects").catch(() => []);
   const wanted = new URLSearchParams(location.search).get("p");
   const fallback = isAdmin() ? state.config.last_project : list[0]?.id;
   for (const pick of [...new Set([wanted, fallback].filter(Boolean))]) {
     try {
-      loadProject(await api(`/api/projects/${encodeURIComponent(pick)}`));
+      // a link to a project this visitor may not see: keep it in the address bar, so logging in opens it
+      loadProject(await api(`/api/projects/${encodeURIComponent(pick)}`), { keepUrl: !!wanted && pick !== wanted && !isMember() });
       status(pick === wanted || !wanted ? t("Project “{name}” loaded. Right click (long press on phones) shows levels and the profile at a point.", { name: state.project.name })
         : t("Project not found or not public."), pick === wanted || !wanted ? "" : "err");
       return;
     } catch { /* try the next one */ }
   }
-  if (wanted) { status(t("Project not found or not public."), "err"); history.replaceState(null, "", location.pathname + location.hash); }
+  if (wanted) status(t("Project not found or not public."), "err");
   loadProject(emptyProject());
   if (wanted) return;
-  if (canEditAny()) status(t("Ready. “Add station”, then click on the map. Right click (long press on phones) shows levels and the profile at a point."));
+  if (isMember()) status(t("Ready. “Add station”, then click on the map. Right click (long press on phones) shows levels and the profile at a point."));
   else status(t("No public projects yet."));
 }
 

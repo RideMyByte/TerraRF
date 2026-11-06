@@ -39,7 +39,7 @@ app/
     tiles.py         map tile proxy with disk cache
     overlay.py       map layers rendered from local elevation data
   store/           what TerraRF keeps on disk
-    projects.py      project files, migration of old projects (settings dropped, antenna presets → catalog)
+    projects.py      project files, owner and rights (#32), migration of old projects (settings dropped, antenna presets → catalog)
     measurements.py  SQLite with drive-test rows and series
     catalog.py       antennas / devices / placements, seeded on first start
     appconfig.py     instance settings edited in Administration

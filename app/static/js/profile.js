@@ -4,10 +4,11 @@
  */
 import { t } from "./core/i18n.js";
 import { $, escapeHtml, fmt, signed, niceStep } from "./core/util.js";
-import { stationById, settings } from "./core/state.js";
+import { state, stationById, settings, isAdmin } from "./core/state.js";
+import { saveOverride } from "./network.js";
 import { api, projectRef } from "./core/api.js";
 import { map } from "./map/map.js";
-import { closeSheet } from "./core/ui.js";
+import { closeSheet, status } from "./core/ui.js";
 
 let current = null;      // {stationId, latlng, options}
 let lastProfile = null;
@@ -19,13 +20,23 @@ function shell() {
   el.innerHTML = `<div class="phead"><b id="profTitle"></b><span class="meta" id="profMeta"></span>
       <span id="profRx" title="${escapeHtml(t("Only for this profile – the map stays as computed"))}">${t("Receiver")}
         <input id="profRxH" type="number" step="0.5" min="0" max="300"> m <input id="profRxG" type="number" step="0.5" min="-10" max="40"> dBi
-        <button id="profRxReset" class="small" title="${escapeHtml(t("Back to the global receiver values"))}">↺</button></span>
+        <button id="profRxReset" class="small" title="${escapeHtml(t("Back to the global receiver values"))}">↺</button>
+        <button id="profRxSave" class="small hidden" title="${escapeHtml(t("Save as the values of this repeater"))}">💾</button></span>
       <button id="profClose" class="iconbtn" title="${escapeHtml(t("Close"))}">✕</button></div>
     <div class="pbody"><canvas id="profCanvas"></canvas><table id="profBudget"></table></div>`;
   $("profClose").onclick = closeProfile;
   const again = () => { receiverOverride = { height: +$("profRxH").value, gain: +$("profRxG").value }; if (current) showProfile(current.stationId, current.latlng, current.options); };
   $("profRxH").onchange = again; $("profRxG").onchange = again;
-  $("profRxReset").onclick = () => { receiverOverride = { height: null, gain: null }; if (current) showProfile(current.stationId, current.latlng, { ...current.options, rx: undefined }); };
+  $("profRxReset").onclick = () => { receiverOverride = { height: null, gain: null }; if (current) showProfile(current.stationId, current.latlng, current.options); };
+  // #34: a repeater that is not a station keeps its height and gain as "own values" (admin)
+  $("profRxSave").onclick = async () => {
+    const pk = current?.options.repeaterPk;
+    if (!pk) return;
+    try {
+      await saveOverride(pk, { height_m: +$("profRxH").value, gain_dbi: +$("profRxG").value });
+      status(t("Values saved."));
+    } catch (e) { status(t("Error: {msg}", { msg: e.message }), "err"); }
+  };
 }
 
 export function closeProfile() {
@@ -39,24 +50,28 @@ export function closeProfile() {
  * pattern and cable), or to a repeater with given receiver values (options.rx = {h, g, c, label}).
  */
 export async function showProfile(stationId, latlng, options = {}) {
-  const st = stationById(stationId);
+  const st = options.txStation || stationById(stationId);   // txStation: temporary station, not in the project
   if (!st) return;
   const rxStation = options.rxStationId ? stationById(options.rxStationId) : null;
   if (rxStation) latlng = L.latLng(rxStation.lat, rxStation.lon);
   if (!$("profTitle")) shell();
+  if (!current || current.options !== options) receiverOverride = { height: null, gain: null };   // a new path
   current = { stationId, latlng, options };
   closeSheet();
   $("profile").classList.remove("hidden");
-  const rxHeight = options.rx?.h ?? receiverOverride.height ?? settings().rx_height_m;
-  const rxGain = options.rx?.g ?? receiverOverride.gain ?? settings().rx_gain_dbi;
+  // values typed into the drawer win over the ones the caller passed (#34), those over the global receiver
+  const rxHeight = receiverOverride.height ?? options.rx?.h ?? settings().rx_height_m;
+  const rxGain = receiverOverride.gain ?? options.rx?.g ?? settings().rx_gain_dbi;
   $("profRxH").value = rxHeight; $("profRxG").value = rxGain;
   $("profRx").classList.toggle("hidden", !!rxStation);
-  $("profTitle").textContent = rxStation ? `${st.name} → ${rxStation.name}` : options.rx?.label ? `${st.name} → ${options.rx.label}` : t("Profile {name} → point", { name: st.name });
+  $("profRxSave").classList.toggle("hidden", !(options.repeaterPk && isAdmin()));
+  $("profTitle").textContent = (options.txStation ? "≈ " : "") + (rxStation ? `${st.name} → ${rxStation.name}` : options.rx?.label ? `${st.name} → ${options.rx.label}` : t("Profile {name} → point", { name: st.name }));
   $("profMeta").textContent = t("computing …");
   if (pathLine) map.removeLayer(pathLine);
   pathLine = L.polyline([[st.lat, st.lon], [latlng.lat, latlng.lng]], { color: st.color, dashArray: "6 4", weight: 2 }).addTo(map);
   try {
-    const p = await api("/api/profile", { method: "POST", body: { ...projectRef(), station_id: stationId, lat: latlng.lat, lon: latlng.lng,
+    const ref = options.txStation ? { project: { ...state.project, stations: [...state.project.stations, options.txStation] } } : projectRef();
+    const p = await api("/api/profile", { method: "POST", body: { ...ref, station_id: stationId, lat: latlng.lat, lon: latlng.lng,
       ...(rxStation ? { rx_station_id: rxStation.id } : { rx_height_m: rxHeight, rx_gain_dbi: rxGain, rx_cable_db: options.rx?.c }) } });
     const sight = [t("no line of sight"), t("line of sight, Fresnel zone obstructed"), t("Fresnel zone ≥ 60 % clear")][p.los_class];
     $("profMeta").textContent = `${fmt(p.distance_m / 1000, 2)} km · ${t("azimuth")} ${fmt(p.azimuth_deg, 0)}° · ${t("elevation")} ${fmt(p.elevation_deg, 2)}° · ${sight}` +

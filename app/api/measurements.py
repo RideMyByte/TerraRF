@@ -68,13 +68,13 @@ def add_measurements(body: dict = Body(...)):
     try:
         if body.get("csv"):
             rows, errors = measurements.from_csv(str(body["csv"]))
-            series_key = f"csv|{time.time():.3f}"   # one import = one series
+            series_key, series_values = f"csv|{time.time():.3f}", None   # one import = one series
         else:
-            rows, errors = [measurements.manual(body)], []
-            series_key = None
+            rows, errors = [measurements.manual(body, require_height=True)], []
+            series_key, series_values = measurements.manual_series(body)
     except (ValueError, csv.Error) as e:
         fail(e)
-    return {"stored": measurements.add(rows, skey=series_key), "errors": errors[:50]}
+    return {"stored": measurements.add(rows, skey=series_key, series_values=series_values), "errors": errors[:50]}
 
 
 @router.delete("/api/measurements", dependencies=ADMIN)
