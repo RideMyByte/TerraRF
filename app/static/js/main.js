@@ -28,6 +28,7 @@ import { renderCompare } from "./workspaces/compare.js";
 import { renderReport } from "./workspaces/report.js";
 import { openAdmin } from "./admin.js";
 import { openMembers } from "./members.js";
+import { openWelcome, maybeWelcome, renderNotice } from "./welcome.js";
 
 // ---------------------------------------------------------------- projects
 function emptyProject() { return { id: null, name: t("New project"), public: false, owner: state.role || "admin", stations: [] }; }
@@ -215,12 +216,13 @@ function wire() {
   $("btnProjectMenu").onclick = (e) => { e.stopPropagation(); openProjectMenu(); };
   document.addEventListener("click", (e) => { if (!e.target.closest("#projectMenu, #btnProjectMenu")) $("projectMenu").classList.add("hidden"); });
   $("btnAdmin").onclick = () => openAdmin();
+  $("btnHelp").onclick = () => openWelcome();
 
   const langSelect = $("langSelect");
   langSelect.value = lang();
   langSelect.onchange = async () => {
     await setLanguage(langSelect.value, { remember: true });
-    applyRole(); renderSiteLinks(); refreshLayersPanel(); redrawAllStations();
+    applyRole(); renderSiteLinks(); renderNotice(); refreshLayersPanel(); redrawAllStations();
     for (const render of [renderPlan, renderMeasure, renderCompare, renderReport]) render();
     initNetworkWorkspace();
     closeInspector();
@@ -236,10 +238,10 @@ on("project-changed", (payload = {}) => {
   setDirty(true);
   if (payload.station && !payload.keepCoverage) stale.add(payload.station.id);
 });
-on("config-reloaded", () => { applyRole(); renderSiteLinks(); });
+on("config-reloaded", () => { applyRole(); renderSiteLinks(); renderNotice(); });
 on("settings-changed", () => { resetCoverage(); emit("project-loaded"); });
 
-async function init() {
+async function start() {
   await setLanguage(detectLanguage());
   state.config = await api("/api/config");
   state.role = state.config.auth?.role || null;
@@ -248,6 +250,7 @@ async function init() {
   applyRole();
   wire();
   renderSiteLinks();
+  renderNotice();
   openWorkspace("plan", { openSheet: false });
   state.project = emptyProject();
   try { state.catalog = await api("/api/catalog"); emit("catalog-loaded"); } catch (e) { console.warn("catalog", e); }
@@ -273,6 +276,11 @@ async function init() {
   if (wanted) return;
   if (isMember()) status(t("Ready. “Add station”, then click on the map. Right click (long press on phones) shows levels and the profile at a point."));
   else status(t("No public projects yet."));
+}
+
+async function init() {
+  await start();
+  maybeWelcome();
 }
 
 init().catch((e) => { console.error(e); status(t("Start failed: {msg}", { msg: e.message }), "err"); });

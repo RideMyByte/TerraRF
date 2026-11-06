@@ -104,8 +104,9 @@ gezählt (Art. 6 Abs. 1 lit. f DSGVO).</p>
 <p>Besucher erhalten keine Cookies. Nur nach der Anmeldung des Administrators wird das Cookie
 <code>terrarf_session</code> gesetzt. Es ist für den angemeldeten Bereich unbedingt erforderlich (§ 25 Abs. 2 Nr. 2
 TDDDG) und wird beim Schließen des Browsers gelöscht, sofern nicht „angemeldet bleiben“ gewählt wurde (dann höchstens
-{days} Tage). Wählen Sie oben die Sprache der Oberfläche, speichert Ihr Browser nur diese Wahl im lokalen Speicher (localStorage,
-Schlüssel „terrarf.lang“); sie verlässt Ihr Gerät nicht. Darüber hinaus wird lokaler Browserspeicher nicht verwendet.</p>
+{days} Tage). Im lokalen Speicher Ihres Browsers (localStorage) legt die Seite nur zwei Einträge ab, die Ihr Gerät nicht verlassen:
+„terrarf.lang“ – die oben gewählte Sprache – und „terrarf.welcome“ – dass Sie die Begrüßungsseite schon gesehen haben,
+damit sie nicht bei jedem Besuch erscheint. Darüber hinaus wird lokaler Browserspeicher nicht verwendet.</p>
 <h2>Kartendarstellung</h2>{maps}
 {cs}
 <h2>Messfahrten</h2><p>Messwerte von Messfahrten (z. B. aus der App MeshMapper) werden mit Ort, Zeit, Signalwerten,

@@ -92,3 +92,14 @@ def test_sector_attenuates_outside(bldg):
     pj0, pj1 = _proj(lat, lon, 25), _proj(lat, lon, 25, ant)
     assert abs(_raster(pj1, 0, 400) - _raster(pj0, 0, 400)) < 0.5          # Norden: im Sektor
     assert _raster(pj0, 0, -400) - _raster(pj1, 0, -400) > 24               # Süden: außerhalb
+
+
+def test_mast_height_from_roof(bldg):
+    """#43: a repeater on (or right next to) a 30 m building gets 30 m + 1 m; in the open no guess."""
+    with settings_store.temporary(_settings(10)):
+        on_roof = cov.mast_height_guess({}, *_at(15, 0))
+        beside = cov.mast_height_guess({}, *_at(0, 0))       # 5 m west of the building: still within 8 m
+        open_field = cov.mast_height_guess({}, *_at(-300, 300))
+    assert on_roof == pytest.approx(31.0, abs=0.2)
+    assert beside == pytest.approx(31.0, abs=0.2)
+    assert open_field is None

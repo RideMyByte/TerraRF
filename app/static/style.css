@@ -305,3 +305,19 @@ body.project-readonly #btnSave, body.project-readonly #dirtyDot { display: none;
 /* share & collaborators */
 #membersDlg { width: min(560px, 94vw); }
 #membersDlg .secret textarea { display: block; width: 100%; margin: 6px 0; font-size: 12px; }
+
+/* #46 notice banner on top of the map */
+#noticeBar { position: absolute; z-index: 1100; top: 0; left: 0; right: 0; display: flex; gap: 10px; align-items: center; justify-content: center;
+  background: #fef3c7; color: #78350f; border-bottom: 1px solid #fcd34d; padding: 6px 40px 6px 12px; font-size: 13px; }
+#noticeBar.construction, #noticeBar.maintenance { background: #fee2e2; color: #7f1d1d; border-color: #fca5a5; }
+#noticeBar.updates { background: #dbeafe; color: #1e3a8a; border-color: #93c5fd; }
+#noticeBar button { position: absolute; right: 6px; top: 50%; transform: translateY(-50%); border: 0; background: none; color: inherit; font-size: 16px; }
+body.has-notice #mapwrap .leaflet-top, body.has-notice #soloChip, body.has-notice #btnLayers, body.has-notice #layersPanel { margin-top: 34px; }
+/* #44 welcome page */
+#welcomeDlg { width: min(640px, 94vw); max-height: 90vh; overflow: auto; }
+#welcomeDlg .ws-list { display: grid; grid-template-columns: auto 1fr; gap: 6px 10px; margin: 10px 0; }
+#welcomeDlg .ws-list b { white-space: nowrap; }
+
+/* #45 MeshCore picker */
+.picker .picklist { max-height: 40vh; overflow: auto; margin: 6px 0; display: flex; flex-direction: column; gap: 2px; }
+#btnFromMeshCore.on { background: var(--acc-soft); border-color: var(--acc); }
