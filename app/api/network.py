@@ -8,7 +8,7 @@ from fastapi.concurrency import run_in_threadpool
 from ..analysis import compare
 from ..model import terrain
 from ..site import auth
-from ..sources import corescope
+from ..sources import corescope, linkhistory
 from .deps import ADMIN, READ, fail, parse_bbox, project_for, station_of
 
 router = APIRouter()
@@ -39,6 +39,14 @@ async def links(request: Request, pk: str, refresh: bool = False):
         return await run_in_threadpool(corescope.links, pk.lower(), refresh and auth.is_admin(request))
     except Exception as e:  # noqa: BLE001
         fail(e, 502 if not isinstance(e, ValueError) else 400)
+
+
+@router.get("/api/corescope/links/{pk}/history/{partner}", dependencies=READ)
+def link_history(pk: str, partner: str):
+    """What TerraRF recorded about one link over time (#52): scatter and course of the directly reported SNR."""
+    if not (corescope.PK.match(pk.lower()) and corescope.PK.match(partner.lower())):
+        raise HTTPException(400, "ungültiger Schlüssel")
+    return linkhistory.history(pk.lower(), partner.lower())
 
 
 @router.get("/api/corescope/node/{pk}", dependencies=READ)

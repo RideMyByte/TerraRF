@@ -10,6 +10,12 @@ import { state, settings, on } from "../core/state.js";
 import { api } from "../core/api.js";
 
 export const map = L.map("map", { zoomControl: true, tapHold: true }).setView([51.575, 6.985], 12);
+
+// #49: the map's size changed because a side panel opened or closed – keep the content where it is on screen
+on("map-layout", ({ dx = 0, dy = 0 }) => {
+  map.invalidateSize({ pan: false, animate: false });
+  if (dx || dy) map.panBy([dx, dy], { animate: false });
+});
 L.control.scale({ imperial: false }).addTo(map);
 if (location.hash === "#debug") window.terrarfMap = map;   // for automated browser tests
 

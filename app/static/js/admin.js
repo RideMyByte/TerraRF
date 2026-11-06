@@ -38,7 +38,7 @@ async function reloadConfig() {
 
 // ---------------------------------------------------------------- access & website
 const ACCESS_KEYS = ["user_enabled", "user_name", "user_password", "parent_name", "parent_url", "show_github", "imprint_mode", "imprint_url",
-  "imprint_name", "imprint_email", "imprint_address", "imprint_extra", "privacy_mode", "privacy_url", "privacy_extra", "measurements_public",
+  "imprint_name", "imprint_email", "imprint_address", "imprint_extra", "privacy_mode", "privacy_url", "privacy_extra",
   "notice_enabled", "notice_kind", "notice_text", "welcome_enabled"];
 
 async function accessPage(body) {
@@ -52,7 +52,6 @@ async function accessPage(body) {
       ${check("user_enabled", "enabled")}<div class="grid2">${input("user_name", "User name")}${input("user_password", "Password", "password")}</div></section>
     <section><h3>${t("Visitors")}</h3>
       <p class="muted">${t("Visitors without login see projects marked “public” (read only).")}</p>
-      ${check("measurements_public", "Visitors may see measurements (without time and notes)")}
       ${check("welcome_enabled", "Show the welcome page to first-time visitors")}</section>
     <section><h3>${t("Notice banner")}</h3>
       <p class="muted">${t("A strip below the top bar for everybody – e.g. while you are working on the site. Visitors can close it until the next visit.")}</p>
@@ -98,7 +97,8 @@ async function dataPage(body) {
       <div class="actions"><button id="bOsm">${t("Load OSM buildings in the map view")}</button><button id="bClear" class="danger">${t("Delete all")}</button></div>
       <div id="bOut" class="muted"></div></section>
     <section><h3>${t("Measurements (MeshMapper)")}</h3>
-      <p class="muted">${t("MeshMapper sends drive-test results to this server when the endpoint and key are entered in the app.")}</p>
+      <p class="muted">${t("MeshMapper sends drive-test results to this server when the endpoint and key are entered in the app.")}
+        ${t("This key is the admin's own: its measurements belong to no project and appear in the admin's projects. Every project has its own key under “Measure”.")}</p>
       <label>${t("Key")}<div class="row"><input id="mmKey" value="${escapeHtml(c.mm_api_key || "")}"><button id="mmGen" style="flex:0 0 auto">${t("generate")}</button></div></label>
       <label>${t("Endpoint")}<input readonly value="https://${escapeHtml(ingest)}"></label>
       <label>${t("Link for phones")}<div class="row"><input id="mmLink" readonly><button id="mmCopy" style="flex:0 0 auto">${t("copy")}</button></div></label>

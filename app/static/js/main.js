@@ -29,6 +29,7 @@ import { renderReport } from "./workspaces/report.js";
 import { openAdmin } from "./admin.js";
 import { openMembers } from "./members.js";
 import { openWelcome, maybeWelcome, renderNotice } from "./welcome.js";
+import { clearSelection } from "./selection.js";
 
 // ---------------------------------------------------------------- projects
 function emptyProject() { return { id: null, name: t("New project"), public: false, owner: state.role || "admin", stations: [] }; }
@@ -57,7 +58,8 @@ function loadProject(project, { keepUrl = false } = {}) {
 
 async function saveProject() {
   const p = state.project;
-  if (!p.id) p.id = (await api("/api/newid")).id;
+  const firstSave = !p.id;
+  if (firstSave) p.id = (await api("/api/newid")).id;
   p.name = $("projectName").value.trim() || t("Project");
   p.view = { center: [map.getCenter().lat, map.getCenter().lng], zoom: map.getZoom() };
   const r = await api(`/api/projects/${p.id}`, { method: "PUT", body: p });
@@ -65,6 +67,7 @@ async function saveProject() {
   p.owner = r.project?.owner || p.owner;
   setDirty(false);
   history.replaceState(null, "", `?p=${encodeURIComponent(p.id)}${location.hash}`);
+  if (firstSave) loadMeasurements();    // measurements belong to the project from now on (#53)
   status(p.public ? t("Saved – publicly visible.") : t("Saved (private)."));
 }
 
@@ -205,7 +208,7 @@ function wire() {
   setPingHandler(inspectPing);
 
   map.on("click", (e) => {
-    if (!isPlacing()) return;
+    if (!isPlacing()) { closeInspector(); clearSelection(); return; }   // #51: a click into the empty map ends the selection
     const st = finishPlacing(e.latlng);
     if (st) { state.selectedStationId = st.id; inspectStation(st, "settings"); }
   });
@@ -256,7 +259,6 @@ async function start() {
   try { state.catalog = await api("/api/catalog"); emit("catalog-loaded"); } catch (e) { console.warn("catalog", e); }
   pollStatus();
   initNetworkWorkspace().catch((e) => console.warn("CoreScope", e));
-  if (isMember() || state.config.site?.measurements_public) loadMeasurements(); else renderMeasure();
 
   if (!isMember() && !state.config.auth?.public_read) { loadProject(emptyProject()); status(t("Please log in.")); $("loginDlg").showModal(); return; }
   const list = await api("/api/projects").catch(() => []);

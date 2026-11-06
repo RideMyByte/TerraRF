@@ -9,7 +9,7 @@ from fastapi import APIRouter, Body, HTTPException, Request
 
 from ..model import coverage
 from ..site import auth
-from ..store import accounts, appconfig, projects
+from ..store import accounts, appconfig, ingestkeys, measurements, projects
 from .deps import ADMIN, MEMBER, READ, visible_project
 
 router = APIRouter()
@@ -69,6 +69,8 @@ def delete_project(request: Request, project_id: str):
             raise HTTPException(403, "Dieses Projekt darf nur sein Ersteller oder der Admin löschen")
         projects.delete(project_id)
         accounts.delete_project(project_id)
+        ingestkeys.delete(project_id)
+        measurements.reassign_project(project_id)   # measurements are kept, as the admin's own
     except projects.NotFound:
         raise HTTPException(404, "Projekt nicht gefunden")
     except ValueError as e:
@@ -81,6 +83,31 @@ def new_id(request: Request):
     if auth.role(request) == "project":
         raise HTTPException(403, "Mit diesem Zugang lassen sich keine Projekte anlegen")
     return {"id": uuid.uuid4().hex[:12]}
+
+
+# ---------------------------------------------------------------- MeshMapper key per project (#53)
+def _editable(request, project_id):
+    _existing(project_id)
+    project = projects.load(project_id)
+    if not projects.can_edit(auth.role(request), project, auth.account_project(request)):
+        raise HTTPException(403, "Nur wer das Projekt bearbeiten darf")
+    return project
+
+
+@router.get("/api/projects/{project_id}/ingest-key", dependencies=MEMBER)
+def get_ingest_key(request: Request, project_id: str):
+    """The project's MeshMapper key – for everybody who may edit the project, so collaborators can measure too."""
+    _editable(request, project_id)
+    return {"key": ingestkeys.get(project_id)}
+
+
+@router.post("/api/projects/{project_id}/ingest-key", dependencies=MEMBER)
+def new_ingest_key(request: Request, project_id: str):
+    """Create or replace the key (the old one stops working). Not for collaborators."""
+    _editable(request, project_id)
+    if auth.role(request) == "project":
+        raise HTTPException(403, "Den Schlüssel erneuert der Ersteller des Projekts oder der Admin")
+    return {"key": ingestkeys.generate(project_id)}
 
 
 # ---------------------------------------------------------------- collaborator accounts (admin)

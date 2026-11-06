@@ -4,7 +4,7 @@
  */
 import { t } from "../core/i18n.js";
 import { $, escapeHtml, fmt, fmtDateTime, fmtTime } from "../core/util.js";
-import { state, on, isMember, isAdmin } from "../core/state.js";
+import { state, on, isCollaborator, canEditProject } from "../core/state.js";
 import { api } from "../core/api.js";
 import { status, sourceBadge } from "../core/ui.js";
 import { map } from "../map/map.js";
@@ -16,7 +16,9 @@ let editingSeries = null;
 export function renderMeasure() {
   const el = root();
   if (!meas.allowed) {
-    el.innerHTML = `<h2>${t("Measure")}</h2><p class="muted">${t("Measurements are only visible after logging in.")}</p>`;
+    el.innerHTML = `<h2>${t("Measure")}</h2><p class="muted">${!state.project?.id
+      ? t("Save the project first – measurements belong to a project.")
+      : t("The measurements of this project are not visible to you.")}</p>`;
     return;
   }
   const s = meas.stats || {};
@@ -33,16 +35,17 @@ export function renderMeasure() {
     <h4>${t("Measurement series")}</h4>
     <div class="serieslist">${meas.series.slice(0, 50).map(seriesCard).join("") || `<p class="muted">${t("No measurements yet.")}</p>`}</div>
     ${meas.series.length > 50 ? `<p class="muted">${t("… {n} older", { n: meas.series.length - 50 })}</p>` : ""}
-    ${isMember() ? `<h4>${t("Add measurements")}</h4>
+    ${canEditProject() ? `<h4>${t("Add measurements")}</h4>
       <p class="muted">${t("Single values: right-click (long press on phones) on the map → “Enter measurement”.")}</p>
       <label>${t("Import a CSV file")}<input type="file" id="mCsv" accept=".csv,text/csv"></label>
       <p class="muted">${t("Columns: lat, lon, rep (key or prefix), snr_down; optional snr_up, rssi, rx_h, ts, note.")}</p>
       <div id="mCsvOut" class="muted"></div>
       <h4>MeshMapper</h4>
-      <p class="muted">${t("In the MeshMapper app: Settings → API endpoints → custom endpoint")}:<br><code>${escapeHtml(location.origin)}/api/ingest/meshmapper</code><br>
-        ${t("Header X-API-Key: the key from Administration → Data sources.")}</p>` : ""}
-    ${isAdmin() ? `<h4>${t("Delete")}</h4><div class="row"><select id="mDelSrc">${Object.keys(s.by_source || {}).map((k) => `<option>${escapeHtml(k)}</option>`).join("")}</select>
+      <p class="muted">${t("Measurements sent with this project's key land in this project only. In the MeshMapper app: Settings → API Endpoints → Import from Clipboard, with the link below.")}</p>
+      <div id="mmKeyBox" class="muted wait">${t("loading")}</div>` : ""}
+    ${canEditProject() ? `<h4>${t("Delete")}</h4><div class="row"><select id="mDelSrc">${Object.keys(s.by_source || {}).map((k) => `<option>${escapeHtml(k)}</option>`).join("")}</select>
       <button id="mDel" class="danger" style="flex:0 0 auto">${t("Delete all of this source")}</button></div>` : ""}`;
+  if (canEditProject() && state.project?.id) showProjectKey(el.querySelector("#mmKeyBox"));
   el.querySelector("#mPoints").onchange = (e) => { meas.show.points = e.target.checked; drawMeasurements(); };
   el.querySelector("#mDays").onchange = (e) => { meas.days = e.target.value ? +e.target.value : null; meas.comparison = null; loadMeasurements(); };
   el.querySelectorAll(".series").forEach(bindSeries);
@@ -51,7 +54,7 @@ export function renderMeasure() {
     const file = e.target.files[0]; if (!file) return;
     const out = el.querySelector("#mCsvOut");
     try {
-      const r = await api("/api/measurements", { method: "POST", body: { csv: await file.text() } });
+      const r = await api("/api/measurements", { method: "POST", body: { project: state.project.id, csv: await file.text() } });
       out.textContent = t("{n} stored", { n: r.stored }) + (r.errors.length ? ` · ${t("{n} errors", { n: r.errors.length })}: ${r.errors.slice(0, 3).join("; ")}` : ".");
       meas.show.points = true; loadMeasurements();
     } catch (err) { out.textContent = t("Error: {msg}", { msg: err.message }); }
@@ -61,9 +64,31 @@ export function renderMeasure() {
   if (del) del.onclick = async () => {
     const src = el.querySelector("#mDelSrc").value;
     if (!src || !confirm(t("Delete all measurements of the source “{src}”?", { src }))) return;
-    try { const r = await api("/api/measurements", { method: "DELETE", body: { src } }); status(t("{n} measurements deleted.", { n: r.deleted })); loadMeasurements(); }
+    try { const r = await api("/api/measurements", { method: "DELETE", body: { project: state.project.id, src } }); status(t("{n} measurements deleted.", { n: r.deleted })); loadMeasurements(); }
     catch (e) { status(t("Error: {msg}", { msg: e.message }), "err"); }
   };
+}
+
+/** #53: the project's own MeshMapper key and the link for the app. */
+async function showProjectKey(box) {
+  if (!box) return;
+  const path = `/api/projects/${encodeURIComponent(state.project.id)}/ingest-key`;
+  const render = (key) => {
+    const ingest = `${location.host}/api/ingest/meshmapper`;
+    const link = key ? `meshmapper://custom-api?url=${ingest}&key=${key}` : "";
+    box.className = "";
+    box.innerHTML = key ? `<label>${t("Link for phones")}<div class="row"><input readonly value="${escapeHtml(link)}"><button data-a="copy" style="flex:0 0 auto">${t("copy")}</button></div></label>
+        <div class="muted">${t("Endpoint")}: <code>https://${escapeHtml(ingest)}</code> · X-API-Key: <code>${escapeHtml(key)}</code></div>` : `<p class="muted">${t("This project has no key yet.")}</p>`;
+    if (!isCollaborator()) box.insertAdjacentHTML("beforeend", `<button data-a="new">${key ? t("New key (the old one stops working)") : t("Create key")}</button>`);
+    const copy = box.querySelector('[data-a="copy"]');
+    if (copy) copy.onclick = () => navigator.clipboard?.writeText(link).then(() => status(t("Link copied.")));
+    const fresh = box.querySelector('[data-a="new"]');
+    if (fresh) fresh.onclick = async () => {
+      if (key && !confirm(t("Create a new key? Phones with the old key stop sending to this project."))) return;
+      try { render((await api(path, { method: "POST" })).key); } catch (e) { status(t("Error: {msg}", { msg: e.message }), "err"); }
+    };
+  };
+  try { render((await api(path)).key); } catch (e) { box.textContent = t("Error: {msg}", { msg: e.message }); }
 }
 
 function seriesCard(s) {
@@ -71,7 +96,7 @@ function seriesCard(s) {
   return `<div class="series ${selected ? "on" : ""}" data-sid="${s.id}">
     <div class="series-head"><span>${sourceBadge(s.src)} <b>${escapeHtml(seriesName(s))}</b></span><span class="muted">${t("{n} meas.", { n: s.n })} · ${t("{n} rep.", { n: s.repeaters })}</span></div>
     <div class="muted">${s.t0 ? `${fmtDateTime(s.t0)} – ${fmtTime(s.t1)} · ` : ""}${t("Receiver")}: ${escapeHtml(receiverText(s))}${s.power_seen ? ` · ${escapeHtml(s.power_seen)}` : ""}</div>
-    <div class="actions"><button data-a="show">${selected ? t("show all") : t("show")}</button>${isMember() ? `<button data-a="edit">✎ ${t("Receiver")}</button>` : ""}${isAdmin() ? `<button data-a="del" class="danger" title="${escapeHtml(t("Delete series"))}">🗑</button>` : ""}</div>
+    <div class="actions"><button data-a="show">${selected ? t("show all") : t("show")}</button>${canEditProject() ? `<button data-a="edit">✎ ${t("Receiver")}</button>` : ""}${canEditProject() ? `<button data-a="del" class="danger" title="${escapeHtml(t("Delete series"))}">🗑</button>` : ""}</div>
     ${editingSeries === s.id ? seriesForm(s) : ""}</div>`;
 }
 
@@ -106,14 +131,14 @@ function bindSeries(el) {
   on_("edit", () => { editingSeries = editingSeries === s.id ? null : s.id; renderMeasure(); });
   on_("del", async () => {
     if (!confirm(t("Delete series “{name}” with {n} measurements?", { name: seriesName(s), n: s.n }))) return;
-    try { await api("/api/measurements", { method: "DELETE", body: { series: s.id } }); if (meas.seriesId === s.id) meas.seriesId = null; loadMeasurements(); }
+    try { await api("/api/measurements", { method: "DELETE", body: { project: state.project.id, series: s.id } }); if (meas.seriesId === s.id) meas.seriesId = null; loadMeasurements(); }
     catch (e) { status(t("Error: {msg}", { msg: e.message }), "err"); }
   });
   on_("save", async () => {
     const body = {};
     el.querySelectorAll("[data-k]").forEach((i) => { body[i.dataset.k] = i.type === "checkbox" ? i.checked : i.value === "" ? null : (i.type === "number" ? +i.value : i.value); });
     try {
-      await api(`/api/measurements/series/${s.id}`, { method: "PUT", body });
+      await api(`/api/measurements/series/${s.id}`, { method: "PUT", body: { ...body, project: state.project.id } });
       editingSeries = null; meas.comparison = null; loadMeasurements();
       status(t("Series saved – compare again for new values."));
     } catch (e) { el.querySelector("[data-out]").textContent = t("Error: {msg}", { msg: e.message }); }

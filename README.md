@@ -47,7 +47,7 @@ Further:
 | **Admin** (`RFP_ADMIN_USER`) | everything: all projects, **global model settings**, **catalogs**, data sources, website & legal pages |
 | **User** (optional, set up in Administration) | create **own projects** (private or public) and change only those; see public projects and save a copy of them; enter measurements and edit series |
 | **Collaborator** (per project, created by the admin) | open, change and compute **one** shared project – private or public – and enter measurements; cannot publish, create or delete projects |
-| **Visitor** | view projects marked *public* (if `RFP_PUBLIC_READ`), measurements only if the admin allows it |
+| **Visitor** | view projects marked *public* (if `RFP_PUBLIC_READ`) including their measurements, without time stamps or series names |
 
 A project – public or not – is changed only by whoever created it, its collaborators and the admin. Projects from
 before 0.5.1 belong to the admin. To let someone work on a project: project menu → *Share & collaborators* → create a
@@ -173,12 +173,20 @@ or add the repeater as a station.
 - **SNR from packet paths** is an average over observers: an observer only hears the last hop and short prefixes are
   ambiguous. Such values are shown (in italics), never compared.
 - SNR above 10 dB is not used in statistics – LoRa SNR reports saturate at the top.
+- **Link history:** every fresh fetch of a repeater's links is stored when something changed (SQLite, 400 days); the
+  auto sync also refreshes the links of the project's repeaters. The link inspector shows the SNR over time and how
+  often per day each side was heard. These are packet counts, not a loss rate: CoreScope does not say how many adverts
+  were sent (MeshCore defaults: flood advert every 12 h, zero-hop adverts only if `advert.interval` is set).
 
 Please use public instances gently and ask the operators if in doubt.
 
 ### Drive tests (MeshMapper, CSV, manual)
-1. **MeshMapper forwarding:** in *Administration → Data sources* generate a key, save, copy the link and paste it in
-   the MeshMapper app (*Settings → API Endpoints → Import from Clipboard*). The app then also sends every uploaded block
+Measurements belong to a **project**: whoever may edit a project sees and enters its measurements, visitors see those of
+public projects. Measurements sent with the admin key (and those from before 0.5.5) form the admin's pool, which every
+project of the admin sees.
+1. **MeshMapper forwarding:** in *Measure → MeshMapper* create the project's key (or, for the admin's pool, in
+   *Administration → Data sources*), copy the link and paste it in the MeshMapper app
+   (*Settings → API Endpoints → Import from Clipboard*). Measurements then land in exactly that project. The app then also sends every uploaded block
    to `https://<host>/api/ingest/meshmapper` (header `X-API-Key`). MeshMapper requires HTTPS. DISC/TRACE (SNR at phone
    and repeater, RSSI) and TX/RX echoes (SNR per repeater) are stored; duplicate echoes count once. Repeater prefixes
    are resolved to keys through the CoreScope list when unique in the area.

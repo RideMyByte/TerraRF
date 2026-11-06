@@ -4,7 +4,7 @@ from __future__ import annotations
 import re
 import time
 
-from fastapi import APIRouter, Body, Request
+from fastapi import APIRouter, Body, HTTPException, Request
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import Response
 
@@ -12,6 +12,7 @@ from ..analysis import report
 from ..model import terrain
 from ..store import appconfig
 from .deps import fail, project_for
+from .measurements import station_measurements
 
 router = APIRouter()
 
@@ -30,8 +31,12 @@ async def pdf(request: Request, body: dict = Body(...)):
     project = project_for(request, body)
     parent = appconfig.public().get("parent")
     try:
+        rows = station_measurements(request, body)[2]
+    except HTTPException:
+        rows = []          # station without repeater, or no measurements for this requester
+    try:
         data = await run_in_threadpool(report.pdf, project, body["station_id"], body.get("cal"),
-                                       parent and (parent.get("name") or parent.get("url")), body.get("lang") or "de")
+                                       parent and (parent.get("name") or parent.get("url")), body.get("lang") or "de", rows)
     except (ValueError, KeyError, terrain.SourceError) as e:
         fail(e)
     station = next((x for x in project.get("stations") or [] if x["id"] == body["station_id"]), {})

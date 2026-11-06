@@ -35,9 +35,8 @@ DEFAULTS = {
     "parent_name": os.environ.get("RFP_PARENT_NAME", ""),
     "parent_url": os.environ.get("RFP_PARENT_URL", ""),
     "show_github": os.environ.get("RFP_SHOW_GITHUB", "true").strip().lower() not in ("0", "false", "no"),
-    # measurements: key for the MeshMapper forwarding, visibility for visitors
+    # the admin's own MeshMapper key (measurements without project); projects have their own keys (#53)
     "mm_api_key": os.environ.get("RFP_MEASURE_KEY", ""),
-    "measurements_public": False,
     # #46: notice banner for everybody (beta, under construction, maintenance …); kind picks a ready-made text
     "notice_enabled": False,
     "notice_kind": "beta",
@@ -99,7 +98,6 @@ def public():
         "parent": {"name": c["parent_name"], "url": c["parent_url"]} if c["parent_name"] or c["parent_url"] else None,
         "github": GITHUB_URL if c["show_github"] else None,
         "user_enabled": bool(c["user_enabled"]),
-        "measurements_public": bool(c["measurements_public"]),
         "notice": {"kind": c["notice_kind"], "text": c["notice_text"]} if c["notice_enabled"] else None,
         "welcome": bool(c["welcome_enabled"]),
     }

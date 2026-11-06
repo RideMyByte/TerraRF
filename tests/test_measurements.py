@@ -35,7 +35,7 @@ def test_meshmapper_ingest_and_query(admin):
         r = anon.post("/api/ingest/meshmapper", json=batch, headers={"X-API-Key": KEY})
         assert r.status_code == 200 and r.json()["stored"] == 3
         assert anon.post("/api/ingest/meshmapper", json=batch, headers={"X-API-Key": KEY}).json()["stored"] == 0  # doppelt
-        assert anon.get("/api/measurements").status_code == 401   # Besucher: nicht freigegeben
+        assert anon.get("/api/measurements").status_code == 400   # #53: without a project only the admin sees anything
     d = admin.get("/api/measurements").json()
     assert d["stats"]["count"] == 3
     disc = next(x for x in d["rows"] if x["kind"] == "DISC")

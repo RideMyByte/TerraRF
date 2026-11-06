@@ -160,6 +160,7 @@ def auto_sync_loop():
                 start_sync()
             except ValueError:
                 return
+            threading.Thread(target=record_station_links, daemon=True).start()
             age = 0
         time.sleep(max(600, SYNC_H * 3600 - age))
 
@@ -207,7 +208,33 @@ def links(pk, refresh=False):
     out = merge_links(pk, reach, nb)
     with open(p, "w") as f:
         json.dump(out, f)
+    try:
+        from . import linkhistory
+        linkhistory.record(out)          # #52: keep the state for scatter and time course
+    except Exception as e:  # noqa: BLE001 – history is optional
+        log.warning("link history: %s", e)
     return out
+
+
+def record_station_links(max_repeaters=40):
+    """After a sync: fetch the links of repeaters that are stations of a project, so their history grows even when
+    nobody looks (#52). At most max_repeaters, slowly, one after the other."""
+    from ..store import projects
+    pks = []
+    for item in projects.list_all("admin"):
+        try:
+            for st in projects.load(item["id"]).get("stations") or []:
+                pk = str(st.get("corescope_pk") or "").lower()
+                if PK.match(pk) and pk not in pks:
+                    pks.append(pk)
+        except Exception:  # noqa: BLE001
+            continue
+    for pk in pks[:max_repeaters]:
+        try:
+            links(pk, refresh=True)
+        except Exception as e:  # noqa: BLE001
+            log.warning("links %s: %s", pk[:8], e)
+        time.sleep(2)
 
 
 def merge_links(pk, reach, nb, reports=None):

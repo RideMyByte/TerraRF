@@ -171,7 +171,7 @@ def tiles_world():
 
 
 # ---------------------------------------------------------------- PDF
-def pdf(project, sid, cal_defaults=None, site=None, lang="de"):
+def pdf(project, sid, cal_defaults=None, site=None, lang="de", measurement_rows=()):
     """PDF report of one station: map, key figures, model settings, comparison with drive tests.
 
     ``lang`` is the interface language of the requester. The report texts are German so far; the parameter
@@ -225,8 +225,8 @@ def pdf(project, sid, cal_defaults=None, site=None, lang="de"):
             nbs = [x for x in mc["links"] if x.get("bidir") or x.get("snr") is not None]
         except Exception:  # noqa: BLE001
             mc = None
-    mrows = measurements.query(None, st["corescope_pk"]) if st.get("corescope_pk") else []
-    mrows = [m for m in mrows if m.get("snr_down") is not None]
+    # measurement_rows: the measurements of this station's repeater the requester may see (#53, api/reports.py)
+    mrows = [m for m in (measurement_rows or []) if m.get("snr_down") is not None]
     try:
         jpg, base_ok = _map_image(st, r, s, neighbors=nbs, points=mrows)
         im = RLImage(io.BytesIO(jpg))
@@ -303,10 +303,12 @@ def pdf(project, sid, cal_defaults=None, site=None, lang="de"):
             kinds = {}
             for m in mrows:
                 kinds[m.get("kind") or "?"] = kinds.get(m.get("kind") or "?", 0) + 1
-            first = min(m["ts"] for m in mrows if m.get("ts")); last = max(m["ts"] for m in mrows if m.get("ts"))
+            stamps = [m["ts"] for m in mrows if m.get("ts")]   # visitors get no times
+            period = (f"{time.strftime('%d.%m.%Y', time.localtime(min(stamps)))} bis "
+                      f"{time.strftime('%d.%m.%Y', time.localtime(max(stamps)))}. ") if stamps else ""
             story.append(Paragraph(
-                f"{len(mrows)} Messungen dieses Repeaters ({', '.join(f'{k} {v}' for k, v in sorted(kinds.items()))}), "
-                f"{time.strftime('%d.%m.%Y', time.localtime(first))} bis {time.strftime('%d.%m.%Y', time.localtime(last))}. "
+                f"{len(mrows)} Messungen dieses Repeaters ({', '.join(f'{k} {v}' for k, v in sorted(kinds.items()))}). "
+                f"{period}"
                 f"Empfänger je Messreihe (sonst Projekt: {f(cmp_['rx_height_m'])} m / {f(cmp_['rx_gain_dbi'])} dBi), "
                 f"Rauschboden {f(cmp_['noise_dbm'])} dBm"
                 + (f"; {cmp_['outside']} Messungen außerhalb des Rechenradius." if cmp_['outside'] else "."), P))

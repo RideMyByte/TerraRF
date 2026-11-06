@@ -11,6 +11,7 @@ import { map } from "./map/map.js";
 import { RADIO_PRESETS, LORA_REQUIRED_SNR, sensitivityDbm, noiseFloorDbm, estimatedVerticalBeamwidth, applyCatalogAntenna, drawStation, removeStationMarker, startPlacing, newStation, withoutLabel } from "./map/stations.js";
 import { compute, resultsByStation, sampleStation, setSolo, view, requiredMargin } from "./map/coverage.js";
 import { showProfile } from "./profile.js";
+import { select, clearSelection } from "./selection.js";
 import { net, nodeByPk, linkTo, snrText, mastHeightGuess, showNeighbours, clearNetworkSelection, setFocus, loadMeta, saveOverride, nearbyNodes, repeaterName, enabled as networkEnabled, nodePosition } from "./network.js";
 import { meas, seriesById, seriesName, receiverText, receiverFor, loadMeasurements, focusSeries } from "./measurements.js";
 import { exportPdf } from "./workspaces/report.js";
@@ -23,7 +24,9 @@ export function inspectStation(station, tab) {
   const tabs = [{ id: "overview", label: t("Overview"), render: (b) => stationOverview(b, station) },
     { id: "settings", label: editable ? t("Edit") : t("Details"), render: (b) => stationSettings(b, station) }];
   if (networkEnabled()) tabs.push({ id: "network", label: t("Network"), render: (b) => stationNetwork(b, station) });
-  showInspector({ kind: t("Station"), key: "station:" + station.id, title: titleInput || station.name, tabs, tab });
+  showInspector({ kind: t("Station"), key: "station:" + station.id, title: titleInput || station.name, tabs, tab,
+    onClose: ({ switching }) => { if (!switching) clearSelection(); } });
+  select({ stationId: station.id });      // #51: only this station, its neighbours and measurements
 }
 
 function changed(station) {
@@ -133,8 +136,8 @@ function stationSettings(body, st) {
         <p class="muted">${t("No directional pattern: inside the sector the antenna stays as set, outside it is attenuated with a soft 15° edge. Buildings in the surface model are computed anyway – the sector is for what the model cannot know (a wall, roof structures, metal).")}</p>` : ""}`,
       antennaSummary(a))}
     ${networkEnabled() ? section("mc", "MeshCore", st.corescope_pk
-      ? `<div>${t("Linked with")} <b>${escapeHtml(repeaterName(st.corescope_pk))}</b>.</div>${isAdmin() ? `<button id="btnUnlink" class="danger">${t("Unlink")}</button>` : ""}`
-      : isAdmin() ? `<label>${t("Link with a repeater (within 3 km)")}<select id="linkRepeater"><option value="">${t("– not linked –")}</option>${nearbyNodes(st.lat, st.lon).map(({ node, km }) => `<option value="${node.pk}">${escapeHtml(node.name)} (${fmt(km * 1000, 0)} m)</option>`).join("")}</select></label>`
+      ? `<div>${t("Linked with")} <b>${escapeHtml(repeaterName(st.corescope_pk))}</b>.</div>${canEditProject() ? `<button id="btnUnlink" class="danger">${t("Unlink")}</button>` : ""}`
+      : canEditProject() ? `<label>${t("Link with a repeater (within 3 km)")}<select id="linkRepeater"><option value="">${t("– not linked –")}</option>${nearbyNodes(st.lat, st.lon).map(({ node, km }) => `<option value="${node.pk}">${escapeHtml(node.name)} (${fmt(km * 1000, 0)} m)</option>`).join("")}</select></label>`
       : `<p class="muted">${t("not linked")}</p>`, st.corescope_pk ? t("linked") : "") : ""}
     ${section("calc", t("Computation & notes"), `
       <div class="grid2"><label>${t("Radius (km)")}<input type="number" step="0.5" min="0.5" max="80" data-k="radius_km" value="${st.radius_km}"></label></div>
@@ -209,7 +212,8 @@ export function inspectRepeater(pk, tab) {
   const tabs = [{ id: "overview", label: t("Overview"), render: (b) => repeaterOverview(b, pk) }];
   if (meas.allowed) tabs.push({ id: "measurements", label: t("Measurements"), render: (b) => repeaterMeasurements(b, pk) });
   showInspector({ kind: t("Repeater"), key: "repeater:" + pk, title: repeaterName(pk), tabs, tab,
-    onClose: () => { if (net.focusPk === pk) setFocus(null); } });
+    onClose: ({ switching }) => { if (net.focusPk === pk) setFocus(null); if (!switching) clearSelection(); } });
+  select({ pk });                         // #51: its neighbours, its measurements, its station if it has one
   loadMeta(pk).then(() => { if (inspectorKey() === "repeater:" + pk) renderInspectorTab(); });
 }
 
@@ -310,15 +314,61 @@ export function inspectLink(centrePk, partnerPk) {
         <tr><td>${t("… last heard")}</td><td>${time(link.heard_rev_at)}</td></tr>
         <tr><td>${t("SNR from packet paths (average)")}</td><td>${link.snr_any != null ? fmt(link.snr_any, 1) + " dB" : "–"} <span class="muted">${t("uncertain")}</span></td></tr>
         <tr><td>${t("Packets counted")}</td><td>${link.count || "–"}</td></tr>
+        ${net.links?.window_days ? `<tr><td>${t("Per day (both ways)")}</td><td>${fmt((link.they_hear || 0) / net.links.window_days, 1)} / ${fmt((link.we_hear || 0) / net.links.window_days, 1)}</td></tr>` : ""}
         <tr><td>${t("Data window")}</td><td>${net.links?.window_days ?? "?"} ${t("days")}</td></tr></table>
         <p class="muted">${t("Directly reported SNR comes from the neighbour table the receiving repeater sends to CoreScope (zero hop). Path values are averages over observers and only hint at the link.")}</p>
+        <p class="muted">${t("The counts contain every packet one repeater heard from the other, not only adverts – so they cannot be turned into a loss rate. For comparison: a MeshCore repeater sends a flood advert every 12 h by default (flood.advert.interval) and zero-hop adverts only if advert.interval is set.")}</p>
         <div class="actions">${centreStation ? `<button data-a="prof" class="primary">${t("Profile")}</button>` : ""}<button data-a="partner">${t("Partner details")}</button></div>
         ${!centreStation ? `<p class="muted">${t("A profile needs the repeater as a station of the project.")}</p>` : ""}`;
       const pr = body.querySelector('[data-a="prof"]');
       if (pr) pr.onclick = () => openLinkProfile(centreStation, partnerStation, link);
       body.querySelector('[data-a="partner"]').onclick = () => inspectRepeater(partnerPk);
-    } }] });
+    } }, { id: "history", label: t("History"), render: (body) => linkHistory(body, centrePk, partnerPk, centreName, link.name || "") }] });
   if (centreStation) openLinkProfile(centreStation, partnerStation, link);   // #26: profile right away
+}
+
+/** #52: scatter and course of a link, from what TerraRF recorded at every fetch. */
+async function linkHistory(body, centrePk, partnerPk, centreName, partnerName) {
+  body.innerHTML = `<div class="muted wait">${t("loading")}</div>`;
+  let h;
+  try { h = await api(`/api/corescope/links/${centrePk}/history/${partnerPk}`); }
+  catch (e) { body.innerHTML = `<div class="warn">${escapeHtml(e.message)}</div>`; return; }
+  const row = (label, s) => s ? `<tr><td>${label}</td><td>${s.n}</td><td>${fmt(s.mean, 1)}</td><td>${fmt(s.median, 1)}</td><td>± ${fmt(s.std, 1)}</td><td>${fmt(s.min, 1)} … ${fmt(s.max, 1)}</td></tr>` : "";
+  const counts = h.points.filter((p) => p.they_hear != null || p.we_hear != null);
+  body.innerHTML = !h.points.length ? `<p class="muted">${t("Nothing recorded yet. TerraRF keeps the state of a link every time it is fetched – open it again later.")}</p>` : `
+    <p class="muted">${t("Recorded since {d}: {n} states.", { d: fmtDateTime(h.since), n: h.points.length })}</p>
+    <h4>${t("Directly reported SNR")}</h4>
+    ${h.snr || h.snr_rev ? `<table class="mini"><tr><th></th><th>n</th><th>${t("mean")}</th><th>${t("median")}</th><th>${t("scatter")}</th><th>min … max</th></tr>
+      ${row(t("at {b}", { b: escapeHtml(partnerName) }), h.snr)}${row(t("at {a}", { a: escapeHtml(centreName) }), h.snr_rev)}</table>
+      ${sparkline([[h.snr_series, "#2563eb"], [h.snr_rev_series, "#d97706"]], "dB")}
+      <p class="muted"><span style="color:#2563eb">■</span> ${t("at {b}", { b: escapeHtml(partnerName) })} · <span style="color:#d97706">■</span> ${t("at {a}", { a: escapeHtml(centreName) })}. ${t("One value per neighbour report (each report counts once).")}</p>`
+      : `<p class="muted">${t("No directly reported SNR yet.")}</p>`}
+    ${counts.length > 1 ? `<h4>${t("Packets heard (CoreScope window)")}</h4>
+      ${sparkline([[counts.map((p) => [p.ts, p.they_hear]), "#16a34a"], [counts.map((p) => [p.ts, p.we_hear]), "#7c3aed"]], "")}
+      <p class="muted"><span style="color:#16a34a">■</span> ${t("{a} heard by {b}", { a: escapeHtml(centreName), b: escapeHtml(partnerName) })} · <span style="color:#7c3aed">■</span> ${t("{a} heard by {b}", { a: escapeHtml(partnerName), b: escapeHtml(centreName) })}.
+        ${t("Counts over the sliding data window of CoreScope, not per day.")}</p>` : ""}`;
+}
+
+/** Small time-series chart: series = [[[unix, value], …], colour]. */
+function sparkline(series, unit) {
+  const all = series.flatMap(([pts]) => pts).filter(([, v]) => v != null);
+  if (all.length < 2) return "";
+  const W = 320, H = 90, pad = 22;
+  const t0 = Math.min(...all.map((p) => p[0])), t1 = Math.max(...all.map((p) => p[0])) || t0 + 1;
+  const v0 = Math.min(...all.map((p) => p[1])), v1 = Math.max(...all.map((p) => p[1]));
+  const span = v1 - v0 || 1;
+  const x = (tt) => pad + (W - pad - 4) * (tt - t0) / ((t1 - t0) || 1), y = (v) => H - 14 - (H - 24) * (v - v0) / span;
+  const lines = series.map(([pts, colour]) => {
+    const p = pts.filter(([, v]) => v != null);
+    return p.length ? `<polyline fill="none" stroke="${colour}" stroke-width="1.5" points="${p.map(([a, b]) => `${x(a).toFixed(1)},${y(b).toFixed(1)}`).join(" ")}"/>`
+      + p.map(([a, b]) => `<circle cx="${x(a).toFixed(1)}" cy="${y(b).toFixed(1)}" r="2" fill="${colour}"/>`).join("") : "";
+  }).join("");
+  return `<svg viewBox="0 0 ${W} ${H}" class="spark" role="img">
+    <text x="2" y="${y(v1) + 4}" font-size="9" fill="#6b7280">${fmt(v1, 0)}${unit ? " " + unit : ""}</text>
+    <text x="2" y="${y(v0) + 4}" font-size="9" fill="#6b7280">${fmt(v0, 0)}</text>
+    <text x="${pad}" y="${H - 2}" font-size="9" fill="#6b7280">${escapeHtml(fmtDateTime(t0))}</text>
+    <text x="${W - 4}" y="${H - 2}" font-size="9" fill="#6b7280" text-anchor="end">${escapeHtml(fmtDateTime(t1))}</text>
+    <line x1="${pad}" x2="${W - 4}" y1="${H - 14}" y2="${H - 14}" stroke="#e5e7eb"/>${lines}</svg>`;
 }
 
 async function openLinkProfile(centreStation, partnerStation, link) {
@@ -357,7 +407,7 @@ export function inspectPing(ping) {
           ${isMember() ? `<tr><td>${t("Terrain / surface")}</td><td data-elev><span class="muted">${t("loading")}</span></td></tr>` : ""}
         </table>
         <p class="muted">${t("Tap a repeater name for its details; the profile shows the path from the strongest repeater (tap ⛰ for another one).")}</p>
-        <div class="actions">${series ? `<button data-a="series">${t("Show series")}</button>` : ""}${isAdmin() ? `<button data-a="delete" class="danger">${t("Delete measurement")}</button>` : ""}</div>`;
+        <div class="actions">${series ? `<button data-a="series">${t("Show series")}</button>` : ""}${canEditProject() ? `<button data-a="delete" class="danger">${t("Delete measurement")}</button>` : ""}</div>`;
       body.querySelectorAll("[data-pk]").forEach((a) => a.onclick = () => { if (a.dataset.pk) inspectRepeater(a.dataset.pk); });
       body.querySelectorAll("[data-prof]").forEach((b) => b.onclick = () => openPingProfile(ping, ping.rows[+b.dataset.prof]));
       const elev = body.querySelector("[data-elev]");
@@ -369,7 +419,7 @@ export function inspectPing(ping) {
       const del = body.querySelector('[data-a="delete"]');
       if (del) del.onclick = async () => {
         if (!confirm(t("Delete this ping ({n} rows)?", { n: ping.rows.length }))) return;
-        try { await api("/api/measurements", { method: "DELETE", body: { ids: ping.rows.map((r) => r.id) } }); closeInspector(); loadMeasurements(); }
+        try { await api("/api/measurements", { method: "DELETE", body: { project: state.project.id, ids: ping.rows.map((r) => r.id) } }); closeInspector(); loadMeasurements(); }
         catch (e) { status(t("Error: {msg}", { msg: e.message }), "err"); }
       };
     } }] });
@@ -405,7 +455,7 @@ export function inspectLocation(latlng) {
   if (locationMarker) map.removeLayer(locationMarker);
   locationMarker = L.circleMarker(latlng, { radius: 6, color: "#111827", weight: 2, fillColor: "#fff", fillOpacity: 1, interactive: false }).addTo(map);
   const tabs = [{ id: "levels", label: t("Levels"), render: (b) => locationLevels(b, latlng) }];
-  if (isMember()) tabs.push({ id: "measure", label: t("Enter measurement"), render: (b) => locationMeasurement(b, latlng) });
+  if (canEditProject()) tabs.push({ id: "measure", label: t("Enter measurement"), render: (b) => locationMeasurement(b, latlng) });
   showInspector({ kind: t("Location"), key: `loc:${latlng.lat.toFixed(5)},${latlng.lng.toFixed(5)}`, title: `${latlng.lat.toFixed(5)}, ${latlng.lng.toFixed(5)}`, tabs,
     onClose: () => { if (locationMarker) { map.removeLayer(locationMarker); locationMarker = null; } } });
 }
@@ -433,6 +483,7 @@ function locationLevels(body, latlng) {
 }
 
 function locationMeasurement(body, latlng) {
+  if (!state.project?.id) { body.innerHTML = `<p class="muted">${t("Save the project first – measurements belong to a project.")}</p>`; return; }
   const near = nearbyNodes(latlng.lat, latlng.lng, 30, 40);
   const d = settings();
   const options = (list) => `<option value="">${t("– not set –")}</option>` + list.map((x) => `<option value="${escapeHtml(x.id)}">${escapeHtml(x.name)}</option>`).join("");
@@ -469,7 +520,7 @@ function locationMeasurement(body, latlng) {
   body.querySelector('[data-a="save"]').onclick = async () => {
     const out = body.querySelector("[data-out]");
     if (field("rx_h").value === "") { out.textContent = t("Please enter the antenna height above ground."); field("rx_h").focus(); return; }
-    const payload = { lat: latlng.lat, lon: latlng.lng, rep: field("rep").value || field("rep2").value.trim(), ext_ant: field("ext_ant").checked };
+    const payload = { project: state.project.id, lat: latlng.lat, lon: latlng.lng, rep: field("rep").value || field("rep2").value.trim(), ext_ant: field("ext_ant").checked };
     for (const k of ["snr_down", "snr_up", "rssi", "rx_h", "rx_gain_dbi", "rx_cable_db", "power"]) if (field(k).value !== "") payload[k] = +field(k).value;
     for (const k of ["device_id", "placement_id", "note"]) if (field(k).value) payload[k] = field(k).value;
     try {
