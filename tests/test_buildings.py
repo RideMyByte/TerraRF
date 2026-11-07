@@ -103,3 +103,36 @@ def test_mast_height_from_roof(bldg):
     assert on_roof == pytest.approx(31.0, abs=0.2)
     assert beside == pytest.approx(31.0, abs=0.2)
     assert open_field is None
+
+
+def test_roof_under_measurement_point(bldg):
+    """#56: a point in the middle of the 30 m building is on its roof; beside it (street, GPS error) and in the
+    open the default stays."""
+    with settings_store.temporary(_settings(10)):
+        assert cov.roof_height({}, *_at(15, 0)) == pytest.approx(30.0, abs=0.2)
+        assert cov.roof_height({}, *_at(0, 0)) is None          # 5 m beside the wall
+        assert cov.roof_height({}, *_at(-300, 300)) is None
+
+
+def test_roofs_need_a_footprint_when_footprints_exist(bldg):
+    """#56: with footprints loaded, a tall object without footprint (a tree) is no roof and no mast position."""
+    from app.model import buildings
+    ring = [list(_to_ll(x, y)) for x, y in ((CX + 300, CY + 300), (CX + 320, CY + 300), (CX + 320, CY + 320),
+                                             (CX + 300, CY + 320), (CX + 300, CY + 300))]
+    buildings.add([{"id": "way/9", "rings": [ring], "props": {}}], "test")
+    try:
+        with settings_store.temporary(_settings(10)):
+            assert cov.roof_height({}, *_at(15, 0)) is None          # the DOM block has no footprint here
+            assert cov.mast_height_guess({}, *_at(15, 0)) is None
+    finally:
+        buildings.clear()
+    with settings_store.temporary(_settings(10)):
+        assert cov.roof_height({}, *_at(15, 0)) == pytest.approx(30.0, abs=0.2)
+
+
+def test_receiver_on_roof_in_comparison():
+    from app.analysis import compare
+    defaults = {"rx_height_m": 1.5, "rx_gain_dbi": 2.0, "rx_cable_db": 0.0}
+    assert compare.receiver_for_measurement({}, None, defaults, roof=30.0)[0] == 31.5
+    assert compare.receiver_for_measurement({"rx_h": 2}, None, defaults, roof=30.0)[0] == 2
+    assert compare.receiver_for_measurement({}, None, defaults)[0] == 1.5

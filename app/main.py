@@ -20,7 +20,7 @@ from fastapi.staticfiles import StaticFiles
 
 from .api import admin, catalog, coverage, maps, measurements, network, projects, reports, session, site
 from .model import propagation
-from .site import auth
+from .site import auth, offline  # noqa: F401 – offline installs the network gate (#58)
 from .sources import corescope, regions
 from .store import measurements as measurement_store
 from .version import VERSION
@@ -33,7 +33,7 @@ async def lifespan(_app):
     auth.init()
     measurement_store.init()
     threading.Thread(target=propagation.warmup, daemon=True).start()      # compile the numba kernels early
-    if os.environ.get("RFP_PRELOAD", "nrw_dgm,nrw_dom").strip():
+    if os.environ.get("RFP_PRELOAD", "nrw_dgm,nrw_dom").strip() and not offline.enabled():
         threading.Thread(target=regions.start_preload, daemon=True).start()
     threading.Thread(target=corescope.auto_sync_loop, daemon=True).start()
     yield

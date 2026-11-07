@@ -37,7 +37,7 @@ app/
     corescope.py     MeshCore network from a CoreScope instance (read-only, cached)
     linkhistory.py   history of repeater↔repeater links (only changes are stored, SQLite)
     regions.py       offline downloads and the NRW preload
-    tiles.py         map tile proxy with disk cache
+    tiles.py         map tile proxy with disk cache, NRW aerial photo as XYZ, saved offline areas, own MBTiles
     overlay.py       map layers rendered from local elevation data
   store/           what TerraRF keeps on disk
     projects.py      project files, owner and rights (#32), migration of old projects (settings dropped, antenna presets → catalog)
@@ -50,6 +50,7 @@ app/
     auth.py          admin + optional user, signed session cookie
     legal.py         generated imprint and privacy policy (German)
     sysstat.py       what is computing, container load
+    offline.py       offline operation (#58): blocks outgoing requests to public addresses in httpx's transport
 ```
 
 ### Data on disk (`RFP_DATA`, `/data` in the container)
@@ -65,7 +66,9 @@ app/
 | `buildings/footprints.json` | building footprints |
 | `corescope/` | cached CoreScope nodes, links, repeater overrides; `history.db` = link history |
 | `dem/<source>_<res>m/`, `dem/<name>/` | NRW tile store, own GeoTIFFs |
-| `cache/` | coverage results, terrain grids, map tiles |
+| `cache/` | coverage results, terrain grids |
+| `tiles/`, `tiles/mbtiles/` | map tile cache; own raster MBTiles shown as base maps |
+| `tiles_offline/` | map areas saved for offline use (never trimmed) |
 
 ### How a coverage computation runs
 1. `api/coverage.py` receives the project (members) or a project id (visitors) and the station ids.

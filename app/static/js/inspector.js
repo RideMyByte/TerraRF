@@ -8,12 +8,12 @@ import { state, emit, on, isMember, canEditProject, canEditStation, isAdmin, sta
 import { api } from "./core/api.js";
 import { showInspector, closeInspector, renderInspectorTab, inspectorKey, section, rememberSections, status, sourceBadge, sourceName, openWorkspace } from "./core/ui.js";
 import { map } from "./map/map.js";
-import { RADIO_PRESETS, LORA_REQUIRED_SNR, sensitivityDbm, noiseFloorDbm, estimatedVerticalBeamwidth, applyCatalogAntenna, drawStation, removeStationMarker, startPlacing, newStation, withoutLabel } from "./map/stations.js";
+import { RADIO_PRESETS, LORA_REQUIRED_SNR, BROADCAST_EMIN, applyBroadcast, sensitivityDbm, noiseFloorDbm, estimatedVerticalBeamwidth, applyCatalogAntenna, drawStation, removeStationMarker, startPlacing, newStation, withoutLabel } from "./map/stations.js";
 import { compute, resultsByStation, sampleStation, setSolo, view, requiredMargin } from "./map/coverage.js";
 import { showProfile } from "./profile.js";
 import { select, clearSelection } from "./selection.js";
-import { net, nodeByPk, linkTo, snrText, mastHeightGuess, showNeighbours, clearNetworkSelection, setFocus, loadMeta, saveOverride, nearbyNodes, repeaterName, enabled as networkEnabled, nodePosition } from "./network.js";
-import { meas, seriesById, seriesName, receiverText, receiverFor, loadMeasurements, focusSeries } from "./measurements.js";
+import { net, nodeByPk, linkTo, snrText, mastHeightGuess, roofHeight, showNeighbours, clearNetworkSelection, setFocus, loadMeta, saveOverride, nearbyNodes, repeaterName, enabled as networkEnabled, nodePosition } from "./network.js";
+import { meas, seriesById, seriesName, receiverText, receiverFor, explicitHeight, loadMeasurements, focusSeries } from "./measurements.js";
 import { exportPdf } from "./workspaces/report.js";
 
 // ================================================================ station
@@ -47,10 +47,13 @@ function stationOverview(body, st) {
   const eirp = st.tx_power_dbm - (st.cable_loss_db || 0) + (+a.gain_dbi || 0);
   const repeater = st.corescope_pk ? repeaterName(st.corescope_pk) : null;
   body.innerHTML = `
-    <div class="calc"><b style="color:${escapeHtml(st.color)}">●</b> ${fmt(st.freq_mhz, 3)} MHz · ${fmt(mw >= 1000 ? mw / 1000 : mw, mw >= 1000 ? 2 : 0)} ${mw >= 1000 ? "W" : "mW"} · EIRP ${fmt(eirp)} dBm<br>
-      ${t("Height")} ${fmt(st.height_m, 1)} m · ${antennaSummary(a)}<br>${t("Sensitivity")} ${fmt(sensitivityDbm(st))} dBm · ${t("Radius")} ${fmt(st.radius_km, 1)} km
+    <div class="calc"><b style="color:${escapeHtml(st.color)}">●</b> ${fmt(st.freq_mhz, 3)} MHz · ${st.mode === "broadcast"
+      ? `${t("FM broadcast")} · ERP ${fmt(st.erp_w, st.erp_w < 10 ? 1 : 0)} W · EIRP ${fmt(eirp)} dBm<br>
+      ${t("Height")} ${fmt(st.height_m, 1)} m · ${t("Minimum field strength")} ${fmt(st.emin_dbuvm, 0)} dBµV/m (≙ ${fmt(sensitivityDbm(st))} dBm)`
+      : `${fmt(mw >= 1000 ? mw / 1000 : mw, mw >= 1000 ? 2 : 0)} ${mw >= 1000 ? "W" : "mW"} · EIRP ${fmt(eirp)} dBm<br>
+      ${t("Height")} ${fmt(st.height_m, 1)} m · ${antennaSummary(a)}<br>${t("Sensitivity")} ${fmt(sensitivityDbm(st))} dBm`} · ${t("Radius")} ${fmt(st.radius_km, 1)} km
       ${repeater ? `<br>MeshCore: <b>${escapeHtml(repeater)}</b>` : ""}</div>
-    ${result ? `<div>${t("Covered (≥ {n} dB)", { n: fmt(requiredMargin(), 0) })}: <b>${fmt(result.area_km2, 1)} km²</b> · ${t("line of sight")} ${fmt(result.los_area_km2, 1)} km²</div>
+    ${result ? `<div>${t("Covered (≥ {n} dB)", { n: fmt(+settings().min_margin_db, 0) })}: <b>${fmt(result.area_km2, 1)} km²</b> · ${t("line of sight")} ${fmt(result.los_area_km2, 1)} km²</div>
       ${(result.warnings || []).map((w) => `<div class="warn">⚠ ${escapeHtml(w)}</div>`).join("")}`
       : `<div class="muted">${t("Not computed yet.")}</div>`}
     <div class="actions">
@@ -103,20 +106,28 @@ function stationSettings(body, st) {
       <div class="calc" id="elevationInfo">${t("Terrain height")}: <button id="btnElevation" class="small">${t("look up")}</button></div>`, `${fmt(st.height_m, 0)} m`)}
     ${section("radio", t("Radio"), `
       <label>${t("Preset")}<select data-k="radio_preset">${Object.entries(RADIO_PRESETS).map(([k, v]) => option(k, t(v.label), st.radio_preset || "custom")).join("")}</select></label>
-      <div class="grid2">
+      ${st.mode === "broadcast" ? `<div class="grid2">
+        <label>${t("Frequency (MHz)")}<input type="number" step="0.05" min="87.5" max="108" data-k="freq_mhz" value="${st.freq_mhz}"></label>
+        <label>${t("ERP (W)")}<input type="number" step="any" min="0.001" data-k="erp_w" value="${st.erp_w ?? 100}"></label>
+        <label>${t("Modulation")}<select data-k="mode">${option("lora", "LoRa", st.mode)}${option("fm", "FM", st.mode)}${option("broadcast", t("FM broadcast"), st.mode)}${option("custom", t("other (SNR)"), st.mode)}</select></label>
+        <label>${t("Minimum field strength (dBµV/m)")}<input type="number" step="1" data-k="emin_dbuvm" value="${st.emin_dbuvm ?? 54}" list="eminList"></label>
+      </div>
+      <datalist id="eminList">${BROADCAST_EMIN.map(([, v, label]) => `<option value="${v}">${escapeHtml(t(label))}</option>`).join("")}</datalist>
+      <p class="muted">${t("ERP already contains the antenna gain (EIRP = ERP + 2.15 dB). The minimum field strengths of ITU-R BS.412 apply 10 m above ground – the map computes at the global receiver height.")}</p>` : `<div class="grid2">
         <label>${t("Frequency (MHz)")}<input type="number" step="0.001" data-k="freq_mhz" value="${st.freq_mhz}"></label>
         <label>${t("Bandwidth (kHz)")}<input type="number" step="0.1" data-k="bw_khz" value="${st.bw_khz}"></label>
         <label>${t("Transmit power (dBm)")}<input type="number" step="0.5" data-k="tx_power_dbm" value="${st.tx_power_dbm}"></label>
         <label>${t("Cable/connectors (dB)")}<input type="number" step="0.1" data-k="cable_loss_db" value="${st.cable_loss_db ?? 0}"></label>
-        <label>${t("Modulation")}<select data-k="mode">${option("lora", "LoRa", st.mode)}${option("fm", "FM", st.mode)}${option("custom", t("other (SNR)"), st.mode)}</select></label>
+        <label>${t("Modulation")}<select data-k="mode">${option("lora", "LoRa", st.mode)}${option("fm", "FM", st.mode)}${option("broadcast", t("FM broadcast"), st.mode)}${option("custom", t("other (SNR)"), st.mode)}</select></label>
         ${st.mode === "lora" ? `<label>${t("Spreading factor")}<select data-k="sf">${Object.keys(LORA_REQUIRED_SNR).map((x) => `<option ${+st.sf === +x ? "selected" : ""}>${x}</option>`).join("")}</select></label>`
           : `<label>${t("Required SNR (dB)")}<input type="number" step="0.5" data-k="req_snr_db" value="${st.req_snr_db ?? 10}"></label>`}
         <label>${t("Noise figure Rx (dB)")}<input type="number" step="0.5" data-k="nf_db" value="${st.nf_db ?? 6}"></label>
         <label>${t("Fixed sensitivity (dBm)")}<input type="number" step="0.5" data-k="sens_override_dbm" value="${st.sens_override_dbm ?? ""}" placeholder="auto"></label>
         <label title="${escapeHtml(t("Average noise the station's receiver sees, e.g. from the repeater's statistics. Replaces the thermal noise and the global noise rise for this station."))}">${t("Measured noise floor (dBm)")}<input type="number" step="1" data-k="noise_floor_dbm" value="${st.noise_floor_dbm ?? ""}" placeholder="${escapeHtml(t("thermal {v}", { v: fmt(noiseFloorDbm({ ...st, noise_floor_dbm: null }), 0) }))}"></label>
       </div>
-      <p class="muted">${t("The noise floor counts where this station receives: its sensitivity on the map, and in the comparison the SNR it reports itself about other repeaters.")}</p>`, `${fmt(st.freq_mhz, 3)} MHz · ${fmt(st.tx_power_dbm, 0)} dBm`)}
-    ${section("ant", t("Antenna"), `
+      <p class="muted">${t("The noise floor counts where this station receives: its sensitivity on the map, and in the comparison the SNR it reports itself about other repeaters.")}</p>`}`,
+      st.mode === "broadcast" ? `${fmt(st.freq_mhz, 1)} MHz · ERP ${fmt(st.erp_w, 0)} W` : `${fmt(st.freq_mhz, 3)} MHz · ${fmt(st.tx_power_dbm, 0)} dBm`)}
+    ${st.mode === "broadcast" ? "" : section("ant", t("Antenna"), `
       <label>${t("From the catalog")}<select id="antennaCatalog"><option value="">${t("– custom values –")}</option>${antennas.map((x) => option(x.id, `${x.name} (${fmt(x.gain_dbi, 1)} dBi)`, a.catalog_id)).join("")}</select></label>
       <div class="grid2">
         <label>${t("Type")}<select data-k="antenna.type">${option("omni", t("omni"), a.type)}${option("directional", t("directional"), a.type)}</select></label>
@@ -147,7 +158,7 @@ function stationSettings(body, st) {
   body.querySelectorAll("[data-k], #antennaCatalog, #linkRepeater").forEach((el) => { if (!editable && el.id !== "linkRepeater") el.disabled = true; });
   if (!editable) return;
   body.querySelectorAll("[data-k]").forEach((input) => input.addEventListener("change", () => setField(st, input)));
-  body.querySelector("#antennaCatalog").onchange = (e) => {
+  if (body.querySelector("#antennaCatalog")) body.querySelector("#antennaCatalog").onchange = (e) => {
     if (e.target.value) applyCatalogAntenna(st, e.target.value); else delete st.antenna.catalog_id;
     changed(st);
   };
@@ -191,7 +202,10 @@ function setField(st, input) {
     st[path[0]] = value;
     if (path[0] === "radio_preset" && RADIO_PRESETS[value] && !["custom", "lora_custom"].includes(value)) Object.assign(st, withoutLabel(RADIO_PRESETS[value]));
     if (path[0] === "radio_preset" && value === "lora_custom") st.mode = "lora";
-    if (["freq_mhz", "bw_khz", "mode", "sf", "tx_power_dbm", "nf_db", "req_snr_db"].includes(path[0])) st.radio_preset = "custom";
+    if (["freq_mhz", "bw_khz", "mode", "sf", "tx_power_dbm", "nf_db", "req_snr_db"].includes(path[0]) && st.mode !== "broadcast") st.radio_preset = "custom";
+    if (path[0] === "mode" && value === "broadcast") { st.radio_preset = "ukw"; if (!(st.freq_mhz >= 87.5 && st.freq_mhz <= 108)) st.freq_mhz = 100; }
+    if (path[0] === "mode" && value !== "broadcast" && st.radio_preset === "ukw") st.radio_preset = "custom";
+    applyBroadcast(st);
   }
   changed(st);
 }
@@ -435,7 +449,13 @@ const receiverSummary = (r) => `${fmt(r.h, 1)} m · ${fmt(r.g, 1)} dBi${r.c ? ` 
  */
 async function openPingProfile(ping, row) {
   if (!row?.rep_pk) return;
-  const rx = { ...receiverFor(row, seriesById(row.series_id)), label: t("measurement point") };
+  const series = seriesById(row.series_id);
+  const rx = { ...receiverFor(row, series), label: t("measurement point") };
+  if (explicitHeight(row, series) == null) {
+    // #56: on a building the point is taken to be on its roof, on streets and fields the default stays
+    const roof = await roofHeight(ping.lat, ping.lon);
+    if (roof != null) Object.assign(rx, { h: roof + rx.h, label: t("measurement point (roof {h} m)", { h: fmt(roof, 1) }) });
+  }
   const station = stationOfRepeater(row.rep_pk);
   if (station) { showProfile(station.id, L.latLng(ping.lat, ping.lon), { rx }); return; }
   const node = nodeByPk(row.rep_pk) || linkTo(row.rep_pk);
@@ -517,6 +537,11 @@ function locationMeasurement(body, latlng) {
     if (dev?.cable_db != null || plc?.extra_loss_db != null) field("rx_cable_db").value = r.c;
   };
   field("device_id").onchange = fillFromCatalog; field("placement_id").onchange = fillFromCatalog;
+  roofHeight(latlng.lat, latlng.lng).then((roof) => {
+    if (roof == null || field("rx_h").value !== "") return;
+    field("rx_h").value = Math.round((roof + (+d.rx_height_m || 1.5)) * 10) / 10;
+    field("rx_h").title = t("On a building: roof {h} m + receiver height. Change it if you were on a lower floor.", { h: fmt(roof, 1) });
+  });
   body.querySelector('[data-a="save"]').onclick = async () => {
     const out = body.querySelector("[data-out]");
     if (field("rx_h").value === "") { out.textContent = t("Please enter the antenna height above ground."); field("rx_h").focus(); return; }

@@ -42,7 +42,7 @@ def _station(project, sid):
     st = next((x for x in project.get("stations") or [] if x["id"] == sid), None)
     if st is None:
         raise KeyError("Station nicht gefunden")
-    return st
+    return cov.model_station(st)
 
 
 def _result(project, st):
@@ -59,7 +59,7 @@ def summary(project, sid):
     g = r.grid
     kscale = math.cos(math.radians(float(st["lat"])))
     cell_km2 = (g.cs * kscale) ** 2 / 1e6
-    sens = prop.sensitivity_dbm(st, s.get("noise_rise_db", 0.0))
+    sens = prop.sensitivity_dbm(st, s.get("noise_rise_db", 0.0), s["rx_gain_dbi"], s["rx_cable_db"])
     req = float(s["min_margin_db"])
     m = np.asarray(r.prx, dtype=np.float32) - sens
     inside = ~np.isnan(m)
@@ -129,7 +129,7 @@ def _map_image(st, r, s, width=1500, neighbors=None, points=None):
         return (x + tiles_world()) * px - tx0 * 256, (tiles_world() - y) * px - ty0 * 256
 
     # Abdeckung: Reserveklassen
-    sens = prop.sensitivity_dbm(st, s.get("noise_rise_db", 0.0))
+    sens = prop.sensitivity_dbm(st, s.get("noise_rise_db", 0.0), s["rx_gain_dbi"], s["rx_cable_db"])
     m = np.asarray(r.prx, dtype=np.float32) - sens
     rgba = np.zeros(m.shape + (4,), np.uint8)
     bins = cov.margin_bins(float(s["min_margin_db"]))

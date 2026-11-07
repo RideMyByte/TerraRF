@@ -35,6 +35,26 @@ async def tile(src: str, z: int, x: int, y: int):
     return await _proxied(tiles.xyz, src, z, x, y, media_type="image/png")
 
 
+@router.get("/tiles/wmsxyz/{src}/{z}/{x}/{y}.jpg")
+async def tile_wms_xyz(src: str, z: int, x: int, y: int):
+    """A WMS served as XYZ tiles (#58): same cache key for viewing and for offline packages."""
+    return await _proxied(tiles.wms_tile, src, z, x, y, media_type="image/jpeg")
+
+
+@router.get("/tiles/mb/{name}/{z}/{x}/{y}")
+async def tile_mbtiles(name: str, z: int, x: int, y: int):
+    """Raster MBTiles from data/tiles/mbtiles (#58), independent of the tile proxy."""
+    known = {m["id"]: m for m in tiles.mbtiles_list()}
+    if name not in known:
+        raise HTTPException(404, "unbekannte Karte")
+    try:
+        data = await run_in_threadpool(tiles.mbtiles_tile, name, z, x, y)
+    except (KeyError, FileNotFoundError):
+        raise HTTPException(404, "Kachel fehlt")
+    fmt = known[name]["format"]
+    return Response(data, media_type="image/jpeg" if fmt in ("jpg", "jpeg") else f"image/{fmt}", headers=TILE_HEADERS)
+
+
 @router.get("/tiles/wms/{src}")
 async def tile_wms(src: str, request: Request):
     return await _proxied(tiles.wms, src, dict(request.query_params), media_type="image/jpeg")

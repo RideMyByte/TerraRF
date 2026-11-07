@@ -78,7 +78,7 @@ async function accessPage(body) {
 
 // ---------------------------------------------------------------- data sources
 async function dataPage(body) {
-  const [c, b, jobs] = await Promise.all([api("/api/admin/appconfig"), api("/api/admin/buildings"), api("/api/regions/jobs")]);
+  const [c, b, jobs, off] = await Promise.all([api("/api/admin/appconfig"), api("/api/admin/buildings"), api("/api/regions/jobs"), api("/api/admin/offline")]);
   const ingest = `${location.host}/api/ingest/meshmapper`;
   body.innerHTML = `
     <section><h3>${t("Elevation data")}</h3>
@@ -96,6 +96,16 @@ async function dataPage(body) {
       <label>${t("Import GeoJSON")}<input type="file" id="bFile" accept=".geojson,.json,application/geo+json"></label>
       <div class="actions"><button id="bOsm">${t("Load OSM buildings in the map view")}</button><button id="bClear" class="danger">${t("Delete all")}</button></div>
       <div id="bOut" class="muted"></div></section>
+    <section><h3>${t("Offline operation")} <span class="muted">(#58)</span></h3>
+      <p class="muted">${t("Offline the server opens no connection to the internet; addresses in the local network (e.g. a CoreScope in the LAN) stay reachable. Computing uses the stored elevation tiles, the map uses cached tiles, saved map areas and own MBTiles files.")}</p>
+      <label class="chk"><input type="checkbox" id="offOn" ${off.offline ? "checked" : ""} ${off.forced_by_env ? "disabled" : ""}> ${t("Offline operation: no connections to the internet")}${off.forced_by_env ? ` <span class="muted">(RFP_OFFLINE)</span>` : ""}</label>
+      <h4>${t("Save the map view for offline use")}</h4>
+      <p class="muted">${t("Only the NRW aerial photo (open data) can be saved. OpenStreetMap forbids saving its tiles for offline use; for an offline street map put a raster MBTiles file into {dir}.", { dir: escapeHtml(off.mbtiles_dir) })}</p>
+      <div class="grid3"><label>${t("Map")}<select id="offSrc">${Object.entries(off.packages.sources).map(([id, label]) => `<option value="${escapeHtml(id)}">${escapeHtml(label)}</option>`).join("")}</select></label>
+        <label>${t("up to zoom")}<input id="offZ" type="number" min="8" max="20" value="17"></label></div>
+      <div class="actions"><button id="offEst">${t("Estimate size")}</button><button id="offStart" class="primary">${t("Save")}</button><button id="offCancel">${t("Cancel")}</button><button id="offDel" class="danger">${t("Delete saved maps")}</button></div>
+      <div id="offOut" class="muted"></div>
+      ${off.mbtiles.length ? `<h4>MBTiles</h4>${off.mbtiles.map((m) => `<div class="muted">· ${escapeHtml(m.name)} (${escapeHtml(m.format)}, z${m.minzoom}–${m.maxzoom})</div>`).join("")}` : ""}</section>
     <section><h3>${t("Measurements (MeshMapper)")}</h3>
       <p class="muted">${t("MeshMapper sends drive-test results to this server when the endpoint and key are entered in the app.")}
         ${t("This key is the admin's own: its measurements belong to no project and appear in the admin's projects. Every project has its own key under “Measure”.")}</p>
@@ -141,6 +151,43 @@ async function dataPage(body) {
   $$("bClear").onclick = async () => {
     if (!confirm(t("Delete all building footprints?"))) return;
     await api("/api/admin/buildings", { method: "DELETE" }); await reloadConfig(); openAdmin("data");
+  };
+  // ---- offline (#58)
+  const packText = (p) => p.state === "running" || p.state === "cancelling"
+    ? t("Saving: {done} of {total} tiles ({failed} failed) …", { done: p.done, total: p.total, failed: p.failed })
+    : p.state === "done" ? t("Done: {done} tiles saved, {failed} failed. Saved maps: {mb} MB.", { done: p.done, failed: p.failed, mb: fmt(p.size_mb, 0) })
+    : p.state === "cancelled" ? t("Cancelled after {done} tiles.", { done: p.done }) : t("Saved maps: {mb} MB.", { mb: fmt(p.size_mb, 0) });
+  const packArea = () => { const bb = map.getBounds(); return { source: $$("offSrc").value, zmin: 6, zmax: +$$("offZ").value, bbox: [bb.getSouth(), bb.getWest(), bb.getNorth(), bb.getEast()] }; };
+  let packTimer = null;
+  const pollPack = async () => {
+    clearTimeout(packTimer);
+    if (!dlg().open || !$$("offOut")) return;
+    try {
+      const p = (await api("/api/admin/offline")).packages;
+      $$("offOut").textContent = packText(p);
+      if (p.state === "running" || p.state === "cancelling") packTimer = setTimeout(pollPack, 2000);
+    } catch { /* dialog closed */ }
+  };
+  $$("offOut").textContent = packText(off.packages);
+  if (off.packages.state === "running") pollPack();
+  $$("offOn").onchange = async (e) => {
+    try { await api("/api/admin/appconfig", { method: "PUT", body: { offline: e.target.checked } }); await reloadConfig(); status(e.target.checked ? t("Offline operation is on.") : t("Offline operation is off.")); }
+    catch (err) { status(t("Error: {msg}", { msg: err.message }), "err"); e.target.checked = !e.target.checked; }
+  };
+  $$("offEst").onclick = async () => {
+    try { const r = await api("/api/admin/offline/estimate", { method: "POST", body: packArea() });
+      $$("offOut").textContent = t("{n} tiles (at most {max} per package), roughly {mb} MB.", { n: r.tiles, max: r.max_tiles, mb: fmt(r.tiles * 0.025, 0) }); }
+    catch (e) { $$("offOut").textContent = e.message; }
+  };
+  $$("offStart").onclick = async () => {
+    try { await api("/api/admin/offline/packages", { method: "POST", body: packArea() }); pollPack(); }
+    catch (e) { $$("offOut").textContent = t("Error: {msg}", { msg: e.message }); }
+  };
+  $$("offCancel").onclick = async () => { await api("/api/admin/offline/packages/cancel", { method: "POST" }); pollPack(); };
+  $$("offDel").onclick = async () => {
+    if (!confirm(t("Delete all saved map areas?"))) return;
+    try { $$("offOut").textContent = packText(await api("/api/admin/offline/packages", { method: "DELETE" })); }
+    catch (e) { $$("offOut").textContent = t("Error: {msg}", { msg: e.message }); }
   };
   const link = () => { const k = $$("mmKey").value.trim(); $$("mmLink").value = k ? `meshmapper://custom-api?url=${ingest}&key=${k}` : t("– set a key first –"); };
   link(); $$("mmKey").oninput = link;

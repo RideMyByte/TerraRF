@@ -111,19 +111,28 @@ def _calibrate_one(project, station_id, partner, stations_by_pk, overrides, rx_h
 
 
 # ---------------------------------------------------------------- drive tests: repeater -> handheld
-def receiver_for_measurement(measurement, series, defaults):
+def explicit_height(measurement, series):
+    """Receiver height that was entered for a measurement, its series or its placement – None if only the global
+    default would apply."""
+    s = series or {}
+    for h in (measurement.get("rx_h"), s.get("rx_h"),
+              catalog.receiver_for(s.get("device_id"), s.get("placement_id"))["height_m"]):
+        if h is not None:
+            return h
+    return None
+
+
+def receiver_for_measurement(measurement, series, defaults, roof=None):
     """Receiver height (m), gain (dBi) and cable+extra loss (dB) that applied to one measurement.
 
     Precedence: value in the measurement > value entered on its series > the series' device/placement
-    profile from the catalog > global defaults.
+    profile from the catalog > on a building: roof + global receiver height (#56) > global defaults.
     """
     s = series or {}
     profile = catalog.receiver_for(s.get("device_id"), s.get("placement_id"))
-    height = measurement.get("rx_h")
-    if height is None:
-        height = s.get("rx_h")
-    if height is None:
-        height = profile["height_m"]
+    height = explicit_height(measurement, series)
+    if height is None and roof is not None:
+        height = float(roof) + defaults["rx_height_m"]
     if height is None:
         height = defaults["rx_height_m"]
     gain = s.get("rx_gain_dbi")
@@ -154,31 +163,50 @@ def compare_measurements(project, station_id, measurements, rx_gain=None, series
                 "rx_gain_dbi": float(settings["rx_gain_dbi"]) if rx_gain in (None, "") else float(rx_gain),
                 "rx_cable_db": float(settings["rx_cable_db"])}
     rasters = {}   # one coverage raster per receiver height
+    roofs = {}     # (lat, lon) -> roof height under the point or None
     sx, sy = lonlat_to_merc(float(station["lon"]), float(station["lat"]))
     out = []
     for m in measurements:
         if m.get("snr_down") is None:
             continue
-        height, gain, loss = receiver_for_measurement(m, series.get(m.get("series_id")), defaults)
-        if height not in rasters:
-            rasters[height] = cov.compute_station(station, {**settings, "rx_height_m": height}, cell_size)[0]
-        raster = rasters[height]
-        grid = raster.grid
+        ser = series.get(m.get("series_id"))
+        roof = None
+        if explicit_height(m, ser) is None:
+            key = (round(m["lat"], 5), round(m["lon"], 5))
+            if key not in roofs:
+                roofs[key] = cov.roof_height(project, m["lat"], m["lon"])
+            roof = roofs[key]
+        height, gain, loss = receiver_for_measurement(m, ser, defaults, roof)
         x, y = lonlat_to_merc(m["lon"], m["lat"])
-        col, row = int((x - grid.x0) / grid.cs), int((grid.y1 - y) / grid.cs)
         predicted_snr = predicted_rssi = None
-        if 0 <= col < grid.nx and 0 <= row < grid.ny:
-            value = float(raster.prx[row, col])
-            if not math.isnan(value):
-                # the raster already contains the global receiver gain and cable loss -> convert to this receiver
-                predicted_rssi = round(value + (gain - float(settings["rx_gain_dbi"]))
-                                       - (loss - float(settings["rx_cable_db"])), 1)
+        if roof is not None:
+            # on a roof (#56): heights differ from building to building -> one path instead of one raster each
+            try:
+                b = cov.profile(project, station_id, m["lat"], m["lon"], rx_height=height, rx_gain=gain,
+                                rx_cable=loss)["budget"]
+                predicted_rssi = round(float(b["prx_dbm"]), 1)
                 predicted_snr = round(predicted_rssi - noise, 1)
+            except (KeyError, ValueError, cov.SourceError):
+                pass
+        else:
+            if height not in rasters:
+                rasters[height] = cov.compute_station(station, {**settings, "rx_height_m": height}, cell_size)[0]
+            raster = rasters[height]
+            grid = raster.grid
+            col, row = int((x - grid.x0) / grid.cs), int((grid.y1 - y) / grid.cs)
+            if 0 <= col < grid.nx and 0 <= row < grid.ny:
+                value = float(raster.prx[row, col])
+                if not math.isnan(value):
+                    # the raster already contains the global receiver gain and cable loss -> convert
+                    predicted_rssi = round(value + (gain - float(settings["rx_gain_dbi"]))
+                                           - (loss - float(settings["rx_cable_db"])), 1)
+                    predicted_snr = round(predicted_rssi - noise, 1)
         distance_km = math.hypot(x - sx, y - sy) * math.cos(math.radians(m["lat"])) / 1000
         measured_rssi = m.get("rssi_down")
         out.append({
             "id": m.get("id"), "lat": m["lat"], "lon": m["lon"], "kind": m.get("kind"), "src": m.get("src"),
             "series_id": m.get("series_id"), "rx_height_m": height, "rx_gain_dbi": gain, "rx_cable_db": loss,
+            "roof_m": roof,
             "measured_snr": m["snr_down"], "predicted_snr": predicted_snr, "distance_km": round(distance_km, 2),
             "delta_db": round(m["snr_down"] - predicted_snr, 1) if predicted_snr is not None else None,
             "saturated": predicted_snr is not None and (m["snr_down"] >= SNR_SAT_DB or predicted_snr >= SNR_SAT_DB),

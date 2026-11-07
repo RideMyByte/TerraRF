@@ -18,8 +18,8 @@ import { map, registerLayerSection, refreshLayersPanel } from "./map/map.js";
 export const net = {
   nodes: [], overrides: {}, meta: {},
   centrePk: null, focusPk: null, links: null, linksError: null, loadingPk: null, muted: false,
-  filter: { bothWays: false, keepDirect: true, minTx: 0, minRx: 0, minSnr: -21, maxAgeDays: 7, role: "" },
-  show: { nodes: true, lines: true, lineOpacity: 0.55 },
+  filter: { bothWays: true, keepDirect: true, minTx: 0, minRx: 0, minSnr: -21, maxAgeDays: 7, role: "" },
+  show: { nodes: true, lines: true, lineOpacity: 0.75 },
 };
 const renderer = L.canvas({ padding: 0.3 });
 const nodeLayer = L.layerGroup().addTo(map);
@@ -179,6 +179,17 @@ export async function mastHeightGuess(lat, lon) {
     catch { guesses[key] = null; }
   }
   return guesses[key];
+}
+
+const roofs = {};
+/** Roof height (m above ground) under a measurement point, null on a street or field (#56). */
+export async function roofHeight(lat, lon) {
+  const key = `${lat.toFixed(5)},${lon.toFixed(5)}`;
+  if (!(key in roofs)) {
+    try { roofs[key] = (await api("/api/elevation", { method: "POST", body: { project: state.project, lat, lon, radius_m: 4 } })).roof_m ?? null; }
+    catch { roofs[key] = null; }
+  }
+  return roofs[key];
 }
 
 /** Fade the neighbour lines (e.g. while drive-test points are compared, #40); showing neighbours again ends it. */

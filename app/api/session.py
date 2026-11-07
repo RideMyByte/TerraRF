@@ -57,6 +57,7 @@ def config(request: Request):
         "auth": me(request),
         "corescope": {"enabled": corescope.enabled(), "url": corescope.BASE or None},
         "tile_proxy": tiles.ENABLED,
+        "mbtiles": tiles.mbtiles_list(),
         "legal": {"imprint": legal.configured()},
         "site": appconfig.public(),
         "buildings": buildings.status(),

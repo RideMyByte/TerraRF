@@ -12,7 +12,8 @@ from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import JSONResponse
 
 from ..model import buildings, coverage, settings, terrain
-from ..sources import regions
+from ..site import offline
+from ..sources import regions, tiles
 from ..store import appconfig
 from .deps import ADMIN, READ, fail
 
@@ -79,6 +80,47 @@ async def buildings_osm(body: dict = Body(...)):
 def buildings_clear():
     buildings.clear()
     return buildings.status()
+
+
+# ---------------------------------------------------------------- offline (#58)
+@router.get("/api/admin/offline", dependencies=ADMIN)
+def offline_status():
+    return {"offline": offline.enabled(), "forced_by_env": offline.ENV, "packages": tiles.pack_status(),
+            "mbtiles": tiles.mbtiles_list(), "mbtiles_dir": "data/tiles/mbtiles"}
+
+
+@router.post("/api/admin/offline/estimate", dependencies=ADMIN)
+def offline_estimate(body: dict = Body(...)):
+    try:
+        bbox = [float(v) for v in body["bbox"]]
+        return {"tiles": tiles.count_tiles(bbox, int(body.get("zmin", 6)), int(body["zmax"])),
+                "max_tiles": tiles.MAX_PACK_TILES}
+    except (ValueError, KeyError, TypeError) as e:
+        fail(e)
+
+
+@router.post("/api/admin/offline/packages", dependencies=ADMIN)
+def offline_package(body: dict = Body(...)):
+    try:
+        bbox = [float(v) for v in body["bbox"]]
+        if len(bbox) != 4:
+            raise ValueError("bbox: Süd, West, Nord, Ost")
+        return tiles.start_pack(body.get("source", "nrwdop"), bbox, int(body.get("zmin", 6)), int(body["zmax"]))
+    except (ValueError, KeyError, TypeError) as e:
+        fail(e)
+
+
+@router.post("/api/admin/offline/packages/cancel", dependencies=ADMIN)
+def offline_package_cancel():
+    return tiles.cancel_pack()
+
+
+@router.delete("/api/admin/offline/packages", dependencies=ADMIN)
+def offline_package_delete():
+    try:
+        return tiles.delete_packs()
+    except ValueError as e:
+        fail(e)
 
 
 # ---------------------------------------------------------------- elevation data

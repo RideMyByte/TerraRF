@@ -87,6 +87,15 @@ _STATION_CACHE_BYTES = float(os.environ.get("RFP_STATION_CACHE_MB", "1200")) * 1
 _compute_lock = threading.Lock()
 
 
+def model_station(st):
+    """The station as the model sees it. FM broadcast (#57): power is given as ERP in W, the antenna is omni and
+    already contained in the ERP, no cable loss."""
+    if st.get("mode") != "broadcast":
+        return st
+    return {**st, "tx_power_dbm": round(prop.erp_w_to_eirp_dbm(st.get("erp_w") or 1.0), 2), "cable_loss_db": 0.0,
+            "antenna": {"type": "omni", "gain_dbi": 0.0}}
+
+
 def _station_key(st, s, cs):
     relevant = {k: st.get(k) for k in (
         "lat", "lon", "height_m", "height_ref", "tx_power_dbm", "freq_mhz", "cable_loss_db", "antenna", "radius_km")}
@@ -187,6 +196,7 @@ def near_grid(s, x, y, kscale, cs, r_true):
 def compute_station(st, s, cs, progress=None):
     """progress(frac, stage) is called while computing (frac 0…1)."""
     progress = progress or (lambda f, stage: None)
+    st = model_station(st)
     key = _station_key(st, s, cs)
     with _station_cache_lock:
         if key in _station_cache:
@@ -345,7 +355,7 @@ def run_coverage(project, station_ids=None, max_dim=None, force=None):
         g = r.grid
         dg = _down_grid(g, f)
         kscale = math.cos(math.radians(float(st["lat"])))
-        sens = prop.sensitivity_dbm(st, s.get("noise_rise_db", 0.0))
+        sens = prop.sensitivity_dbm(st, s.get("noise_rise_db", 0.0), s["rx_gain_dbi"], s["rx_cable_db"])
         cell_area = (g.cs * kscale) ** 2
         covered = np.nan_to_num(r.prx - sens, nan=-999) >= float(s["min_margin_db"])
         out.append({
@@ -469,6 +479,7 @@ def profile(project, station_id, lat, lon, rx_height=None, rx_gain=None, rx_stat
     st = next((x for x in project.get("stations") or [] if x["id"] == station_id), None)
     if st is None:
         raise KeyError("Station nicht gefunden")
+    st = model_station(st)
     rx_st = None
     if rx_station_id:
         rx_st = next((x for x in project.get("stations") or [] if x["id"] == rx_station_id), None)
@@ -558,7 +569,7 @@ def profile(project, station_id, lat, lon, rx_height=None, rx_gain=None, rx_stat
     total_loss = fspl + loss_diff + lclut + lpe + lveg
     prx = (float(st["tx_power_dbm"]) - float(st.get("cable_loss_db", 0)) + gtx - total_loss
            + float(s["rx_gain_dbi"]) - float(s["rx_cable_db"]) - extra)
-    sens = prop.sensitivity_dbm(st, s.get("noise_rise_db", 0.0))
+    sens = prop.sensitivity_dbm(st, s.get("noise_rise_db", 0.0), s["rx_gain_dbi"], s["rx_cable_db"])
     hb_eff = max(ztx - ground[0], ztx - float(np.mean(ground)))
     hata = {e: round(prop.hata_db(D, f_mhz, hb_eff, rxh, e), 1) for e in ("urban", "suburban", "open")}
     # display: terrain with bulge, straight LOS line, first Fresnel zone
@@ -607,11 +618,40 @@ def profile(project, station_id, lat, lon, rx_height=None, rx_gain=None, rx_stat
 MAST_SEARCH_M = 8.0       # how far from the position to look for a roof (consumer GPS is off by a few metres)
 MIN_BUILDING_M = 2.5      # objects lower than this are not taken as a building (cars, hedges, noise)
 ABOVE_ROOF_M = 1.0        # antenna this much above the highest roof point nearby (wish in #43)
+# #56: a measurement point counts as "on a building" only if the whole core around it is building – a point on a
+# street next to a house (GPS error) must keep the street-level default.
+ROOF_CORE_M = 4.0
+
+
+def _objects_around(s, cs, x, y, radius_m):
+    """Object heights (surface − ground) on the fine near-field grid around a point, the squared distance of every
+    cell to the point, the building mask and the cell size. When footprints are loaded at all, only footprints count
+    as buildings (trees are not roofs); without footprints every object does."""
+    fine = min(cs, float(s.get("near_res_m") or 5.0))
+    g = Grid.around(x, y, radius_m + 2 * fine, fine)
+    G2, S2, _ = terrain_pair(s, g)
+    xs = g.x0 + (np.arange(G2.shape[1]) + 0.5) * fine
+    ys = g.y1 - (np.arange(G2.shape[0]) + 0.5) * fine
+    dist2 = (xs[None, :] - x) ** 2 + (ys[:, None] - y) ** 2
+    heights = np.where(np.isfinite(S2 - G2), S2 - G2, 0.0)
+    have_footprints = buildings.status()["count"] > 0
+    bmask = buildings.mask(g).astype(bool) if have_footprints else np.ones(heights.shape, dtype=bool)
+    return heights, dist2, bmask, fine, have_footprints
+
+
+def roof_from(heights, bmask, core):
+    """Roof height (m above ground) if every cell of the core is a building of at least MIN_BUILDING_M, else None.
+    The median of the core, so a chimney or an antenna mast does not count as the roof."""
+    h = heights[core]
+    if h.size == 0 or not bool(np.all(bmask[core])) or float(h.min()) < MIN_BUILDING_M:
+        return None
+    return round(float(np.median(h)), 1)
 
 
 def point_elevation(project, lat, lon, radius_m=0.0):
     """Ground and surface height at a point. With radius_m also the highest object (surface − ground) within that
-    radius on the fine near-field grid, and a mast height guess for a repeater there (#43)."""
+    radius on the fine near-field grid, a mast height guess for a repeater there (#43) and the roof height if the
+    point itself lies on a building (#56)."""
     s = merged_settings(project)
     cs = project_cs(project, s)
     x, y = lonlat_to_merc(lon, lat)
@@ -621,16 +661,13 @@ def point_elevation(project, lat, lon, radius_m=0.0):
     fy = (grid.y1 - y) / cs - 0.5
     out = {"ground_m": round(float(prop.sample(G, fx, fy)), 1), "surface_m": round(float(prop.sample(S, fx, fy)), 1)}
     if radius_m > 0:
-        fine = min(cs, float(s.get("near_res_m") or 5.0))
-        g = Grid.around(x, y, radius_m + 2 * fine, fine)
-        G2, S2, _ = terrain_pair(s, g)
-        xs = g.x0 + (np.arange(G2.shape[1]) + 0.5) * fine
-        ys = g.y1 - (np.arange(G2.shape[0]) + 0.5) * fine
-        inside = ((xs[None, :] - x) ** 2 + (ys[:, None] - y) ** 2) <= (radius_m + fine / 2) ** 2
-        heights = np.where(inside & np.isfinite(S2 - G2), S2 - G2, 0.0)
-        highest = float(heights.max()) if heights.size else 0.0
-        out["object_max_m"] = round(highest, 1)
+        heights, dist2, bmask, fine, have_fp = _objects_around(s, cs, x, y, max(radius_m, ROOF_CORE_M))
+        inside = dist2 <= (radius_m + fine / 2) ** 2
+        highest = float(np.where(inside & bmask, heights, 0.0).max())
+        out["object_max_m"] = round(float(np.where(inside, heights, 0.0).max()), 1)
         out["mast_guess_m"] = round(highest + ABOVE_ROOF_M, 1) if highest >= MIN_BUILDING_M else None
+        out["roof_m"] = roof_from(heights, bmask, dist2 <= (ROOF_CORE_M + fine / 2) ** 2)
+        out["footprints"] = have_fp
     return out
 
 
@@ -639,6 +676,14 @@ def mast_height_guess(project, lat, lon):
     try:
         return point_elevation(project, lat, lon, MAST_SEARCH_M).get("mast_guess_m")
     except Exception:  # noqa: BLE001 – no elevation data there: no guess
+        return None
+
+
+def roof_height(project, lat, lon):
+    """Roof height under a measurement point (#56), or None on a street, a field or without elevation data."""
+    try:
+        return point_elevation(project, lat, lon, ROOF_CORE_M).get("roof_m")
+    except Exception:  # noqa: BLE001
         return None
 
 

@@ -25,6 +25,7 @@ import httpx
 
 from .. import paths
 from ..model import terrain
+from ..site import offline
 from ..version import VERSION
 
 log = logging.getLogger("terrarf.corescope")
@@ -155,6 +156,9 @@ def auto_sync_loop():
             age = time.time() - os.path.getmtime(NODES_FILE)
         except OSError:
             age = 1e12
+        if age >= SYNC_H * 3600 and not offline.allowed(BASE):
+            time.sleep(600)            # #58: offline and CoreScope is not in the local network – try again later
+            continue
         if age >= SYNC_H * 3600:
             try:
                 start_sync()

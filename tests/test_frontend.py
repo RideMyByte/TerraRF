@@ -16,7 +16,9 @@ IMPORT = re.compile(r'^import \{([^}]*)\} from "([^"]+)"', re.M)
 @pytest.mark.skipif(shutil.which("node") is None, reason="node not installed")
 @pytest.mark.parametrize("path", MODULES + [STATIC / "app.js"], ids=lambda p: str(p.relative_to(STATIC)))
 def test_syntax(path):
-    result = subprocess.run(["node", "--check", str(path)], capture_output=True, text=True)
+    # parsed as an ES module from stdin: `node --check file.js` let a broken template literal through (0.5.6)
+    result = subprocess.run(["node", "--input-type=module", "--check"], input=path.read_text(encoding="utf-8"),
+                            capture_output=True, text=True)
     assert result.returncode == 0, result.stderr
 
 
