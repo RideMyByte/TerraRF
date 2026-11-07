@@ -43,6 +43,8 @@ DEFAULTS = {
     "notice_text": "",
     # #44: welcome page for first-time visitors
     "welcome_enabled": True,
+    # #58: no connections to the internet (also RFP_OFFLINE=true)
+    "offline": False,
 }
 if DEFAULTS["user_password"]:
     DEFAULTS["user_enabled"] = True
@@ -100,4 +102,5 @@ def public():
         "user_enabled": bool(c["user_enabled"]),
         "notice": {"kind": c["notice_kind"], "text": c["notice_text"]} if c["notice_enabled"] else None,
         "welcome": bool(c["welcome_enabled"]),
+        "offline": bool(c["offline"]) or os.environ.get("RFP_OFFLINE", "").strip().lower() in ("1", "true", "yes", "on"),
     }

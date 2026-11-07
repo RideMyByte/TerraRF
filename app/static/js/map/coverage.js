@@ -12,7 +12,8 @@ import { apiPatient, projectRef } from "../core/api.js";
 import { status, isPhone } from "../core/ui.js";
 import { map, registerLayerSection, refreshLayersPanel } from "./map.js";
 
-export const view = { layer: "margin", opacity: 0.6, marginDb: null, soloStationId: null };
+// Defaults from #55: 40 % opacity, 0 dB required margin in the map (the report keeps the global setting).
+export const view = { layer: "margin", opacity: 0.4, marginDb: 0, soloStationId: null };
 export let lastRun = null;          // response of /api/coverage for all active stations
 export const resultsByStation = {}; // station id -> entry of lastRun
 const stationImages = {};           // "key@factor" -> {px, w, h}

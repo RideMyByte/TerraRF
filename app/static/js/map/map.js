@@ -59,7 +59,16 @@ export function setupBaseMaps(useProxy) {
   baseMaps.gray = { label: "OpenStreetMap (grey)", layer: L.tileLayer(osm, { maxZoom: 19, className: "osm-gray", attribution: osmAttribution }) };
   baseMaps.osm = { label: "OpenStreetMap", layer: L.tileLayer(osm, { maxZoom: 19, attribution: osmAttribution }) };
   baseMaps.topo = { label: "OpenTopoMap", layer: L.tileLayer(otm, { maxZoom: 17, attribution: osmAttribution + ", SRTM | © OpenTopoMap (CC-BY-SA)" }) };
-  baseMaps.dop = { label: "Aerial photo NRW (DOP)", layer: L.tileLayer.wms(dop, { layers: "nw_dop_rgb", format: "image/jpeg", maxZoom: 20, attribution: "© Geobasis NRW (dl-de/zero-2-0)" }) };
+  const dopAttribution = "© Geobasis NRW (dl-de/zero-2-0)";
+  // through the proxy as XYZ tiles (#58): the same tiles can be saved for offline use
+  baseMaps.dop = { label: "Aerial photo NRW (DOP)", layer: useProxy
+    ? L.tileLayer("/tiles/wmsxyz/nrwdop/{z}/{x}/{y}.jpg", { maxZoom: 20, attribution: dopAttribution })
+    : L.tileLayer.wms(dop, { layers: "nw_dop_rgb", format: "image/jpeg", maxZoom: 20, attribution: dopAttribution }) };
+  // own raster MBTiles in data/tiles/mbtiles (#58), e.g. a self-rendered offline map
+  for (const m of state.config?.mbtiles || []) {
+    baseMaps["mb:" + m.id] = { label: m.name, layer: L.tileLayer(`/tiles/mb/${encodeURIComponent(m.id)}/{z}/{x}/{y}`,
+      { minZoom: m.minzoom, maxZoom: 20, maxNativeZoom: m.maxzoom, attribution: m.attribution }) };
+  }
   // Esri only without the proxy: its terms for caching tiles were not checked
   if (!useProxy) baseMaps.esri = { label: "Satellite (Esri)", layer: L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}", { maxZoom: 19, attribution: "Tiles © Esri, Maxar, Earthstar Geographics" }) };
   setBaseMap("gray");

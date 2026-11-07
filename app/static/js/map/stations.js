@@ -4,7 +4,7 @@
  */
 import { t } from "../core/i18n.js";
 import { $, bearing, destinationPoint, randomId } from "../core/util.js";
-import { state, emit, canEditStation, stationById } from "../core/state.js";
+import { state, emit, canEditStation, stationById, settings } from "../core/state.js";
 import { map, metresPerPixel } from "./map.js";
 
 export const RADIO_PRESETS = {
@@ -14,6 +14,7 @@ export const RADIO_PRESETS = {
   fm_2m: { label: "2 m FM (145 MHz, 12.5 kHz)", freq_mhz: 145.5, bw_khz: 12.5, mode: "fm", req_snr_db: 10, tx_power_dbm: 37, nf_db: 5 },
   fm_70cm: { label: "70 cm FM (438 MHz, 12.5 kHz)", freq_mhz: 438.5, bw_khz: 12.5, mode: "fm", req_snr_db: 10, tx_power_dbm: 37, nf_db: 5 },
   pmr446: { label: "PMR446 (446.1 MHz, 0.5 W)", freq_mhz: 446.1, bw_khz: 12.5, mode: "fm", req_snr_db: 10, tx_power_dbm: 27, nf_db: 6 },
+  ukw: { label: "FM broadcast (UKW 87.5–108 MHz, ERP in W)", freq_mhz: 100, bw_khz: 180, mode: "broadcast", erp_w: 100, emin_dbuvm: 54 },
   hamnet5: { label: "HAMNET 5.7 GHz (10 MHz, MCS0)", freq_mhz: 5765, bw_khz: 10000, mode: "custom", req_snr_db: 5, tx_power_dbm: 23, nf_db: 7 },
   wifi24: { label: "Wi-Fi 2.4 GHz (20 MHz, MCS0)", freq_mhz: 2442, bw_khz: 20000, mode: "custom", req_snr_db: 5, tx_power_dbm: 20, nf_db: 7 },
   custom: { label: "Custom" },
@@ -23,7 +24,31 @@ export const LORA_REQUIRED_SNR = { 5: -2.5, 6: -5, 7: -7.5, 8: -10, 9: -12.5, 10
 const STATION_COLOURS = ["#e6194b", "#3cb44b", "#4363d8", "#f58231", "#911eb4", "#46c0c8", "#f032e6", "#9a6324", "#808000", "#000075"];
 
 /** Receiver sensitivity of a station's radio: thermal noise + bandwidth + noise figure + required SNR. */
+/** Minimum field strengths for FM broadcast (#57): ITU-R BS.412-9 Table 1 (median, 10 m above ground) and BS.704
+ * (portable receiver with built-in antenna). Must match propagation.BROADCAST_EMIN. */
+export const BROADCAST_EMIN = [
+  ["stereo_rural", 54, "Stereo, rural (BS.412)"], ["stereo_urban", 66, "Stereo, urban (BS.412)"],
+  ["stereo_city", 74, "Stereo, large cities (BS.412)"], ["mono_rural", 48, "Mono, rural (BS.412)"],
+  ["mono_urban", 60, "Mono, urban (BS.412)"], ["mono_city", 70, "Mono, large cities (BS.412)"],
+  ["portable_stereo", 50, "Portable, built-in antenna, stereo (BS.704)"],
+];
+const DIPOLE_DBI = 2.15;
+/** ERP (W, relative to a half-wave dipole) → EIRP in dBm. */
+export const erpToEirpDbm = (w) => 10 * Math.log10(Math.max(+w || 0, 1e-6) * 1000) + DIPOLE_DBI;
+/** FM broadcast stations: power from the ERP, omni antenna contained in it, no cable (like model_station). */
+export function applyBroadcast(st) {
+  if (st.mode !== "broadcast") return;
+  st.erp_w ??= 100; st.emin_dbuvm ??= 54;
+  st.tx_power_dbm = Math.round(erpToEirpDbm(st.erp_w) * 100) / 100;
+  st.cable_loss_db = 0;
+  st.antenna = { type: "omni", gain_dbi: 0 };
+}
+
 export function sensitivityDbm(st) {
+  if (st.mode === "broadcast") {
+    const d = settings();
+    return +st.emin_dbuvm - 77.2 - 20 * Math.log10(+st.freq_mhz) + (+d.rx_gain_dbi || 0) - (+d.rx_cable_db || 0);
+  }
   if (st.sens_override_dbm !== null && st.sens_override_dbm !== "" && st.sens_override_dbm !== undefined) return +st.sens_override_dbm;
   const snr = st.mode === "lora" ? (LORA_REQUIRED_SNR[st.sf] ?? -17.5) : +(st.req_snr_db ?? 10);
   return noiseFloorDbm(st) + snr;

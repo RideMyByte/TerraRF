@@ -488,7 +488,31 @@ def noise_floor_dbm(st, noise_rise_db=0.0):
     return -174.0 + 10.0 * math.log10(bw_hz) + float(st.get("nf_db", 6.0)) + float(noise_rise_db)
 
 
-def sensitivity_dbm(st, noise_rise_db=0.0):
+# FM sound broadcasting (UKW, #57). Stations are licensed by ERP (relative to a half-wave dipole); a dipole has
+# 2.15 dBi, so EIRP = ERP + 2.15 dB. Coverage is planned by a minimum median field strength (ITU-R BS.412-9 Table 1,
+# measured 10 m above ground); field strength and received power at an antenna of gain G (dBi) relate by
+# P(dBm) = E(dBµV/m) − 77.2 − 20·log10(f/MHz) + G (from P = E²/120π · λ²G/4π).
+DIPOLE_DBI = 2.15
+BROADCAST_EMIN = {  # ITU-R BS.412-9 Table 1 (stereo / mono) and BS.704 (portable with built-in antenna)
+    "stereo_rural": 54.0, "stereo_urban": 66.0, "stereo_city": 74.0,
+    "mono_rural": 48.0, "mono_urban": 60.0, "mono_city": 70.0, "portable_stereo": 50.0,
+}
+
+
+def erp_w_to_eirp_dbm(erp_w):
+    return 10.0 * math.log10(max(float(erp_w), 1e-6) * 1000.0) + DIPOLE_DBI
+
+
+def field_to_dbm(e_dbuvm, f_mhz, gain_dbi=0.0):
+    """Received power (dBm) at an antenna of gain_dbi in a field of e_dbuvm."""
+    return float(e_dbuvm) - 77.2 - 20.0 * math.log10(float(f_mhz)) + float(gain_dbi)
+
+
+def sensitivity_dbm(st, noise_rise_db=0.0, rx_gain_dbi=0.0, rx_cable_db=0.0):
+    """Level the receiver needs. For FM broadcast (#57) the minimum field strength converted to the level at the
+    receiving antenna (gain and cable of the global receiver), so the margin equals E − E_min."""
+    if st.get("mode") == "broadcast":
+        return field_to_dbm(st.get("emin_dbuvm", 54.0), st["freq_mhz"], rx_gain_dbi) - float(rx_cable_db)
     if st.get("sens_override_dbm") not in (None, ""):
         return float(st["sens_override_dbm"]) + float(noise_rise_db)
     return noise_floor_dbm(st, noise_rise_db) + required_snr_db(st)

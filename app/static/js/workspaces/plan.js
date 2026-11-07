@@ -77,7 +77,7 @@ export function renderPlan() {
       return `<div data-id="${st.id}" class="st ${state.selectedStationId === st.id ? "sel" : ""} ${st.enabled === false ? "off" : ""}">
         <input type="checkbox" ${st.enabled !== false ? "checked" : ""} ${canEditProject() ? "" : "disabled"} title="${escapeHtml(t("include in the map"))}">
         <span class="dot" style="background:${escapeHtml(st.color)}"></span>
-        <span class="nm"><b>${escapeHtml(st.name)}</b><span class="sub">${fmt(st.freq_mhz, 3)} MHz · ${fmt(st.tx_power_dbm, 0)} dBm · ${fmt(st.height_m, 0)} m</span></span>
+        <span class="nm"><b>${escapeHtml(st.name)}</b><span class="sub">${st.mode === "broadcast" ? `${fmt(st.freq_mhz, 1)} MHz · ERP ${fmt(st.erp_w, 0)} W` : `${fmt(st.freq_mhz, 3)} MHz · ${fmt(st.tx_power_dbm, 0)} dBm`} · ${fmt(st.height_m, 0)} m</span></span>
         <span class="${stale.has(st.id) ? "stale" : "muted"}">${escapeHtml(state_)}</span></div>`;
     }).join("") || `<p class="muted">${t("No stations yet.")} ${canEditProject() ? t("Add one with “Add station” and a click on the map.") : ""}</p>`}</div>
     ${!isMember() ? `<p class="muted">${t("Log in to add stations or change them.")}</p>` : !canEditProject() ? `<p class="muted">${isCollaborator() ? t("Your login works on its shared project only; this one you can only look at.") : t("Only the creator of this project and the admin can change it. Create your own project in the project menu.")}</p>` : ""}`;

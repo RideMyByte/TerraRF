@@ -88,6 +88,8 @@ If TerraRF is reachable from the internet, put it behind a reverse proxy with HT
 | `RFP_CORESCOPE_URL` | – | CoreScope instance for the *Network* workspace, e.g. `https://corescope.meshrheinland.de` |
 | `RFP_CORESCOPE_SYNC_H` | `24` | refresh the repeater list every n hours (0 = button only) |
 | `RFP_OVERPASS_URL` | `https://overpass-api.de/api/interpreter` | Overpass server for “load OSM buildings” |
+| `RFP_OFFLINE` | `false` | offline operation: no connections to the internet (also a switch in *Administration*) |
+| `RFP_OFFLINE_MAX_TILES` | `60000` | largest saved map area (tiles) |
 | `RFP_PRELOAD` | `nrw_dgm,nrw_dom` | load the NRW models completely at start (empty = on demand) |
 | `RFP_NRW_RES` | `5` | cell size of the local NRW store (m) |
 | `RFP_PRELOAD_CENTER` | `51.48,7.55` | start of the preload (lat,lon), nearest tiles first |
@@ -103,7 +105,12 @@ If TerraRF is reachable from the internet, put it behind a reverse proxy with HT
   radio preset, antenna **from the catalog** or own values, optional radiation sector, link to its MeshCore repeater.
   *Compute coverage* computes all ticked stations one after another (unchanged ones come from the cache); a ring at the
   station shows the progress. The layers button (top right) switches the view (best level, overlap, best server,
-  line of sight), opacity, required margin, base map and data layers.
+  line of sight), opacity, required margin, base map and data layers. The map starts at 40 % opacity and **0 dB
+  required margin** – it shows where the computed median level reaches the sensitivity at all; the global margin
+  (*Administration → Model*, default 10 dB) still decides “covered” in the key figures and the report. Neighbour lines
+  start at 75 % opacity and show only links heard **both ways** (#55).
+- **FM broadcast (UKW):** preset or modulation *FM broadcast* – power as **ERP in W**, no antenna selection (the ERP
+  contains the antenna gain), minimum field strength instead of a sensitivity (see *Model*).
 - **Right click** (long press on phones) anywhere: levels of all stations at that spot, profile per station,
   *Place station here*, *Enter measurement*.
 - **Network:** search a repeater or tap one on the map → details (role, last heard, battery, …) and *Show neighbours*.
@@ -121,6 +128,19 @@ If TerraRF is reachable from the internet, put it behind a reverse proxy with HT
   MeshMapper key), **model** (global settings with their sources), **catalogs** (antennas, devices, placements), system.
 
 ## Data
+
+### Offline operation (#58)
+*Administration → Data sources → Offline operation* (or `RFP_OFFLINE=true`): the server opens no connection to the
+internet. Addresses in the local network stay reachable (private and loopback IPs, single-label names such as a docker
+service), so a CoreScope in the LAN keeps working. Computing uses the stored NRW tiles (`data/dem`, load them first,
+e.g. with the preload), buildings the stored footprints, the map:
+- tiles already viewed (the tile cache is not trimmed while offline),
+- **saved map areas**: the current map view of the NRW aerial photo up to a chosen zoom (open data, dl-de/zero-2-0),
+  loaded one tile after the other,
+- **own raster MBTiles** in `data/tiles/mbtiles/*.mbtiles`, which appear as base maps.
+
+OpenStreetMap's tile usage policy forbids saving its tiles for offline use, so TerraRF does not offer it; for an offline
+street map render your own MBTiles or use a provider that allows offline use.
 
 ### Elevation
 | Source | Kind | Note |
@@ -222,6 +242,18 @@ stale maps – cached results are keyed by the settings and the model version.
 * **Antenna pattern:** horizontal and vertical parabolic attenuation (3GPP style), limited by the front-to-back ratio.
 * **Ground reflection:** two-ray term on line-of-sight paths.
 * **Earth curvature:** effective earth radius k · 6371 km, k = 4/3 (ITU-R P.453).
+* **Height of receivers and repeaters on buildings (#43, #56):** a repeater whose position lies on or within 8 m of a
+  building gets the highest roof there + 1 m (otherwise 10 m). A measurement point counts as on a building only if the
+  whole 4 m around it is building of at least 2.5 m (a point on the street next to a house – GPS error – keeps the
+  default); then the receiver is the median roof height + the global receiver height (1.5 m) – an upper bound, as a
+  phone inside the building is lower. Entered heights (measurement, series, placement) always win. With building
+  footprints loaded, only footprints count as buildings, so a tree is no roof.
+* **FM broadcast (#57):** EIRP = ERP + 2.15 dB (half-wave dipole); covered where the field strength reaches the minimum
+  median field strength of ITU-R BS.412-9 Table 1 (stereo: 54 rural, 66 urban, 74 dB(µV/m) large cities; mono 48/60/70),
+  or 50 dB(µV/m) for portables with a built-in antenna (ITU-R BS.704). Field strength and level relate by
+  P(dBm) = E(dBµV/m) − 77.2 − 20·log10(f/MHz) + G(dBi). BS.412 values apply 10 m above ground; the map uses the
+  global receiver height, which is more pessimistic at 1.5 m. The clutter (P.2108 §3.1) and diffraction methods are
+  valid from 30 MHz.
 * **Receiver:** gain (default 0 dBi), extra loss for body/building (default 0 dB), noise rise, **fade/location margin**
   (default 10 dB, slider on the map).
 * **Noise:** thermal noise kTB (−174 dBm/Hz + 10·log10(bandwidth)) plus the receiver noise figure and the global noise

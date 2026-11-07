@@ -40,6 +40,12 @@ export function seriesName(s) {
  * Receiver of one measurement row – same precedence as the server's comparison:
  * height in the row > values of its series > device/placement from the catalog > global receiver.
  */
+/** Height entered for a measurement, its series or placement – null when only the global default applies (#56). */
+export function explicitHeight(row, s) {
+  const plc = s && state.catalog.placements.find((x) => x.id === s.placement_id);
+  return row?.rx_h ?? s?.rx_h ?? plc?.height_m ?? null;
+}
+
 export function receiverFor(row, s) {
   const d = state.config?.defaults || {};
   const dev = s && state.catalog.devices.find((x) => x.id === s.device_id);

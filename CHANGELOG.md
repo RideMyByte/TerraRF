@@ -2,6 +2,31 @@
 
 ## [Unreleased]
 
+## 0.5.6
+### Neu
+- **UKW-Rundfunk als Station** (#57): Vorgabe bzw. Modulation „UKW-Rundfunk“ – Leistung als ERP in Watt, keine
+  Antennenwahl (die ERP enthält den Antennengewinn, EIRP = ERP + 2,15 dB). Versorgt ist, wo die Feldstärke die
+  Mindestfeldstärke erreicht; zur Auswahl stehen die Werte aus ITU-R BS.412 (Stereo ländlich 54, städtisch 66,
+  Großstadt 74 dBµV/m, Mono 48/60/70) und BS.704 (Kofferradio 50 dBµV/m).
+- **Offline-Betrieb** (#58): Administration → Datenquellen → Offline-Betrieb (oder `RFP_OFFLINE=true`). Der Server baut
+  dann keine Verbindung ins Internet auf; Adressen im lokalen Netz (z. B. ein CoreScope im LAN) bleiben erreichbar.
+  Karten: bereits angesehene Kacheln, **gespeicherte Kartenausschnitte des NRW-Luftbilds** (aktueller Ausschnitt bis
+  zu einer Zoomstufe) und **eigene Raster-MBTiles** in `data/tiles/mbtiles`. OpenStreetMap-Kacheln lassen sich nicht
+  offline speichern – das verbieten die Nutzungsregeln von OpenStreetMap.
+- **Höhe auf Gebäuden** (#56): Liegt ein Messpunkt ganz auf einem Gebäude, gilt als Empfängerhöhe die Dachhöhe aus
+  dem Oberflächenmodell + 1,5 m – im Abgleich, im Profil eines Messpunkts und als Vorschlag beim Eintragen einer
+  Messung. Auf Straßen und Feldern (auch direkt neben einem Haus) bleibt es bei 1,5 m, eingetragene Höhen gelten immer.
+  Sind Gebäudegrundrisse geladen, zählen nur sie als Gebäude – ein Baum ist dann kein Dach, auch nicht für die
+  Repeater-Höhe.
+### Geändert
+- **Standardwerte der Karte** (#55): Deckkraft der Abdeckung 40 %, nötige Reserve 0 dB, Deckkraft der Linien 75 %,
+  Nachbarn nur „in beide Richtungen“. Die Kennzahlen und der Bericht rechnen weiter mit der globalen Reserve
+  (Administration → Modell); die Übersicht einer Station nennt jetzt diese Reserve statt des Schiebereglers.
+- Das NRW-Luftbild kommt über den Server jetzt als Kacheln (gleiche Kacheln zum Ansehen und zum Offline-Speichern).
+### Behoben
+- Die Syntaxprüfung des Frontends in den Tests hat einen kaputten Template-String nicht erkannt; sie prüft die Dateien
+  jetzt als ES-Module.
+
 ## 0.5.5
 ### Neu
 - **Messungen gehören zu Projekten** (#53): Jedes Projekt hat seine eigenen Messungen und unter „Messen → MeshMapper“
